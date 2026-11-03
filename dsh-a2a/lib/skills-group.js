@@ -356,6 +356,41 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       },
     },
     {
+      id: 'group/info',
+      name: 'Group metadata',
+      description:
+        'Name, topic, member count, online count and MY role in one group. Needs a member credential, because "which group is this and what am I here" is a member question. Returns no roster: use group/members for that.',
+      examples: ['What is this group called and how many people are in it?'],
+      async run(input, context) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const snapshot = store.snapshot({ groupId, member });
+          return {
+            text: `${snapshot.name}`
+              + (snapshot.topic === '' ? '' : ` — ${snapshot.topic}`)
+              + `\n${snapshot.memberCount} 人`
+              + (snapshot.onlineCount > 0 ? `，${snapshot.onlineCount} 人在线` : '')
+              + `\n我在这个群的角色：${member.memberId === snapshot.owner?.memberId ? '群主' : '成员'}`,
+            meta: {
+              groupId,
+              name: snapshot.name,
+              topic: snapshot.topic,
+              memberCount: snapshot.memberCount,
+              onlineCount: snapshot.onlineCount,
+              lastSeq: snapshot.lastSeq,
+              lastPostAt: snapshot.lastPostAt ?? 0,
+              isOwner: member.memberId === snapshot.owner?.memberId,
+              // Surfaced so a member instance can tell a stale cache from live data.
+              fetchedAt: Date.now(),
+            },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
       id: 'group/members',
       name: 'List group members',
       description: 'List the members of a group: display name, permission role, what each person says they do here, and whether they are online.',

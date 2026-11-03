@@ -729,6 +729,91 @@ export function registerTools(ctx, deps) {
   }));
 
   ctx.tools.register(defineTool({
+    name: 'a2a_group_info',
+    description:
+      'Fetch one group name, topic, member count and your role in it. Use it after joining a remote group so the panel can show a real name instead of an id, or to check whether anybody is online.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        refresh: { type: 'boolean', description: 'Re-fetch from the host even if a cached value exists. Defaults to true for a remote group.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          name: { type: 'string' },
+          topic: { type: 'string' },
+          memberCount: { type: 'integer' },
+          onlineCount: { type: 'integer' },
+          lastSeq: { type: 'integer' },
+          isOwner: { type: 'boolean' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `${value.name}`
+          + (value.topic === '' ? '' : ` — ${value.topic}`)
+          + `\n${value.memberCount} 人`
+          + (value.onlineCount > 0 ? `，${value.onlineCount} 人在线` : '')
+          + `\n我的角色：${value.isOwner === true ? '群主' : '成员'}`,
+      }],
+    },
+    async execute(args, exec) {
+      const groupId = requireText(args.groupId, 'groupId');
+      const sessionId = requireSession(senderOf(exec).id, 'a2a_group_info');
+      const membership = requireMembership(store, identities, groupId, sessionId);
+
+      if (membership.local === true) {
+        const snapshot = store.snapshot({
+          groupId,
+          member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        });
+        return {
+          groupId,
+          name: snapshot.name,
+          topic: snapshot.topic,
+          memberCount: snapshot.memberCount,
+          onlineCount: snapshot.onlineCount,
+          lastSeq: snapshot.lastSeq,
+          isOwner: snapshot.owner?.memberId === membership.memberId,
+        };
+      }
+
+      const target = targetOf(membership, config);
+      const result = await bridge.send(target, {
+        skill: 'group/info',
+        text: `info for ${groupId}`,
+        data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey },
+        timeoutMs: config.client.timeoutMs,
+      });
+      const meta = result.data ?? {};
+      // Cache what came back: the panel reads the ledger, not the network, so without
+      // this a remote group keeps showing its id until somebody reads the feed.
+      identities.upsert({
+        sessionId,
+        groupId,
+        groupName: typeof meta.name === 'string' && meta.name !== '' ? meta.name : undefined,
+        lastSeq: typeof meta.lastSeq === 'number' ? meta.lastSeq : undefined,
+      });
+      await identities.flush();
+      return {
+        groupId,
+        name: meta.name ?? groupId,
+        topic: meta.topic ?? '',
+        memberCount: Number.isFinite(meta.memberCount) ? meta.memberCount : 0,
+        onlineCount: Number.isFinite(meta.onlineCount) ? meta.onlineCount : 0,
+        lastSeq: Number.isFinite(meta.lastSeq) ? meta.lastSeq : 0,
+        isOwner: meta.isOwner === true,
+      };
+    },
+  }));
+  ctx.tools.register(defineTool({
     name: 'a2a_group_read',
     description:
       'Read recent messages in a group. Pass sinceSeq to get only what is new — that is what a reconnect needs. Read-only: it never wakes a Session.',
