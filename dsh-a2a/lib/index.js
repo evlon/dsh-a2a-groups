@@ -172,6 +172,9 @@ export function apply(ctx, config) {
   }
 
   // --- browser panel data --------------------------------------------------
+
+/** How many recent posts the panel shows per group. */
+const PANEL_FEED_TAIL = 8;
   // The 「协作群」 panel is a browser bundle that cannot call this Host directly,
   // so the Host publishes its groups where the panel reads them. The channel is
   // the webserver's structured index-injection table, not a hand-written script:
@@ -185,8 +188,24 @@ export function apply(ctx, config) {
     try {
       const rows = [];
       for (const record of identities.list()) {
-        const summary = groups.has?.(record.groupId) === true ? groups.snapshot({ groupId: record.groupId }) : undefined;
+        const hostedHere = groups.has?.(record.groupId) === true;
+        const summary = hostedHere ? groups.snapshot({ groupId: record.groupId }) : undefined;
         const lastSeq = summary?.lastSeq ?? record.lastSeq ?? 0;
+
+        // The feed tail is available only for a group this instance hosts: that data
+        // never leaves the process, so publishing it here leaks nothing that a member
+        // of the group could not read anyway. For a group reached over A2A with no
+        // local copy, there is nothing to show and the panel says so.
+        const feed = summary === undefined
+          ? []
+          : (summary.feedTail ?? []).slice(-PANEL_FEED_TAIL).map((entry) => ({
+            seq: entry.seq,
+            at: entry.at,
+            from: entry.from?.displayName ?? '',
+            text: entry.text ?? '',
+            system: entry.kind === 'system',
+          }));
+
         rows.push({
           id: record.groupId,
           groupId: record.groupId,
@@ -194,14 +213,24 @@ export function apply(ctx, config) {
           topic: summary?.topic ?? '',
           role: summary?.owner?.memberId === record.memberId ? 'owner' : record.role ?? 'member',
           memberCount: summary?.memberCount ?? 0,
+          onlineCount: summary?.onlineCount ?? 0,
           // Unread is a consumer-side cursor: the group's head minus what this
           // member has read. Floored at 0 because system entries (created /
           // joined) can push the head past the stored watermark legitimately.
           unreadCount: Math.max(0, lastSeq - (record.lastSeq ?? 0)),
           lastSeq,
           lastTime: summary?.lastPostAt ?? 0,
-          members: [],
-          feed: [],
+          // Which conversation this membership belongs to. The panel renders on the
+          // index page, before any Session exists, so it cannot filter by "the current
+          // Session" — but it can say which one each group belongs to, which is what
+          // lets a person tell two memberships in one group apart.
+          sessionId: record.sessionId ?? '',
+          local: hostedHere,
+          // No roster on purpose: naming the members requires a member credential,
+          // and this render has none. rosterInSession tells the panel to point at
+          // the Session instead of drawing an empty list.
+          rosterInSession: true,
+          feed,
         });
       }
       return { updatedAt: clock(), groups: rows, unreadTotal: rows.reduce((sum, row) => sum + row.unreadCount, 0) };

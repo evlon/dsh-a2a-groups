@@ -710,7 +710,7 @@ window.__ModuleLoader__.load({
 								? h("span", { style: S.chip }, "（还没有消息）")
 								: h("ul", { style: S.feed }, group.feed.map((entry) => h(FeedRow, { key: entry.id, entry: entry })))
 						),
-						h("p", { style: S.emptyBody }, "只读视图：发消息请在会话里让助手用 a2a_group_send。")
+						h("p", { style: S.emptyBody }, "只读视图：发消息请在会话里让助手用 a2a_group_post。")
 					)
 				: null;
 
