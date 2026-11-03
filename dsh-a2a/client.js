@@ -693,7 +693,10 @@ window.__ModuleLoader__.load({
 							{ style: S.memberRow },
 							h("p", { style: S.sectionLabel }, "成员"),
 							group.members.length === 0
-								? h("span", { style: S.chip }, "（成员信息不可用）")
+								// Not an error: naming the members needs a member credential, and
+								// this page is rendered before any Session exists. Say where the
+								// answer lives instead of leaving a gap that reads as "nobody here".
+								? h("span", { style: S.chip }, "名单需在会话里查看（a2a_group_role）")
 								: group.members.map((member) =>
 										h(
 											"span",

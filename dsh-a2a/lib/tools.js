@@ -793,13 +793,19 @@ export function registerTools(ctx, deps) {
         timeoutMs: config.client.timeoutMs,
       });
       const meta = result.data ?? {};
-      // Cache what came back: the panel reads the ledger, not the network, so without
-      // this a remote group keeps showing its id until somebody reads the feed.
+      // Cache everything the panel needs: it reads the ledger, not the network.
+      // Without this a remote group keeps showing its id and "0 人", which reads as an
+      // empty group rather than one that has simply not been fetched yet.
       identities.upsert({
         sessionId,
         groupId,
         groupName: typeof meta.name === 'string' && meta.name !== '' ? meta.name : undefined,
-        lastSeq: typeof meta.lastSeq === 'number' ? meta.lastSeq : undefined,
+        groupTopic: typeof meta.topic === 'string' ? meta.topic : undefined,
+        memberCount: Number.isFinite(meta.memberCount) ? meta.memberCount : undefined,
+        onlineCount: Number.isFinite(meta.onlineCount) ? meta.onlineCount : undefined,
+        lastSeq: Number.isFinite(meta.lastSeq) ? meta.lastSeq : undefined,
+        lastTime: Number.isFinite(meta.lastPostAt) ? meta.lastPostAt : undefined,
+        isOwner: meta.isOwner === true,
       });
       await identities.flush();
       return {

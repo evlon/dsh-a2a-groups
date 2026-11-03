@@ -197,7 +197,7 @@ const PANEL_FEED_TAIL = 8;
         // of the group could not read anyway. For a group reached over A2A with no
         // local copy, there is nothing to show and the panel says so.
         const feed = summary === undefined
-          ? []
+          ? (Array.isArray(record.feed) ? record.feed : []).slice(-PANEL_FEED_TAIL)
           : (summary.feedTail ?? []).slice(-PANEL_FEED_TAIL).map((entry) => ({
             seq: entry.seq,
             at: entry.at,
@@ -212,14 +212,18 @@ const PANEL_FEED_TAIL = 8;
           name: summary?.name ?? record.groupName ?? record.groupId,
           topic: summary?.topic ?? '',
           role: summary?.owner?.memberId === record.memberId ? 'owner' : record.role ?? 'member',
-          memberCount: summary?.memberCount ?? 0,
-          onlineCount: summary?.onlineCount ?? 0,
+          // A remote group has no local snapshot, so the counts come from what the
+          // member-side tool cached after calling group/info. Zero would read as
+          // \"this group is empty\" rather than \"not fetched yet\", which is the difference
+          // between a wrong answer and a missing one.
+          memberCount: summary?.memberCount ?? record.memberCount ?? 0,
+          onlineCount: summary?.onlineCount ?? record.onlineCount ?? 0,
           // Unread is a consumer-side cursor: the group's head minus what this
           // member has read. Floored at 0 because system entries (created /
           // joined) can push the head past the stored watermark legitimately.
           unreadCount: Math.max(0, lastSeq - (record.lastSeq ?? 0)),
           lastSeq,
-          lastTime: summary?.lastPostAt ?? 0,
+          lastTime: summary?.lastPostAt ?? record.lastTime ?? 0,
           // Which conversation this membership belongs to. The panel renders on the
           // index page, before any Session exists, so it cannot filter by "the current
           // Session" — but it can say which one each group belongs to, which is what

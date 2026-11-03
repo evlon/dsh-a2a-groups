@@ -178,6 +178,16 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       groupName: input.groupName ?? previous.groupName,
       role: input.role ?? previous.role ?? 'member',
       lastSeq: typeof input.lastSeq === 'number' ? input.lastSeq : previous.lastSeq ?? 0,
+      // A cached view of the group, filled by `a2a_group_info`. Kept on the record
+      // because the panel renders from this ledger, not from the network: without it a
+      // remote group shows an id and "0 人", which reads as an empty group rather than
+      // one that has simply not been fetched yet.
+      groupTopic: input.groupTopic ?? previous.groupTopic,
+      memberCount: typeof input.memberCount === 'number' ? input.memberCount : previous.memberCount,
+      onlineCount: typeof input.onlineCount === 'number' ? input.onlineCount : previous.onlineCount,
+      lastTime: typeof input.lastTime === 'number' ? input.lastTime : previous.lastTime,
+      isOwner: typeof input.isOwner === 'boolean' ? input.isOwner : previous.isOwner,
+      feed: Array.isArray(input.feed) ? input.feed : previous.feed,
       addedAt: previous.addedAt ?? clock(),
       touchedAt: clock(),
     };
@@ -283,6 +293,14 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
         groupName: typeof entry.groupName === 'string' ? entry.groupName : undefined,
         role: typeof entry.role === 'string' ? entry.role : 'member',
         lastSeq: Number.isFinite(entry.lastSeq) ? entry.lastSeq : 0,
+        // Cached group view (see `upsert`): restored so a restart does not blank the
+        // panel back to ids and zeros.
+        groupTopic: typeof entry.groupTopic === 'string' ? entry.groupTopic : undefined,
+        memberCount: Number.isFinite(entry.memberCount) ? entry.memberCount : undefined,
+        onlineCount: Number.isFinite(entry.onlineCount) ? entry.onlineCount : undefined,
+        lastTime: Number.isFinite(entry.lastTime) ? entry.lastTime : undefined,
+        isOwner: typeof entry.isOwner === 'boolean' ? entry.isOwner : undefined,
+        feed: Array.isArray(entry.feed) ? entry.feed : undefined,
         addedAt: Number.isFinite(entry.addedAt) ? entry.addedAt : 0,
         touchedAt: Number.isFinite(entry.touchedAt) ? entry.touchedAt : 0,
       });
