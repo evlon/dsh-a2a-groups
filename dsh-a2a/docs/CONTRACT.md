@@ -11,7 +11,7 @@
 3. 每个文件顶部写模块级 JSDoc：这文件解决什么问题、边界在哪。
 4. 不用 `#private` 字段以外的花活；导出命名函数 + 一个 factory。
 5. 时间一律 epoch 毫秒在内部流转，只在**边界**（日志/输出）转 ISO。
-6. 不打印凭据：`token` / `password` / `memberKey` / `apiKey` 在日志与错误信息里必须脱敏成 `sha256:前8位`。
+6. 不打印凭据：`token` / `claimKey` / `memberKey` / `ownerKey` / `apiKey` 在日志与错误信息里必须脱敏成 `sha256:前8位`。
 
 ## 1. A2A 线格式（决策：**1.0**）
 
@@ -35,14 +35,31 @@
 |---|---|---|
 | `session/ask` | `text` + 可选 `data.timeoutMs` | artifact `reply`，一键把事情投进绑定会话并等回合结束 |
 | `ping` | 无 | artifact `pong`，回带 `sessionId`/`version`，用于连通性自检 |
-| `group/create` | `data.name/topic/password?/joinPolicy?` | artifact `group`（含 `groupId`、**仅此一次**的本机 ownerKey） |
-| `group/invite` | `data.groupId/password/label/expiresInHours?/maxUses?` | artifact `invite`（链接 + 提示词文本） |
-| `group/join` | `data.invite(+groupId/token)/password/displayName` | artifact `member`（`memberId`、`memberKey`、群摘要、`feedTail`） |
+| `group/create` | `data.name/topic?/ownerDisplayName?/visibility?` | artifact `group`（含 `groupId`、**仅此一次**的 ownerKey） |
+| `group/invite` | `data.groupId/memberId/memberKey/label?/expiresInHours?` | artifact `invite`（链接 + 提示词文本）。`expiresInHours: null` = 永不过期；不传 = 配置默认（7 天）。**无次数限制**，只有群主可发 |
+| `group/join` | `data.groupId/token/displayName?/endpoint?` | artifact `member`（`memberId`、`memberKey`、群摘要、`feedTail`）。**只需 token，无密码** |
 | `group/post` | `data.groupId/memberId/memberKey/text/payload?` | artifact `posted`（`seq`、`msgId`） |
 | `group/read` | `data.groupId/memberId/memberKey/sinceSeq?/limit?` | artifact `feed`（增量条目） |
 | `group/subscribe` | 同上 + `sinceSeq` | **流式**：每条新帖一个 `artifactUpdate`，心跳 `statusUpdate working` |
 | `group/members` | `data.groupId/memberId/memberKey` | artifact `members` |
+| `group/info` | `data.groupId/memberId/memberKey` | artifact `info`（`name`/`topic`/`memberCount`/`onlineCount`/`lastSeq`/`lastPostAt`/`isOwner`）。**不含名单** |
+| `group/directory` | `data.query?/limit?/offset?` — **无凭证** | artifact `directory`：只含 `groupId/name/topic/memberCount/onlineCount/lastActivityAt/lastSeq`。`unlisted` 的群**完全不出现在结果里**（不是标了隐藏） |
+| `group/role` | `data.groupId/memberId/memberKey/roleAbout?/tags?` | artifact `member`（层 A：按群独立的自我描述，只能改自己） |
 | `group/leave` | 同上 | artifact `left` |
+| `group/request` | `data.groupId/displayName/reason?` — **无凭证** | artifact `request`（`requestId` 公开队列索引 + `claimKey` **仅此一次**的秘密）。`unlisted` 的群返回 `unknown_group` |
+| `group/requests` | `data.groupId/memberId/memberKey/status?` — **仅群主** | artifact `requests`（待审列表，含申请人的名字与理由） |
+| `group/decide` | 同上 + `requestId/approve` | artifact `decided`。**批准不直接建成员**——申请人用自己的 `claimKey` 去领 |
+| `group/claim` | `data.groupId/requestId/claimKey` — **无群密码** | artifact `member`（领取已批准的成员身份；`claimKey` 一次性） |
+
+**为什么 `group/claim` 不需要密码**：群密码的全部作用是"阻止不认识的人"，
+而审批本身就是"我认识并同意"。两条入群路径的凭证因此不同且不重叠：
+
+| | 邀请链接 | 申请审批 |
+|---|---|---|
+| 凭证 | `token`（群主批量发） | `claimKey`（申请人自己持有） |
+| 有效期 | 可设，含永不过期 | 固定 7 天 |
+| 次数 | 不限 | 一次 |
+| 撤销 | `revokeInvite` 精确撤那一条 | 拒绝即结束 |
 
 错误码（JSON-RPC `error.code`）：
 
@@ -50,9 +67,21 @@
 |---|---|
 | `-32700` / `-32600` / `-32601` / `-32602` / `-32603` | JSON-RPC 标准（解析/请求/方法/参数/内部） |
 | `-32001` | 未认证（缺/错 `x-api-key`、缺 `memberKey`） |
-| `-32002` | 未授权（不是成员、令牌过期、密码错） |
+| `-32002` | 未授权（不是成员、令牌过期/撤销/耗尽） |
 | `-32003` | 版本不支持（`A2A-Version` 不匹配） |
-| `-32004` | 业务拒绝（如 hop 预算耗尽、消息过长），`data.code` 带稳定子码 |
+| `-32004` | 业务拒绝，`data.code` 带稳定子码（见下表） |
+
+业务子码（`data.code`，稳定，可被程序判断）：
+
+| 子码 | 含义 |
+|---|---|
+| `invite_invalid` / `invite_expired` / `invite_revoked` | 邀请不可用 |
+| `request_pending` / `request_rejected` / `request_expired` / `request_invalid` / `request_not_found` | 申请不可领取 |
+| `not_owner` | 非群主（发邀请、看申请、审批） |
+| `not_member` | 凭证无效或不是成员 |
+| `unknown_group` | 群不存在，或（对无凭证路径）是 `unlisted` 因而不承认存在 |
+| `missing_gateway` / `missing_agent_name` | 生成邀请前未配置网关坐标 |
+| `group_full` / `too_long` / `empty_message` / `rate_limited` | 容量与内容限制 |
 
 ## 2. 模块职责与导出
 
@@ -179,9 +208,10 @@ export function createRegistry({ home, logger });
 ```js
 export function createGroupStore({ home, logger, clock, config });
 // → {
-//   create({ name, topic, password, ownerDisplayName, joinPolicy, settings }) → { group, ownerKey },
-//   invite({ groupId, password, label, expiresInHours, maxUses }) → { token, link, prompt, expiresAt, maxUses },
-//   join({ groupId, token, password, displayName, endpoint }) → { member, memberKey, group, feedTail },
+//   create({ name, topic, ownerDisplayName, settings }) → { group, ownerKey },
+//   invite({ groupId, ownerKey, label, expiresInHours }) → { token, link, prompt, expiresAt, inviteId },
+//     // ownerKey 必填（只有群主能发邀请）；expiresInHours: null = 永不过期
+//   join({ groupId, token, displayName, endpoint }) → { member, memberKey, group, feedTail },
 //   authenticate({ groupId, memberId, memberKey }) → member | undefined,
 //   post({ groupId, member, text, payload }) → { seq, msgId, at },
 //   read({ groupId, member, sinceSeq, limit }) → { entries, lastSeq, truncated },
@@ -189,26 +219,37 @@ export function createGroupStore({ home, logger, clock, config });
 //   leave({ groupId, member }) → boolean,
 //   revokeInvite({ groupId, ownerKey, token }) → boolean,
 //   subscribe({ groupId, fn }) → dispose,     // 新帖回调，供 group/subscribe 用
-//   snapshot({ groupId, member }) → 摘要（不含任何密钥）
+//   snapshot({ groupId, member }) → 摘要（不含任何密钥；带 member 时含 feedTail）
+//   listDirectory({ query, limit, offset }) → 频道目录页（无凭证，无名单）
+//   requestJoin({ groupId, displayName, reason }) → { requestId, claimKey, expiresAt },
+//   listRequests({ groupId, member, status }) → [请求视图]（仅群主）,
+//   decideRequest({ groupId, member, requestId, approve }) → { status }（仅群主）,
+//   claimJoin({ groupId, requestId, claimKey }) → { member, memberKey, group },
 //   flush()
 // }
 ```
 
 安全要求（必须实现，验收会测）：
-- 密码：`scrypt`（Node `crypto.scryptSync`，`N=2^14`，随机 16B salt），存 `scrypt$N$salt$hash`。
-- 邀请令牌 / 成员凭证：存 `sha256` 十六进制，**明文只在创建/加入的响应里出现一次**。
+- **没有群密码**。入群凭证只有两种，互不重叠：邀请 `token`、审批后领取用的 `claimKey`。
+- 邀请令牌 / 成员凭证 / `claimKey`：存 `sha256` 十六进制，**明文只在创建/加入的响应里出现一次**。
 - 常量时间比较（`crypto.timingSafeEqual`）。
-- 邀请：`expiresAt` + `maxUses` + `revoked`，用一次 `uses+1`。
+- 邀请：`expiresAt`（可为 `null` = 永不过期）+ `revoked`。**没有次数计数**——撤销才是精确控制。
+- 申请：`expiresAt` 固定 7 天；一条申请只能被领取一次（状态机 `pending → approved/rejected → claimed`）。
 - feed：`seq` 单调递增，`msgId` 为 uuid；`retentionDays` 之外的老条目在 `flush` 时裁掉。
 - 令牌桶：每成员 `maxPostsPerMinute`（默认 20），超限抛 `code:'rate_limited'`。
 - 落盘文件权限 `0o600`，目录 `0o700`；写入用「临时文件 + rename」。
-- `snapshot()` / `members()` 绝不能带出 `passwordHash` / `tokenHash` / `keyHash`。
+- `snapshot()` / `members()` / `listDirectory()` 绝不能带出 `tokenHash` / `keyHash` / `claimHash`。
+
+`unlisted` 的语义（验收会测）：`listDirectory` 里**整行不返回**，`requestJoin` 返回 `unknown_group`。
+它不是"标了隐藏"——那等于回答了"存在这个 id 的群"，是一个存在性探测。
 
 邀请链接格式（固定，UI 与提示词都依赖）：
 
 ```
 dsh-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupId>&t=<token>&n=<群名>&e=<expiresAt ISO>
 ```
+
+`e=` 在永不过期的邀请里省略。
 
 提示词（`invite()` 返回的 `prompt`，中文，可直接粘到 IM）：
 
@@ -219,12 +260,15 @@ dsh-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupId>
 /a2a-join {link}
 
 也可以直接用自然语言让我加群：
-  用 a2a_group_join 加入这个群：{link} ，群密码：{password}
+  用 a2a_group_join 加入这个群：{link}
 
 入群后：群里有人发言或派活时会自动出现在你会话里（左侧「收到任务消息」卡片），
 直接回复就是在群里回话。想静音用 a2a_group_inbox off，想退出用 a2a_group_leave。
-（此邀请 {expiresAt} 前有效，最多可用 {maxUses} 次。）
+（此邀请在 {expiresAt} 前有效；群主可以随时撤销。链接谁拿到谁能用，别转发到无关的地方。）
 ```
+
+永不过期时最后一行改为：
+`（此邀请长期有效；群主可以随时撤销这条链接。）`
 
 ### 2.7 `lib/config.js` / `lib/index.js` / `lib/tools.js` / `lib/prompt.js`（Lead）
 
@@ -232,6 +276,134 @@ dsh-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupId>
 - `index.js`：`apply(ctx, config)` —— 装配 store/registry/deliverer/server/tools/prompt。
 - `tools.js`：面给模型的工具，调用方是会话。
 - `prompt.js`：系统提示词段（群礼仪：不要刷屏、结论要收线、什么时候该发群）。
+
+**工具面（19 个）**，`a2a_group_*` 全部作用于**当前会话**（`senderOf(exec).id`）：
+
+| 工具 | 作用 |
+|---|---|
+| `a2a_group_create` / `invite` / `join` / `post` / `read` | 基本操作 |
+| `a2a_group_info` / `role` / `leave` | 元数据与层 A 角色 |
+| `a2a_group_directory` | 浏览宿主上的群（无凭证） |
+| `a2a_group_request` / `requests` / `decide` / `claim` | 申请审批四步 |
+| `a2a_groups` / `a2a_group_inbox` | 本会话的群列表与静音 |
+
+`a2a_group_create` 在 `groups.embedded: false`（默认）时**通过 A2A 在远端宿主上建群**，
+这现在是常态；`embedded: true` 时才在本机建。
+
+### 2.7b `lib/memberships.js`（成员账本）
+
+**键是 `(sessionId, groupId)`，不是 `groupId`。** 这是本次最重要的模型变更。
+
+```js
+export const HOST_SESSION_ID = 'host';   // 纯宿主用它（宿主没有会话，也不该有 membership）
+
+createMembershipLedger({ home, logger, clock })
+// → {
+//   list({ sessionId?, groupId? }) → [record…],
+//   get(groupId, sessionId?) → record | undefined,
+//   has(groupId) → boolean,              // 任意会话是否为成员
+//   membershipsOf(sessionId) → [record…],
+//   localMemberships() / remoteMemberships(),
+//   upsert({ sessionId, groupId, memberId, memberKey, baseUrl, local, groupName,
+//            role, lastSeq, groupTopic?, memberCount?, onlineCount?, lastTime?,
+//            isOwner?, feed? }) → record,
+//   remove({ groupId?, sessionId? }) → 删除条数,
+//   flush(), path()
+// }
+```
+
+规则：
+
+1. **`sessionId` 必填**。一条无法指明会话的 membership 永远无法被投递，接受它只会造出
+   一条静默失效的记录。
+2. **同一个群可被同一台机器的两个会话分别加入** —— 一个项目里负责两个模块的人，在那个群
+   里就是两个成员，两个凭证、两个未读游标。这是设计目标。
+3. 文件格式 `version: 2`。`version: 1`（实例级、无 `sessionId`）**拒绝加载并重新开始**，
+   不猜测归属——猜错会把别人的群消息投进这个会话。
+4. `memberKey` 以明文存于 `0600` 文件。必须如此：插件每次调用都要出示它，本地加密的
+   密钥只能放在同一台机器上，对"本机另一个进程"这个真实威胁毫无作用。
+5. 缓存的群视图（`groupName` / `memberCount` / `feed` 等）由 `a2a_group_info` 填充。
+   面板从账本渲染而非从网络取数，没有缓存就只能显示裸 id 和"0 人"。
+
+### 2.7c `lib/inbox.js` 的投递路由
+
+订阅**按群**（一个群一条 SSE，两个会话在同一个群不需要两条连接），投递**按 membership**：
+
+```
+群消息到达
+  → 查该 groupId 的所有远程 membership
+  → 逐个投给各自 sessionId，去重键是 (sessionId, msgId)
+  → 一个会话看过，不影响另一个会话收到
+```
+
+订阅凭证用其中任意一条 membership 的（群宿主只回答一个订阅者），
+但**由哪条凭证开的流不决定谁能收到**。
+
+水位（`sinceSeq`）取该群所有 membership 里**最小**的 `lastSeq`：
+读得多的那个重读几条（去重会丢掉），读得少的不会漏。反过来会静默跳过。
+
+### 2.7d `bin/dsh-groups.js`（独立群宿主）
+
+群宿主**不是** DSH 实例：不加载模型、没有会话、不投递。它是一个零依赖 Node 程序。
+
+```js
+export { createHttpRegistrar, parseFlags, usage };   // 可被测试导入，导入无副作用
+```
+
+`createHttpRegistrar(logger)` → `{ registrar, handle, routes }`：
+
+- `registrar.register({ kind: 'exact'|'prefix', path, handler }) → disposeFn`
+  挂到原生 `http.Server`；`detach()` 真的能移除，所以同一进程内可重启。
+- 路由匹配规则与 DSH webserver **一致**：exact 优先于 prefix，prefix 里最长者胜。
+  这样才保证"嵌入"与"独立"两种形态下 A2A 表面完全相同。
+- 未知路径返回 **JSON 404**，不是 HTML 外壳——否则探测卡片的对端会把页面误当成卡片。
+
+`server.js` 因此改为**注入** `registrar` 而不是读 `ctx.webServer`：
+
+```js
+createServer({ registrar, where, logger, config, deliverer, tasks, skills, onFlush })
+```
+
+- 在 DSH 里：`registrar = ctx.webServer`
+- 独立运行：`registrar = createHttpRegistrar()`
+
+注册的 5 条路由：
+
+| 路径 | 说明 |
+|---|---|
+| `/a2a/.well-known/agent-card.json` | 卡片（公开，发现先于认证） |
+| `/a2a/.well-known/agent.json` | 同上（别名） |
+| `/a2a/.well-known/*` | JSON 404，把未知发现路径变成结构化回答 |
+| `/a2a` | JSON-RPC + SSE |
+| `/__health` | 运维端点（见下） |
+
+**`/__health`**（需要与 `/a2a` 相同的令牌）：
+
+- `GET` / `HEAD` → `{ ok, agent, version, uptimeSeconds, skills }`，**不落盘**
+- `POST` → 额外执行 `onFlush()`，返回 `{ flushed: true }`；失败时 `500 { ok: false, flushError }`
+
+要求 `POST` 才落盘，是为了让爬虫或浏览器预取**无法触发出磁盘写**。
+备份脚本应先 `POST /__health` 再复制 `groups.json`。
+
+命令行（标志优先于环境变量，环境变量优先于默认值）：
+
+| 标志 | 环境变量 | 默认 |
+|---|---|---|
+| `--port` | `DSH_GROUPS_PORT` | 3095 |
+| `--host` | `DSH_GROUPS_HOST` | 127.0.0.1 |
+| `--data` | `DSH_GROUPS_DATA` | `./data` |
+| `--token` | `DSH_GROUPS_TOKEN` | 无（仅回环可信） |
+| `--agent` | `DSH_GROUPS_AGENT` | dsh-groups |
+| `--gateway` | `DSH_GROUPS_GATEWAY` | 无（则无法生成邀请） |
+| `--forward-proto` | `DSH_GROUPS_FORWARD_PROTO` | 无 |
+| `--public-url` | `DSH_GROUPS_PUBLIC_URL` | 无 |
+
+位置参数一律**报错退出**：静默忽略 `dsh-groups 3095` 会在默认端口启动并看起来正常，
+那比一个用法错误糟得多。
+
+宿主持有 `groups.json`，**不持有 `memberships.json`**（成员才有 membership）。
+技能里那几处"把自己登记为成员"的调用在宿主上按设计**静默跳过**——
+群主本来就是所建群的一员，这个语义由群自身满足。
 
 ### 2.8 `client.js`（分支 D，UI）
 
@@ -270,10 +442,10 @@ dsh-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupId>
   groups: {
     enabled: true,
     home: '',                   // 默认 <DSH_HOME>/a2a
-    joinPolicy: 'invite',       // invite | password
-    defaultPasswordLength: 12,
-    inviteExpiresInHours: 168,
-    inviteMaxUses: 5,
+    embedded: false,            // true = 本实例自己建群；默认 false，群在共享宿主上
+    gatewayBase: '',            // 网关基址，生成邀请链接用
+    agentName: '',              // 本实例（或宿主）在网关里的名字，一台实例一个
+    inviteExpiresInHours: 168,  // null = 邀请默认永不过期；数字 = 小时数
     maxPostChars: 32000,
     maxPostsPerMinute: 20,
     retentionDays: 30,

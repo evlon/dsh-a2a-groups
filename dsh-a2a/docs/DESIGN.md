@@ -140,7 +140,7 @@ tags: ["产品", "验收"]              // 最多 5 个短标签
 
 ### 4.1 它只说"有这个群"，不说"谁在里面"
 
-每一行只有：`groupId / name / topic / joinPolicy / memberCount / onlineCount / lastActivityAt`。
+每一行只有：`groupId / name / topic / memberCount / onlineCount / lastActivityAt`。
 
 **明确不返回**：成员身份、成员 id、feed 任何内容、owner 身份、邀请令牌。
 
