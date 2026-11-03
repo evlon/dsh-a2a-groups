@@ -1,0 +1,17 @@
+# dsh-a2a bundle patch
+#
+# This is the bundle layer: `dsh.bundle.patch` in package.json points here, so
+# an install through the plugin manager (or `dsh plugin add`) mounts the Host
+# half by appending this row to the composed entry list.
+#
+# The row carries no config on purpose: every default is already the value the
+# plugin ships with, so an upgrade never silently changes behaviour. Override
+# anything you need in the profile's own cordis.patch.yml on the same `id`.
+#
+# The Host half needs `webServer` (to serve /a2a) and `sessionController` (to
+# deliver an inbound A2A message into a Session). Both are declared by the
+# plugin itself through `inject`, so a Host without them simply does not mount
+# this row rather than failing at the first request.
+- insert:
+    - id: a2a
+      name: 'dsh-a2a'

@@ -1,0 +1,23 @@
+# AISIX gateway config — local development (WSL + podman, --network host).
+#
+# Everything routing-related lives in resources.yaml next to this file; this
+# file only says where that is and which listeners to open. Keep it minimal:
+# the A2A gateway path needs the proxy listener and the admin read-only
+# surface, nothing else.
+
+resources_file: "/etc/aisix/resources.yaml"
+
+proxy:
+  addr: "0.0.0.0:3000"
+
+admin:
+  enabled: true
+  addr: "0.0.0.0:3001"
+  admin_keys:
+    - "admin-dev-local"
+
+observability:
+  metrics:
+    prometheus:
+      enabled: true
+      addr: "0.0.0.0:9090"

@@ -1,0 +1,281 @@
+/**
+ * dsh-a2a — A2A protocol for DSH, both directions, plus invite-only groups.
+ *
+ * Three capabilities, one plugin, because they share one insight: a DSH Session
+ * is already an agent, and A2A is just a way to address it from outside.
+ *
+ *   **Server** — this instance publishes itself as a standard A2A agent at
+ *   `/a2a`. An inbound task becomes a real Session turn (the left-hand "task
+ *   message received" card, never a bubble that looks like the user typed it),
+ *   and the Session's answer becomes the artifact.
+ *
+ *   **Client** — `a2a_*` tools let a Session discover and call other agents
+ *   through a gateway or directly.
+ *
+ *   **Groups** — a group is a DSH instance that registered itself as an A2A
+ *   agent and keeps an invite-only membership list. That is the whole design:
+ *   no new server, no new database, no new auth scheme. AISIX decides who may
+ *   reach the agent; the group decides who is a member; the Session decides what
+ *   to do about it.
+ *
+ * The plugin imports nothing but `node:*` and its own files. Bare
+ * `@deepseek-ai/...` specifiers only resolve for plugins loaded from inside the
+ * DSH installation; a profile or workspace plugin is loaded by plain Node
+ * resolution, so it must stay self-contained to load from any location. Every
+ * Host capability arrives through the injected `ctx`.
+ *
+ * @module dsh-a2a
+ */
+
+import { readFileSync } from 'node:fs';
+
+import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './config.js';
+import { createServer } from './server.js';
+import { createBridge } from './bridge.js';
+import { createRegistry } from './registry.js';
+import { createDeliverer } from './deliver.js';
+import { createGroupStore } from './groups.js';
+import { createMembershipLedger } from './memberships.js';
+import { createSessions } from './sessions.js';
+import { createSkillRegistry } from './skills.js';
+import { buildProfile } from './profile.js';
+import { createPingSkill, createSessionAskSkill } from './skills-session.js';
+import { createGroupSkills } from './skills-group.js';
+import { createInbox } from './inbox.js';
+import { registerTools } from './tools.js';
+import { PROMPT_SECTION, PROMPT_SECTION_NAME, PROMPT_SECTION_ORDER } from './prompt.js';
+import { TaskStore } from './wire.js';
+
+/** Cordis plugin name. */
+export const name = 'a2a';
+
+/**
+ * Services this plugin needs before it can contribute anything.
+ *
+ * Cordis treats a bare `ctx.<name>` read as a *declared dependency* and throws
+ * for anything not listed here, so this list is the plugin's whole Host contract:
+ *
+ *   - `webServer` — what makes this instance reachable at `/a2a`;
+ *   - `sessionController` — what makes an inbound message become a real turn;
+ *   - `systemPrompt` — where the etiquette section is registered (only needed when
+ *     `promptSection` is on, but the read happens at mount time);
+ *   - `tools` — the registry `a2a_*` tools are registered on.
+ *
+ * A Host missing any of these simply does not mount this row, which is better
+ * than mounting an agent that cannot answer or a tool surface that cannot be
+ * called. Found the hard way: a real Host rejects the mount with "cannot get
+ * property X without inject", while a plain test double silently allows it.
+ */
+export const inject = ['webServer', 'sessionController', 'systemPrompt', 'tools'];
+
+/**
+ * Mount A2A on one Host.
+ *
+ * Everything is assembled here and nowhere else: the store, the registry, the
+ * bridge and the server have no knowledge of each other, and this function is
+ * the single place their wiring is decided. That keeps each module testable with
+ * fakes and makes "why is this setting doing nothing" a question with one place
+ * to look.
+ *
+ * @param {object} ctx - plugin context.
+ * @param {object} [config] - plugin configuration from the profile patch.
+ * @returns {void}
+ */
+export function apply(ctx, config) {
+  const settings = normalizeConfig(config);
+  if (!settings.enabled) {
+    info(ctx, 'a2a is disabled by configuration');
+    return;
+  }
+
+  const logger = ctx.logger;
+  const home = resolveHome(settings);
+  const clock = () => Date.now();
+
+  // --- durable state -------------------------------------------------------
+  const groups = createGroupStore({ home, logger, clock, config: settings });
+  const registry = createRegistry({ home, logger, clock });
+  // The membership ledger is separate from the group store on purpose: the group
+  // store holds what a HOST knows about its groups (and therefore only hashes),
+  // while the ledger holds what THIS INSTANCE must present (and therefore the
+  // credential itself). Two different trust boundaries, two files.
+  const identities = createMembershipLedger({ home, logger, clock });
+  const tasks = new TaskStore({
+    ttlMs: settings.server.taskTimeoutMs * 4,
+    persistPath: null,
+    clock,
+  });
+
+  // --- Host-facing pieces --------------------------------------------------
+  const sessions = createSessions({ ctx, config: settings, logger, clock });
+  const deliverer = createDeliverer({ ctx, logger, config: settings, clock });
+  const bridge = createBridge({ logger, config: settings, clock });
+
+  // --- skills --------------------------------------------------------------
+  const skills = createSkillRegistry();
+  skills.register(createPingSkill({
+    version: pluginVersion(),
+    sessionIdOf: () => sessions.resolveBoundSessionId(),
+  }));
+  if (settings.server.skills.session) {
+    skills.register(createSessionAskSkill({ deliverer, sessions, logger, config: settings }));
+  }
+  if (settings.server.skills.group) {
+    for (const skill of createGroupSkills({ store: groups, identities, config: settings, logger, clock })) {
+      skills.register(skill);
+    }
+  }
+
+  // --- server --------------------------------------------------------------
+  const server = createServer({
+    ctx,
+    logger,
+    config: settings,
+    deliverer,
+    tasks,
+    skills,
+    // Layer B: the identity in the card is derived from memberships on every read,
+    // so joining a group or changing a role shows up the next time a peer
+    // discovers this agent. Nothing to maintain, nothing to go stale.
+    profileProvider: () => buildProfile({ identities, store: groups, config: settings }),
+  });
+
+  // --- group inbox (subscription → Session delivery) -----------------------
+  const inbox = createInbox({
+    ctx, logger, config: settings, clock,
+    groups, identities, registry, bridge, deliverer, sessions,
+  });
+
+  const disposers = [];
+  if (settings.server.enabled) {
+    const detach = server.attach();
+    if (typeof detach === 'function') disposers.push(detach);
+  }
+
+  // --- tool surface --------------------------------------------------------
+  if (settings.tools) {
+    registerTools(ctx, {
+      config: settings, registry, bridge, store: groups, identities, server, sessions, logger, inbox,
+    });
+  }
+
+  // --- prompt section ------------------------------------------------------
+  if (settings.promptSection) {
+    ctx.inject(['systemPrompt'], (scoped) => {
+      scoped.systemPrompt.section({
+        name: PROMPT_SECTION_NAME,
+        order: PROMPT_SECTION_ORDER,
+        interpolate: false,
+        text: PROMPT_SECTION,
+      });
+    });
+  }
+
+  // --- browser panel data --------------------------------------------------
+  // The 「协作群」 panel is a browser bundle that cannot call this Host directly,
+  // so the Host publishes its groups where the panel reads them. The channel is
+  // the webserver's structured index-injection table, not a hand-written script:
+  // the table's rows are JSON-serializable data rendered by the shell, which keeps
+  // this side free of escaping rules and keeps the value a value.
+  //
+  // Read on every index render, so a page refresh always sees the current groups
+  // and a group created after boot appears without a restart. Pushing into an
+  // open page is the panel's own 2s signature poll — one mechanism, not two.
+  const publishGroups = () => {
+    try {
+      const rows = [];
+      for (const record of identities.list()) {
+        const summary = groups.has?.(record.groupId) === true ? groups.snapshot({ groupId: record.groupId }) : undefined;
+        const lastSeq = summary?.lastSeq ?? record.lastSeq ?? 0;
+        rows.push({
+          id: record.groupId,
+          groupId: record.groupId,
+          name: summary?.name ?? record.groupName ?? record.groupId,
+          topic: summary?.topic ?? '',
+          role: summary?.owner?.memberId === record.memberId ? 'owner' : record.role ?? 'member',
+          memberCount: summary?.memberCount ?? 0,
+          // Unread is a consumer-side cursor: the group's head minus what this
+          // member has read. Floored at 0 because system entries (created /
+          // joined) can push the head past the stored watermark legitimately.
+          unreadCount: Math.max(0, lastSeq - (record.lastSeq ?? 0)),
+          lastSeq,
+          lastTime: summary?.lastPostAt ?? 0,
+          members: [],
+          feed: [],
+        });
+      }
+      return { updatedAt: clock(), groups: rows, unreadTotal: rows.reduce((sum, row) => sum + row.unreadCount, 0) };
+    } catch (error) {
+      // A panel with no data shows its empty state; it must never be a mount
+      // failure or a broken page.
+      info(ctx, `a2a: could not build the panel snapshot (${describe(error)})`);
+      return { updatedAt: clock(), groups: [], unreadTotal: 0 };
+    }
+  };
+
+  try {
+    const disposeInject = ctx.on('webserver/index-inject', (table) => {
+      table.push({ kind: 'global', name: '__DSH_A2A_GROUPS__', value: publishGroups() });
+    });
+    if (typeof disposeInject === 'function') disposers.push(disposeInject);
+  } catch (error) {
+    info(ctx, `a2a: the browser panel data channel is unavailable (${describe(error)})`);
+  }
+
+  // --- startup -------------------------------------------------------------
+  // The inbox is resumed for every group this instance has joined, so a restart
+  // does not silently stop the Session receiving group messages. Failures are
+  // logged rather than thrown: a group host that is down must not prevent the
+  // plugin from mounting.
+  if (settings.groups.enabled) {
+    void inbox.resume().catch((error) => {
+      info(ctx, `a2a: the group inbox could not resume (${describe(error)}); use a2a_group_inbox on to retry`);
+    });
+  }
+
+  // Restore the task store lazily: `flush` on unload keeps a restart from losing
+  // the tasks a caller may still poll.
+  ctx.on('dispose', () => {
+    for (const dispose of disposers) {
+      try {
+        dispose();
+      } catch {
+        // A failing disposer must not stop the rest of the unload.
+      }
+    }
+    void Promise.allSettled([groups.flush(), registry.flush(), identities.flush(), tasks.flush()]);
+  });
+
+  info(
+    ctx,
+    `a2a ready (server=${settings.server.enabled}, client=${settings.client.enabled}, `
+    + `groups=${settings.groups.enabled}, tools=${settings.tools}, `
+    + `skills=${skills.ids().join(',') || 'none'}, home=${home})`,
+  );
+}
+
+/** The configuration an operator can set, exported for documentation and tests. */
+export { DEFAULT_CONFIG };
+
+/** The package version, read once from the manifest next to this file. */
+function pluginVersion() {
+  try {
+    // A synchronous read at mount time, not per request: the version cannot
+    // change while the process runs, and `ping` is called in hot paths.
+    const url = new URL('../package.json', import.meta.url);
+    const manifest = JSON.parse(readFileSync(url, 'utf8'));
+    return typeof manifest.version === 'string' ? manifest.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/** Log one informational line without depending on a particular logger shape. */
+function info(ctx, message) {
+  if (typeof ctx.logger?.info === 'function') ctx.logger.info(message);
+}
+
+/** One line about an error, without a stack. */
+function describe(error) {
+  return error instanceof Error ? error.message : String(error);
+}

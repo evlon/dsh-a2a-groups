@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": "smoke-2",
+  "method": "SendStreamingMessage",
+  "params": {
+    "message": {
+      "role": "user",
+      "messageId": "msg-smoke-2",
+      "parts": [{ "kind": "text", "text": "stream please" }],
+      "metadata": { "skill": "slow" }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "dsh-a2a",
+  "version": "0.1.0",
+  "description": "A2A protocol for DSH: expose a DSH Session as a standard A2A agent, call remote A2A agents, and run invite-only collaboration groups where a group is itself an A2A agent behind a gateway.",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "cordis",
+    "plugin",
+    "a2a",
+    "agent-to-agent",
+    "session",
+    "collaboration"
+  ],
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client.d.ts",
+      "default": "./client.js"
+    },
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "client.js",
+    "cordis.patch.yml",
+    "README.md",
+    "README-ui.md",
+    "docs"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "strip:invisible": "node scripts/strip-invisible.mjs client.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ]
+    }
+  }
+}

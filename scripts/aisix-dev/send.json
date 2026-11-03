@@ -1,0 +1,13 @@
+{
+  "jsonrpc": "2.0",
+  "id": "smoke-1",
+  "method": "SendMessage",
+  "params": {
+    "message": {
+      "role": "user",
+      "messageId": "msg-smoke-1",
+      "parts": [{ "kind": "text", "text": "hello from the AISIX smoke test" }],
+      "metadata": { "skill": "echo" }
+    }
+  }
+}

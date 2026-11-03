@@ -1,0 +1,20 @@
+# Ignore generated and machine-specific files.
+node_modules/
+.pnpm-store/
+
+# Screenshots captured during verification; they are evidence, not source.
+.shots/
+
+# Runtime state and logs from the dev instances.
+*.log
+out.log
+err.log
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# A separate repository cloned alongside this one; not part of this tree.
+dsh-session-bus/
+
