@@ -188,6 +188,10 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       lastTime: typeof input.lastTime === 'number' ? input.lastTime : previous.lastTime,
       isOwner: typeof input.isOwner === 'boolean' ? input.isOwner : previous.isOwner,
       feed: Array.isArray(input.feed) ? input.feed : previous.feed,
+      // The roster a Session fetched with a member credential. Cached so the panel can
+      // draw people without a network call, and stamped so a stale list is visibly stale.
+      members: Array.isArray(input.members) ? input.members : previous.members,
+      rosterCachedAt: typeof input.rosterCachedAt === 'number' ? input.rosterCachedAt : previous.rosterCachedAt,
       addedAt: previous.addedAt ?? clock(),
       touchedAt: clock(),
     };
@@ -301,6 +305,8 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
         lastTime: Number.isFinite(entry.lastTime) ? entry.lastTime : undefined,
         isOwner: typeof entry.isOwner === 'boolean' ? entry.isOwner : undefined,
         feed: Array.isArray(entry.feed) ? entry.feed : undefined,
+        members: Array.isArray(entry.members) ? entry.members : undefined,
+        rosterCachedAt: Number.isFinite(entry.rosterCachedAt) ? entry.rosterCachedAt : undefined,
         addedAt: Number.isFinite(entry.addedAt) ? entry.addedAt : 0,
         touchedAt: Number.isFinite(entry.touchedAt) ? entry.touchedAt : 0,
       });

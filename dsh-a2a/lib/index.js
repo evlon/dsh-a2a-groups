@@ -234,10 +234,15 @@ const PANEL_FEED_TAIL = 8;
           // lets a person tell two memberships in one group apart.
           sessionId: record.sessionId ?? '',
           local: hostedHere,
-          // No roster on purpose: naming the members requires a member credential,
-          // and this render has none. rosterInSession tells the panel to point at
-          // the Session instead of drawing an empty list.
-          rosterInSession: true,
+          // The roster a Session cached earlier, via a2a_group_info / a2a_group_members.
+          // Nothing is fetched at render time — this page is built before any Session
+          // exists and holds no credential — so an absent roster means "not fetched yet"
+          // and `rosterCachedAt` says how old a present one is.
+          roster: Array.isArray(record.members) ? record.members : [],
+          rosterCachedAt: typeof record.rosterCachedAt === 'number' ? record.rosterCachedAt : 0,
+          // Kept for the card's hint: with a cached roster the panel draws people, without
+          // one it points at the Session rather than implying the group is empty.
+          rosterInSession: !Array.isArray(record.members) || record.members.length === 0,
           feed,
         });
       }

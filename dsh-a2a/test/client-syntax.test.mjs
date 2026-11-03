@@ -246,15 +246,13 @@ test("factory exports the plugin surface", () => {
 	assert.ok(exportsObject.GLOBAL_KEY.startsWith("__") && exportsObject.GLOBAL_KEY.endsWith("__"));
 });
 
-test("apply registers a sidebar row, a main panel, and the right-column members tab", () => {
+test("apply registers the sidebar row, the main panel, and the members strip", () => {
 	const exportsObject = loadBundle().materialize();
 	const slots = createFakeSlots();
 	exportsObject.apply({ slots });
 
-	assert.deepEqual(slots.injected, ["sidebar.panellist", "main", "sidebar.right.pane.tab", "sidebar.right.pane.tab.title"]);
-	// Three pieces plus the title: body and title go through separate slots, and a body
-	// with no title renders as blank chrome.
-	assert.equal(slots.registered.length, 4);
+	assert.deepEqual(slots.injected, ["sidebar.panellist", "main", "conversation.input.dock"]);
+	assert.equal(slots.registered.length, 3);
 
 	const sidebar = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.panellist");
 	const main = slots.registered.find((entry) => entry.slotOptions.name === "main");
@@ -268,15 +266,21 @@ test("apply registers a sidebar row, a main panel, and the right-column members 
 	assert.equal(typeof sidebar.component, "function");
 	assert.equal(typeof main.component, "function");
 
-	// The members tab: one key, body and title registered under it.
-	const membersBody = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.right.pane.tab");
-	const membersTitle = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.right.pane.tab.title");
-	assert.ok(membersBody !== undefined, "the members tab body must be registered");
-	assert.ok(membersTitle !== undefined, "the members tab needs a title, or it renders as blank chrome");
-	assert.equal(membersBody.slotOptions.key, exportsObject.MEMBERS_TAB_KEY);
-	assert.equal(membersTitle.slotOptions.key, exportsObject.MEMBERS_TAB_KEY);
-	assert.equal(typeof membersBody.component, "function");
-	assert.equal(typeof membersTitle.component, "function");
+	// The members strip goes in the composer dock: that slot renders whenever a Session is
+	// open, whereas `sidebar.right.pane.tab` is dispatched by tab kind and stays inert
+	// unless the host opens a tab this plugin does not own.
+	const dock = slots.registered.find((entry) => entry.slotOptions.name === "conversation.input.dock");
+	assert.ok(dock !== undefined, "the members strip must be registered");
+	assert.equal(dock.slotOptions.id, exportsObject.MEMBERS_DOCK_ID);
+	assert.equal(typeof dock.component, "function");
+
+	// It must NOT claim the right-column slot: an inert registration there looks like a
+	// working feature in config and does nothing on screen.
+	assert.equal(
+		slots.registered.some((entry) => entry.slotOptions.name === "sidebar.right.pane.tab"),
+		false,
+		"the right-column slot is dispatched by tab kind and would never render",
+	);
 });
 
 test("apply survives a broken or absent slots service", () => {

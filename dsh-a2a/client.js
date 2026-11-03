@@ -68,6 +68,9 @@ window.__ModuleLoader__.load({
 		 * slots, and a body registered under a key with no title renders as blank chrome.
 		 */
 		const MEMBERS_TAB_KEY = "a2a-members";
+
+		/** Id of the members strip above the composer. */
+		const MEMBERS_DOCK_ID = "a2a-members";
 		//#endregion
 
 		//#region host bridge
@@ -266,8 +269,16 @@ window.__ModuleLoader__.load({
 			const id = pickString(firstDefined(raw, ["id", "groupId", "group"])) || "group-" + String(index);
 			const name = pickString(firstDefined(raw, ["name", "title", "label"])) || "未命名群";
 
-			// `members` is groups.js `members()`; the other two are conveniences.
-			const membersRaw = Array.isArray(raw.members) ? raw.members : Array.isArray(raw.memberList) ? raw.memberList : Array.isArray(raw.roster) ? raw.roster : [];
+			// `roster` is the list a Session cached after calling with a member credential;
+			// `members` is groups.js `members()` for a group hosted right here. Either is
+			// authoritative — both came from a caller that held a credential.
+			const membersRaw = Array.isArray(raw.roster)
+				? raw.roster
+				: Array.isArray(raw.members)
+					? raw.members
+					: Array.isArray(raw.memberList)
+						? raw.memberList
+						: [];
 			const members = [];
 			for (let i = 0; i < membersRaw.length; i += 1) {
 				const member = normalizeMember(membersRaw[i], i);
@@ -643,6 +654,52 @@ window.__ModuleLoader__.load({
 			};
 			return [expanded, toggle];
 		}
+
+		/**
+		 * A single boolean that survives re-renders.
+		 *
+		 * Not persisted on purpose: a strip that remembered being open would surprise
+		 * someone who collapsed it in a different Session, and collapsed is the quiet
+		 * default for something that sits above every composer.
+		 */
+
+		/**
+		 * Insert \`@name \` into the composer, through the owner's two-step API.
+		 *
+		 * \`captureInsertion()\` first, then \`insertText(text, span)\`: the span carries the
+		 * selection and the draft revision, so an insert into a draft that changed since the
+		 * click is REFUSED rather than applied in the wrong place. Passing text alone does
+		 * not throw — it silently returns false — which is why the one-argument version
+		 * looked like a dead button.
+		 *
+		 * Returns true when something was actually written.
+		 */
+		function insertMention(inputActions, name) {
+			const text = "@" + name + " ";
+			try {
+				if (inputActions === null || inputActions === undefined) return false;
+				if (typeof inputActions.captureInsertion === "function"
+					&& typeof inputActions.insertText === "function") {
+					const span = inputActions.captureInsertion();
+					return inputActions.insertText(text, span) === true;
+				}
+				// Last resort for a Host that only offers a whole-draft setter. It replaces
+				// the draft, which is why it is the fallback and not the first choice.
+				if (typeof inputActions.setDraft === "function") {
+					inputActions.setDraft(text);
+					return true;
+				}
+				return false;
+			} catch (error) {
+				reportUnavailable("inputActions.insertText", error);
+				return false;
+			}
+		}
+
+		function useLocalState() {
+			const [value, setValue] = react.useState(false);
+			return { value: value, set: setValue };
+		}
 		//#endregion
 
 		//#region components
@@ -807,6 +864,164 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+
+		/**
+		 * The members strip above the composer: collapsed to one line, expanding to a
+		 * clickable roster.
+		 *
+		 * Sits in `conversation.input.dock` because that is where a person is when they are
+		 * about to address somebody — and because it renders without needing a tab opened by
+		 * the host, which the right-column slot does not.
+		 */
+		function MembersDock(props) {
+			const snapshot = useSnapshot();
+			// Local collapse state: a per-Session preference would need to persist, and a
+			// strip that resets to collapsed on reload is the conservative default.
+			const local = useLocalState();
+			const collapsed = local.value !== true;
+			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
+
+			const candidates = snapshot.groups.filter(function (group) {
+				if (group.discovered === true) return false;
+				if (sessionId === "") return true;
+				return group.sessionId === "" || group.sessionId === sessionId;
+			});
+			candidates.sort(function (left, right) {
+				return (right.lastTime || 0) - (left.lastTime || 0);
+			});
+			const group = candidates[0];
+
+			// Nothing to say when this Session belongs to no group: the strip would be a
+			// permanent empty bar above every conversation.
+			if (group === undefined) return null;
+
+			/**
+			 * Insert `@name ` into the composer through the owner's API.
+			 *
+			 * Never sends: a click that posted a message would be an unexpected action from a
+			 * list you browse while thinking. The person still decides.
+			 */
+			function address(name) {
+				insertMention(props !== null && props !== undefined ? props.inputActions : undefined, name);
+			}
+
+			const names = group.members.map(function (member) {
+				return member.name;
+			});
+			const summary = names.length === 0
+				? String(group.memberCount || 0) + " 人（名单需在会话里查一次）"
+				: String(group.memberCount || names.length) + " 人 · " + names.slice(0, 4).join("、") + (names.length > 4 ? " 等" : "");
+
+			return h(
+				"div",
+				{
+					style: {
+						display: "flex",
+						flexDirection: "column",
+						gap: "4px",
+						padding: "4px 10px",
+						fontSize: "12px",
+						color: "var(--dsh-color-text-secondary, #9aa4b2)",
+						borderTop: "1px solid var(--dsh-color-border, #2a2f3a)"
+					}
+				},
+				h(
+					"button",
+					{
+						type: "button",
+						title: collapsed ? "展开群成员，点击即可 @ 对方" : "收起",
+						style: {
+							display: "flex",
+							alignItems: "center",
+							gap: "6px",
+							width: "100%",
+							padding: "2px 0",
+							border: "none",
+							background: "transparent",
+							color: "inherit",
+							font: "inherit",
+							fontSize: "12px",
+							cursor: "pointer",
+							textAlign: "left"
+						},
+						onClick: function () {
+							local.set(local.value === true ? false : true);
+						}
+					},
+					h("span", { style: { flex: "0 0 auto", opacity: 0.7 } }, collapsed ? "▸" : "▾"),
+					h("span", { style: { fontWeight: 500 } }, "群成员"),
+					h("span", { style: { opacity: 0.75, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, summary)
+				),
+				collapsed
+					? null
+					: h(
+							"div",
+							{ style: { display: "flex", flexWrap: "wrap", gap: "4px", paddingBottom: "4px" } },
+							group.members.map(function (member) {
+								return h(
+									"button",
+									{
+										key: member.id,
+										type: "button",
+										title: "点击在输入框里 @ " + member.name,
+										style: {
+											display: "inline-flex",
+											alignItems: "center",
+											gap: "4px",
+											padding: "2px 8px",
+											border: "1px solid var(--dsh-color-border, #444)",
+											borderRadius: "999px",
+											background: "transparent",
+											color: "inherit",
+											font: "inherit",
+											fontSize: "12px",
+											cursor: "pointer"
+										},
+										onClick: function () {
+											address(member.name);
+										}
+									},
+									h(
+										"span",
+										{
+											style: {
+												width: "6px",
+												height: "6px",
+												borderRadius: "50%",
+												background: member.online ? "var(--dsh-color-success, #3fb950)" : "var(--dsh-color-border, #555)"
+											}
+										}
+									),
+									member.name,
+									member.role === "owner" ? h("span", { style: { opacity: 0.6 } }, "·群主") : null
+								);
+							}),
+							h(
+								"button",
+								{
+									key: "__all__",
+									type: "button",
+									title: "点击 @ 所有人",
+									style: {
+										padding: "2px 8px",
+										border: "1px dashed var(--dsh-color-border, #444)",
+										borderRadius: "999px",
+										background: "transparent",
+										color: "inherit",
+										font: "inherit",
+										fontSize: "12px",
+										cursor: "pointer"
+									},
+									onClick: function () {
+										address("所有人");
+									}
+								},
+								"@ 所有人"
+							)
+						)
+			);
+		}
+
 		/**
 		 * Members of the group the current Session belongs to, as a right-hand panel.
 		 *
@@ -841,26 +1056,7 @@ window.__ModuleLoader__.load({
 			 * that writes into the DOM behind the composer's back and desynchronises it.
 			 */
 			function address(member) {
-				const text = "@" + member.name + " ";
-				try {
-					const actions = props !== null && props !== undefined ? props.inputActions : undefined;
-					if (actions !== null && actions !== undefined) {
-						if (typeof actions.insertText === "function") {
-							actions.insertText(text);
-							return;
-						}
-						if (typeof actions.append === "function") {
-							actions.append(text);
-							return;
-						}
-						if (typeof actions.setDraft === "function") {
-							actions.setDraft(text);
-							return;
-						}
-					}
-				} catch (error) {
-					reportUnavailable("inputActions.insertText", error);
-				}
+				insertMention(props !== null && props !== undefined ? props.inputActions : undefined, member.name);
 			}
 
 			if (group === undefined) {
@@ -1159,6 +1355,23 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			/** Register the members strip above the composer. */
+			const membersDock = () => {
+				try {
+					return slots.register(
+						{
+							name: "conversation.input.dock",
+							id: MEMBERS_DOCK_ID,
+							order: 30
+						},
+						MembersDock
+					);
+				} catch (error) {
+					reportUnavailable("conversation.input.dock register", error);
+					return undefined;
+				}
+			};
+
 			const sidebarRow = () => {
 				try {
 					return slots.register(
@@ -1186,17 +1399,16 @@ window.__ModuleLoader__.load({
 			} catch (error) {
 				reportUnavailable("main inject", error);
 			}
-			// The members panel belongs in the right column: it is session-scoped reference
-			// material for the conversation beside it, not a destination of its own.
+			// The members strip goes above the composer: it renders whenever a Session is
+			// open, and it is where the person is when they are about to type a name.
+			//
+			// Deliberately NOT `sidebar.right.pane.tab`: that slot is dispatched by tab kind,
+			// so a registration there stays inert unless something opens a tab of that kind —
+			// which is a host decision this plugin cannot make.
 			try {
-				slots.inject("sidebar.right.pane.tab", membersTab);
+				slots.inject("conversation.input.dock", membersDock);
 			} catch (error) {
-				reportUnavailable("sidebar.right.pane.tab inject", error);
-			}
-			try {
-				slots.inject("sidebar.right.pane.tab.title", membersTabTitle);
-			} catch (error) {
-				reportUnavailable("sidebar.right.pane.tab.title inject", error);
+				reportUnavailable("conversation.input.dock inject", error);
 			}
 		}
 		//#endregion
@@ -1216,6 +1428,8 @@ window.__ModuleLoader__.load({
 		exports.GroupCard = GroupCard;
 		exports.EmptyState = EmptyState;
 		exports.MembersPane = MembersPane;
+		exports.MembersDock = MembersDock;
+		exports.MEMBERS_DOCK_ID = MEMBERS_DOCK_ID;
 		exports.MEMBERS_TAB_KEY = MEMBERS_TAB_KEY;
 		exports.groupByRelationship = groupByRelationship;
 		return module.exports;
