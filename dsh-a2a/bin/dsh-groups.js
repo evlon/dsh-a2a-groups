@@ -352,6 +352,8 @@ async function main() {
     tasks,
     skills: registry,
     profileProvider: undefined,
+    // Lets an operator force a flush over HTTP before copying groups.json.
+    onFlush: () => store.flush(),
   });
 
   server.attach();

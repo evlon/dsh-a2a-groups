@@ -40,6 +40,18 @@ import {
 } from './wire.js';
 import { A2A_PATH, CARD_ALIAS_PATH, CARD_PATH, buildCard, resolveAgentUrl } from './card.js';
 
+/**
+ * Operator endpoint: liveness plus an authenticated flush.
+ *
+ * Deliberately outside the A2A namespace: a monitor asking 'are you alive' should not
+ * have to look like an A2A peer, and a backup script should not have to build a
+ * JSON-RPC envelope to ask for a flush.
+ */
+export const HEALTH_PATH = '/__health';
+
+/** When this module was loaded, for the uptime an operator sees. */
+const STARTED_AT = Date.now();
+
 /** Methods this deployment answers. Anything else is `-32601`. */
 const SUPPORTED_METHODS = Object.freeze([
   'SendMessage',
@@ -102,6 +114,7 @@ export function createServer({
   tasks,
   skills,
   profileProvider,
+  onFlush,
 } = {}) {
   const serverConfig = config?.server ?? {};
   const maxBodyBytes = positiveInt(serverConfig.maxBodyBytes, DEFAULT_MAX_BODY_BYTES);
@@ -142,6 +155,11 @@ export function createServer({
       register.call(registrar, { kind: 'exact', path: CARD_ALIAS_PATH, handler: handleCard }),
       register.call(registrar, { kind: 'prefix', path: `${A2A_PATH}/.well-known/`, handler: handleWellKnownFallback }),
       register.call(registrar, { kind: 'exact', path: A2A_PATH, handler: handleRpc }),
+      // An operator needs two things a card cannot give: "are you alive" without
+      // speaking A2A, and "make sure what you have in memory is on disk before I copy
+      // the file". Both are authenticated — a flush is a write and must not be
+      // triggerable by anyone who can reach the port.
+      register.call(registrar, { kind: 'exact', path: HEALTH_PATH, handler: handleHealth }),
     ];
     attached = true;
     info();
@@ -240,6 +258,58 @@ export function createServer({
   async function handleWellKnownFallback(req, res) {
     const path = pathOf(req);
     writeJson(res, 404, rpcError(null, RPC_ERRORS.INVALID_REQUEST, `no A2A discovery document at ${path}`));
+  }
+
+  /**
+   * Operator endpoint: liveness, and a flush before a backup copies the file.
+   *
+   * Two things an operator cannot get from the card:
+   *
+   *   - "are you alive" without speaking A2A (a monitor should not have to build a
+   *     JSON-RPC envelope to ask a yes/no question);
+   *   - "put what you hold in memory on disk now", so `cp groups.json` is guaranteed
+   *     to capture the latest state rather than whatever was flushed last.
+   *
+   * Both are behind the same token as `/a2a`. A flush is a write, and a write endpoint
+   * that anyone on the network can trigger is a way to make the host do disk I/O on
+   * demand. `POST` is required for the flush so a crawler or a browser prefetch cannot
+   * trigger it by accident.
+   *
+   * @param {object} req - `node:http` request.
+   * @param {object} res - `node:http` response.
+   * @returns {Promise<void>} resolves when the response is written.
+   */
+  async function handleHealth(req, res) {
+    const verdict = authenticate(req);
+    if (verdict.ok !== true) {
+      writeJson(res, 401, { error: 'unauthorized', reason: verdict.reason }, { 'www-authenticate': 'Bearer' });
+      return;
+    }
+    const flushRequested = String(req?.method ?? 'GET').toUpperCase() === 'POST';
+    if (!isReadMethod(req?.method) && !flushRequested) {
+      writeJson(res, 405, { error: 'method_not_allowed' }, { allow: 'GET, HEAD, POST' });
+      return;
+    }
+    let flushed = false;
+    let flushError;
+    if (flushRequested && typeof onFlush === 'function') {
+      try {
+        await onFlush();
+        flushed = true;
+      } catch (error) {
+        // Report the failure instead of a 500: a backup script can then decide to
+        // skip the copy, which is far better than copying a stale file silently.
+        flushError = error instanceof Error ? error.message : String(error);
+      }
+    }
+    writeJson(res, flushError === undefined ? 200 : 500, {
+      ok: flushError === undefined,
+      agent: typeof config?.agent?.name === 'string' ? config.agent.name : undefined,
+      version: PROTOCOL_VERSION,
+      uptimeSeconds: Math.round((Date.now() - STARTED_AT) / 1000),
+      skills: typeof skills?.list === 'function' ? skills.list().length : 0,
+      ...(flushRequested ? { flushed, ...(flushError === undefined ? {} : { flushError }) } : {}),
+    });
   }
 
   /**
