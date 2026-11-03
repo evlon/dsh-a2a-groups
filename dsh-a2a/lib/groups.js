@@ -160,6 +160,18 @@ export const REQUEST_TTL_MS = 7 * 24 * 3600 * 1000;
 /** Most unanswered requests one group may hold, so a spammer cannot grow the file. */
 export const MAX_PENDING_REQUESTS = 50;
 
+/**
+ * The sentinel that means "everybody in the group".
+ *
+ * A string rather than a boolean flag because a post carries ONE list of addressees:
+ * `["@all"]` and `["m-1","m-2"]` are the same field, so a reader never has to
+ * combine two things to know who was addressed.
+ */
+export const MENTION_ALL = '@all';
+
+/** Most members one post may address, so a list cannot grow without bound. */
+export const MAX_MENTIONS_PER_POST = 200;
+
 /** Longest free-text reason on a join request. */
 export const MAX_REQUEST_REASON_CHARS = 200;
 
@@ -751,6 +763,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const at = now();
     const seq = group.nextSeq;
     group.nextSeq += 1;
+    const mentions = resolveMentions(group, input.mentions);
     const entry = {
       seq,
       at,
@@ -759,12 +772,60 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       from: { memberId: member.memberId, displayName: member.displayName },
       text,
       payload,
+      // Absent rather than an empty array when nobody was addressed: the distinction
+      // between "addressed nobody" and "addressed everyone" must survive the file, and
+      // an empty array would read as the former for both.
+      ...(mentions.length === 0 ? {} : { mentions }),
     };
     group.feed.push(entry);
     member.lastSeenAt = at;
     persist();
     notify(group, entry);
-    return { seq, msgId: entry.msgId, at, atIso: new Date(at).toISOString() };
+    return { seq, msgId: entry.msgId, at, atIso: new Date(at).toISOString(), mentions };
+  }
+
+  /**
+   * Turn a caller's mention list into member ids, or the `@all` sentinel.
+   *
+   * Accepted forms, because a model writing "@李四" should not have to resolve the id
+   * itself:
+   *
+   *   - `"@all"` / `"all"` / `"@所有人"` → `["@all"]`
+   *   - a member id                  → kept if that member exists
+   *   - a display name               → resolved when exactly ONE member has that name
+   *
+   * An ambiguous display name is dropped rather than guessed: waking the wrong person is
+   * worse than not waking anyone, and the poster can retry with an id.
+   *
+   * @param {object} group - internal group record.
+   * @param {unknown} raw - the caller's mention list.
+   * @returns {string[]} resolved ids, or `[MENTION_ALL]`; empty array for no mentions.
+   */
+  function resolveMentions(group, raw) {
+    if (raw === undefined || raw === null) return [];
+    const list = Array.isArray(raw) ? raw : [raw];
+    const out = [];
+    for (const item of list) {
+      if (typeof item !== 'string') continue;
+      const token = item.trim();
+      if (token === '') continue;
+      const lowered = token.toLowerCase();
+      if (lowered === MENTION_ALL || lowered === 'all' || token === '@所有人' || token === '所有人') {
+        // "everyone" subsumes any individual name in the same list: the post addressed
+        // the whole group, and keeping both would make the grading logic pick one.
+        return [MENTION_ALL];
+      }
+      const byId = group.members.find((member) => member.memberId === token);
+      if (byId !== undefined) {
+        if (!out.includes(byId.memberId)) out.push(byId.memberId);
+        continue;
+      }
+      const byName = group.members.filter((member) => member.displayName === token);
+      if (byName.length === 1) {
+        if (!out.includes(byName[0].memberId)) out.push(byName[0].memberId);
+      }
+    }
+    return out.slice(0, MAX_MENTIONS_PER_POST);
   }
 
   /**
@@ -1895,6 +1956,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       text: entry.text,
     };
     if (entry.payload !== undefined) view.payload = entry.payload;
+    // Who this post addressed. Omitted when nobody was, so a reader can tell an
+    // ordinary message from one that summons the whole group.
+    if (Array.isArray(entry.mentions) && entry.mentions.length > 0) view.mentions = [...entry.mentions];
     return view;
   }
 
@@ -2005,7 +2069,16 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
           && typeof request.status === 'string')
         : [],
       members,
-      feed: raw.feed.filter((entry) => isPlainObject(entry) && Number.isInteger(entry.seq)),
+      // A feed entry survives a reload with its mentions intact; without this the
+      // addressing would be lost on every restart and every wake decision would fall
+      // back to "ordinary message".
+      feed: raw.feed
+        .filter((entry) => isPlainObject(entry) && Number.isInteger(entry.seq))
+        .map((entry) => {
+          if (!Array.isArray(entry.mentions)) return entry;
+          const mentions = entry.mentions.filter((item) => typeof item === 'string' && item !== '');
+          return mentions.length === 0 ? { ...entry, mentions: undefined } : { ...entry, mentions };
+        }),
       nextSeq: Math.max(nextSeqCandidate, highestSeq + 1),
     };
   }

@@ -246,13 +246,15 @@ test("factory exports the plugin surface", () => {
 	assert.ok(exportsObject.GLOBAL_KEY.startsWith("__") && exportsObject.GLOBAL_KEY.endsWith("__"));
 });
 
-test("apply registers a sidebar row and a main panel that share one id", () => {
+test("apply registers a sidebar row, a main panel, and the right-column members tab", () => {
 	const exportsObject = loadBundle().materialize();
 	const slots = createFakeSlots();
 	exportsObject.apply({ slots });
 
-	assert.deepEqual(slots.injected, ["sidebar.panellist", "main"]);
-	assert.equal(slots.registered.length, 2);
+	assert.deepEqual(slots.injected, ["sidebar.panellist", "main", "sidebar.right.pane.tab", "sidebar.right.pane.tab.title"]);
+	// Three pieces plus the title: body and title go through separate slots, and a body
+	// with no title renders as blank chrome.
+	assert.equal(slots.registered.length, 4);
 
 	const sidebar = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.panellist");
 	const main = slots.registered.find((entry) => entry.slotOptions.name === "main");
@@ -265,6 +267,16 @@ test("apply registers a sidebar row and a main panel that share one id", () => {
 	assert.equal(sidebar.slotOptions.label, "协作群");
 	assert.equal(typeof sidebar.component, "function");
 	assert.equal(typeof main.component, "function");
+
+	// The members tab: one key, body and title registered under it.
+	const membersBody = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.right.pane.tab");
+	const membersTitle = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.right.pane.tab.title");
+	assert.ok(membersBody !== undefined, "the members tab body must be registered");
+	assert.ok(membersTitle !== undefined, "the members tab needs a title, or it renders as blank chrome");
+	assert.equal(membersBody.slotOptions.key, exportsObject.MEMBERS_TAB_KEY);
+	assert.equal(membersTitle.slotOptions.key, exportsObject.MEMBERS_TAB_KEY);
+	assert.equal(typeof membersBody.component, "function");
+	assert.equal(typeof membersTitle.component, "function");
 });
 
 test("apply survives a broken or absent slots service", () => {

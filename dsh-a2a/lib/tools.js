@@ -622,6 +622,11 @@ export function registerTools(ctx, deps) {
       additionalProperties: false,
       properties: {
         groupId: { type: 'string', description: 'Group id.' },
+        mentions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Who should ACT on this: member ids, display names that resolve to exactly one member, or ["@all"] for everyone. Those members are woken; everyone else only sees an unread count. Omit it for ordinary progress.',
+        },
         message: { type: 'string', description: 'The text to post.' },
       },
       required: ['groupId', 'message'],
@@ -651,7 +656,13 @@ export function registerTools(ctx, deps) {
       const result = await bridge.send(targetOf(membership, config), {
         skill: 'group/post',
         text: message,
-        data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, text: message },
+        data: {
+          groupId,
+          memberId: membership.memberId,
+          memberKey: membership.memberKey,
+          text: message,
+          mentions: args.mentions,
+        },
         timeoutMs: config.client.timeoutMs,
       });
       return { seq: result.data?.seq ?? 0, groupId };

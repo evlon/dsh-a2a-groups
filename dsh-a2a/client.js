@@ -60,6 +60,14 @@ window.__ModuleLoader__.load({
 		const POLL_MS = 2000;
 		/** Sidebar row order; schedule uses 10 and the workspace picker sits above. */
 		const PANEL_ORDER = 40;
+
+		/**
+		 * Key of the right-column members tab.
+		 *
+		 * One key for both the body and the title: the owner dispatches them through two
+		 * slots, and a body registered under a key with no title renders as blank chrome.
+		 */
+		const MEMBERS_TAB_KEY = "a2a-members";
 		//#endregion
 
 		//#region host bridge
@@ -301,6 +309,15 @@ window.__ModuleLoader__.load({
 				lastTime: lastMessage === undefined ? 0 : lastMessage.time,
 				members: members,
 				feed: recentFeed,
+				// `role` is the permission bit (owner | member). It decides which section
+				// the group belongs to, because the ACTIONS differ: an owner approves and
+				// invites, a member only reads and posts.
+				role: pickString(firstDefined(raw, ["role", "permission"])) || "member",
+				// A group that exists only as a directory row: not joined, so it belongs in
+				// "discover" and its only action is "ask to join".
+				discovered: raw.discovered === true || raw.joined === false,
+				// Which Session this membership belongs to, when the Host says.
+				sessionId: pickString(firstDefined(raw, ["sessionId", "session"])),
 				muted: raw.muted === true || raw.mute === true
 			};
 		}
@@ -724,26 +741,265 @@ window.__ModuleLoader__.load({
 		 * Central panel page (registered into the `main` slot under key PANEL_ID).
 		 * Receives no props from the shell; all data comes from the Host source.
 		 */
+
+		/**
+		 * Split groups into the sections the panel draws.
+		 *
+		 * Order is deliberate and not "by recency": ownership first (it needs action), then
+		 * membership (where the work happens), then discovery (a browse), and colleagues last
+		 * because a card is reference material rather than a place to be.
+		 *
+		 * A group with no explicit role is treated as `joined`: that is the safe default,
+		 * because showing an owner control for a group somebody merely belongs to would offer
+		 * an action the server will refuse.
+		 */
+		function groupByRelationship(groups) {
+			const mine = [];
+			const joined = [];
+			const discover = [];
+			for (const group of groups) {
+				if (group.discovered === true) {
+					discover.push(group);
+				} else if (group.role === "owner") {
+					mine.push(group);
+				} else {
+					joined.push(group);
+				}
+			}
+			// Most recently active first inside each section: a directory sorted by name is
+			// useless when what you want is "what is happening".
+			const byActivity = (left, right) => (right.lastTime || 0) - (left.lastTime || 0);
+			mine.sort(byActivity);
+			joined.sort(byActivity);
+			discover.sort(byActivity);
+			return { mine: mine, joined: joined, discover: discover };
+		}
+
+		/**
+		 * One titled section of the panel.
+		 *
+		 * Rendered only when non-empty. `hint` carries the one line that explains why the
+		 * section exists ("你是群主" / "还没加入"), because a heading alone leaves a person
+		 * guessing why two groups with the same shape sit in different places.
+		 */
+		function GroupSection(props) {
+			if (props.groups.length === 0) return null;
+			return h(
+				"div",
+				{ style: { display: "flex", flexDirection: "column", gap: "6px" } },
+				h(
+					"div",
+					{ style: { display: "flex", alignItems: "baseline", gap: "8px" } },
+					h("p", { style: S.sectionLabel }, props.title),
+					h("span", { style: S.hint }, String(props.groups.length)),
+					props.hint ? h("span", { style: S.hint }, props.hint) : null
+				),
+				props.groups.map((group) =>
+					h(GroupCard, {
+						key: group.id,
+						group: group,
+						open: props.expanded[group.id] === true,
+						onToggle: () => {
+							props.onToggle(group.id);
+						}
+					})
+				)
+			);
+		}
+
+		/**
+		 * Members of the group the current Session belongs to, as a right-hand panel.
+		 *
+		 * Data comes from the same snapshot the central panel reads, filtered to the group
+		 * this Session is in. The panel therefore shows nothing when the Session has not
+		 * joined a group — which is correct, and says so, rather than listing strangers.
+		 *
+		 * Props provided by the slot owner: `sessionId` and `inputActions`.
+		 */
+		function MembersPane(props) {
+			const snapshot = useSnapshot();
+			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
+
+			// Which group this Session belongs to. A Session can in principle hold several;
+			// the panel shows the one with the most recent activity, because that is the one
+			// the person is working in.
+			const candidates = snapshot.groups.filter(function (group) {
+				if (group.discovered === true) return false;
+				if (sessionId === "") return true;
+				return group.sessionId === "" || group.sessionId === sessionId;
+			});
+			candidates.sort(function (left, right) {
+				return (right.lastTime || 0) - (left.lastTime || 0);
+			});
+			const group = candidates[0];
+
+			/**
+			 * Insert `@name ` into the composer.
+			 *
+			 * `inputActions` is the owner's API for changing the draft. Falling back to doing
+			 * nothing is deliberate: a panel that silently fails to insert is better than one
+			 * that writes into the DOM behind the composer's back and desynchronises it.
+			 */
+			function address(member) {
+				const text = "@" + member.name + " ";
+				try {
+					const actions = props !== null && props !== undefined ? props.inputActions : undefined;
+					if (actions !== null && actions !== undefined) {
+						if (typeof actions.insertText === "function") {
+							actions.insertText(text);
+							return;
+						}
+						if (typeof actions.append === "function") {
+							actions.append(text);
+							return;
+						}
+						if (typeof actions.setDraft === "function") {
+							actions.setDraft(text);
+							return;
+						}
+					}
+				} catch (error) {
+					reportUnavailable("inputActions.insertText", error);
+				}
+			}
+
+			if (group === undefined) {
+				return h(
+					"div",
+					{ style: S.root },
+					h("h2", { style: S.title }, "群成员"),
+					h("p", { style: S.emptyBody }, "这个会话还没有加入协作群。加入后，成员会出现在这里，点击即可 @ 对方。")
+				);
+			}
+
+			const members = group.members;
+			return h(
+				"div",
+				{ style: S.root },
+				h(
+					"div",
+					{ style: S.header },
+					h("h2", { style: S.title }, "群成员"),
+					h("span", { style: S.hint }, group.name)
+				),
+				h(
+					"p",
+					{ style: S.emptyBody },
+					String(group.memberCount || members.length) + " 人"
+						+ (group.onlineCount > 0 ? " · " + String(group.onlineCount) + " 人在线" : "")
+						+ (members.length === 0 ? "（名单需在会话里让助手查一次）" : "")
+				),
+				members.length === 0
+					? null
+					: h(
+							"div",
+							{ style: { display: "flex", flexDirection: "column", gap: "2px" } },
+							members.map(function (member) {
+								return h(
+									"button",
+									{
+										key: member.id,
+										type: "button",
+										title: "点击在输入框里 @ " + member.name,
+										style: {
+											display: "flex",
+											alignItems: "center",
+											gap: "6px",
+											width: "100%",
+											padding: "5px 6px",
+											border: "none",
+											borderRadius: "5px",
+											background: "transparent",
+											color: "inherit",
+											font: "inherit",
+											fontSize: "12px",
+											textAlign: "left",
+											cursor: "pointer"
+										},
+										onClick: function () {
+											address(member);
+										}
+									},
+									h(
+										"span",
+										{
+											style: {
+												width: "6px",
+												height: "6px",
+												borderRadius: "50%",
+												flex: "0 0 auto",
+												background: member.online ? "var(--dsh-color-success, #3fb950)" : "var(--dsh-color-border, #555)"
+											}
+										}
+									),
+									h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, member.name),
+									member.role === "owner" ? h("span", { style: S.chip }, "群主") : null,
+									member.role !== "" && member.role !== "owner" && member.role !== "member"
+										? h("span", { style: S.chip }, member.role)
+										: null
+								);
+							}),
+							// One row for the whole group: the common case in a status post.
+							h(
+								"button",
+								{
+									key: "__all__",
+									type: "button",
+									title: "点击 @ 所有人",
+									style: {
+										marginTop: "6px",
+										width: "100%",
+										padding: "5px 6px",
+										border: "1px solid var(--dsh-color-border, #444)",
+										borderRadius: "5px",
+										background: "transparent",
+										color: "inherit",
+										font: "inherit",
+										fontSize: "12px",
+										cursor: "pointer"
+									},
+									onClick: function () {
+										address({ name: "所有人" });
+									}
+								},
+								"@ 所有人"
+							)
+						)
+			);
+		}
+
 		function GroupsPanel() {
 			const snapshot = useSnapshot();
 			const [expanded, toggle] = useExpanded();
 
+			const sections = groupByRelationship(snapshot.groups);
+			const total = snapshot.groups.length;
 			const body =
-				snapshot.groups.length === 0
+				total === 0
 					? h(EmptyState, null)
 					: h(
 							"div",
-							{ style: { display: "flex", flexDirection: "column", gap: "8px" } },
-							snapshot.groups.map((group) =>
-								h(GroupCard, {
-									key: group.id,
-									group: group,
-									open: expanded[group.id] === true,
-									onToggle: () => {
-										toggle(group.id);
-									}
-								})
-							)
+							{ style: { display: "flex", flexDirection: "column", gap: "14px" } },
+							h(GroupSection, {
+								title: "我创建的",
+								hint: "可审批、可发邀请",
+								groups: sections.mine,
+								expanded: expanded,
+								onToggle: toggle
+							}),
+							h(GroupSection, {
+								title: "我参加的",
+								groups: sections.joined,
+								expanded: expanded,
+								onToggle: toggle
+							}),
+							h(GroupSection, {
+								title: "可加入",
+								hint: "宿主上的公开群",
+								groups: sections.discover,
+								expanded: expanded,
+								onToggle: toggle
+							})
 						);
 
 			return h(
@@ -857,6 +1113,52 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			/**
+			 * Register the members panel into the right column.
+			 *
+			 * `sidebar.right.pane.tab` is a keyed, session-scoped slot: the panel receives the
+			 * current `sessionId` and the composer's `inputActions`, which is exactly what it
+			 * needs and nothing more. A failure here must not stop the main panel from
+			 * mounting, so it is reported and swallowed.
+			 */
+			const membersTab = () => {
+				try {
+					return slots.register(
+						{
+							name: "sidebar.right.pane.tab",
+							key: MEMBERS_TAB_KEY
+						},
+						MembersPane
+					);
+				} catch (error) {
+					reportUnavailable("sidebar.right.pane.tab register", error);
+					return undefined;
+				}
+			};
+
+			/**
+			 * The tab's title chip.
+			 *
+			 * Registered separately because the owner dispatches body and title through
+			 * different slots: a tab with a body but no title renders as blank chrome.
+			 */
+			const membersTabTitle = () => {
+				try {
+					return slots.register(
+						{
+							name: "sidebar.right.pane.tab.title",
+							key: MEMBERS_TAB_KEY
+						},
+						function MembersTabTitle() {
+							return h("span", { style: { fontSize: "12px" } }, "群成员");
+						}
+					);
+				} catch (error) {
+					reportUnavailable("sidebar.right.pane.tab.title register", error);
+					return undefined;
+				}
+			};
+
 			const sidebarRow = () => {
 				try {
 					return slots.register(
@@ -884,6 +1186,18 @@ window.__ModuleLoader__.load({
 			} catch (error) {
 				reportUnavailable("main inject", error);
 			}
+			// The members panel belongs in the right column: it is session-scoped reference
+			// material for the conversation beside it, not a destination of its own.
+			try {
+				slots.inject("sidebar.right.pane.tab", membersTab);
+			} catch (error) {
+				reportUnavailable("sidebar.right.pane.tab inject", error);
+			}
+			try {
+				slots.inject("sidebar.right.pane.tab.title", membersTabTitle);
+			} catch (error) {
+				reportUnavailable("sidebar.right.pane.tab.title inject", error);
+			}
 		}
 		//#endregion
 
@@ -901,6 +1215,9 @@ window.__ModuleLoader__.load({
 		exports.GroupsSidebarIcon = GroupsSidebarIcon;
 		exports.GroupCard = GroupCard;
 		exports.EmptyState = EmptyState;
+		exports.MembersPane = MembersPane;
+		exports.MEMBERS_TAB_KEY = MEMBERS_TAB_KEY;
+		exports.groupByRelationship = groupByRelationship;
 		return module.exports;
 	}
 });

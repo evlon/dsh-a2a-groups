@@ -34,6 +34,37 @@ const RESUBSCRIBE_BASE_MS = 1000;
 /** Largest re-subscribe backoff, so a down host is retried forever at a slow rate. */
 const RESUBSCRIBE_MAX_MS = 60000;
 
+
+/**
+ * The sentinel meaning "everyone in the group", mirrored from groups.js.
+ *
+ * Duplicated as a constant rather than imported: inbox.js is deliberately free of a
+ * dependency on the group store (it only ever sees feed entries), and a single string
+ * literal is a smaller coupling than a module edge.
+ */
+const MENTION_ALL_LITERAL = '@all';
+
+/**
+ * How loudly one post should arrive for one membership.
+ *
+ * @param {object} post - the feed entry.
+ * @param {object} membership - the receiving membership.
+ * @param {boolean} muted - whether this group is muted for this Session.
+ * @returns {'mention'|'notice'|'ambient'} the grade.
+ */
+export function gradeOf(post, membership, muted) {
+  // A mute is an explicit instruction from the person, so it outranks everything.
+  // A mention still arrives, just quietly, rather than being dropped.
+  if (muted) return 'ambient';
+  const mentions = Array.isArray(post.mentions) ? post.mentions : [];
+  if (mentions.length === 0) return 'notice';
+  if (mentions.includes(MENTION_ALL_LITERAL)) return 'mention';
+  if (mentions.includes(membership.memberId)) return 'mention';
+  // The post addressed somebody, just not this member: deliberately ambient. Being
+  // told "other people were mentioned" is noise, not signal.
+  return 'ambient';
+}
+
 /**
  * Build the inbox.
  *
@@ -293,13 +324,29 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
         logger?.warn?.(`a2a: membership in ${groupId} has no Session; skipping delivery`);
         continue;
       }
+      const muted = disabled.has(groupId);
+      const grade = gradeOf(post, membership, muted);
+      // Only a mention changes the rendering: the reader has to know the post is FOR
+      // them, not merely in a group they belong to.
+      const addressedMe = grade === 'mention'
+        && (!Array.isArray(post.mentions) || post.mentions.includes('@all') || post.mentions.includes(membership.memberId));
       try {
         await deliverer.deliver({
           sessionId,
-          text: renderPost(membership.groupName ?? groupId, post),
+          text: renderPost(membership.groupName ?? groupId, post, addressedMe),
           messageId: post.msgId,
-          mode: disabled.has(groupId) ? 'inbox' : 'queue',
-          source: { kind: 'a2a', skill: 'group/subscribe', groupId, seq: post.seq, from: post.from?.displayName },
+          // Only a mention or an ordinary notice starts a turn. Ambient posts wait
+          // in the task inbox, so a large group cannot interrupt everybody for
+          // everything that happens in it.
+          mode: grade === 'ambient' ? 'inbox' : 'queue',
+          source: {
+            kind: 'a2a',
+            skill: 'group/subscribe',
+            groupId,
+            seq: post.seq,
+            from: post.from?.displayName,
+            grade,
+          },
           // A group post arrives on somebody else's schedule; it must not raise the
           // Session's permission level as a side effect of being delivered.
           elevate: false,
@@ -313,6 +360,7 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
     }
     void openingMembership;
   }
+
 
   /**
    * The wire watermark for one group: the LOWEST read position among its
@@ -410,11 +458,18 @@ function parsePost(event) {
  * group: a Session that receives "fix the invoice bug" with no return address
  * will fix it and tell its human, and the group will never hear about it.
  */
-function renderPost(groupName, post) {
+function renderPost(groupName, post, addressedMe = false) {
   const sender = post.from?.displayName ?? post.from?.memberId ?? 'a member';
   const when = typeof post.at === 'number' ? new Date(post.at).toISOString() : 'just now';
+  const toEveryone = Array.isArray(post.mentions) && post.mentions.includes('@all');
+  // The first line is what a reader sees in the collapsed card, so the addressing has
+  // to be there. "You were named" is the difference between "read this now" and "read
+  // this when you get to it" — which is the entire point of mentions.
+  const addressing = addressedMe === true
+    ? (toEveryone ? ' — @everyone' : ' — you were mentioned')
+    : (toEveryone ? ' — to everyone' : '');
   const lines = [
-    `Group message in 「${groupName}」 from ${sender} (#${post.seq}, ${when}):`,
+    `Group message in 「${groupName}」 from ${sender}${addressing} (#${post.seq}, ${when}):`,
     '',
     typeof post.text === 'string' && post.text !== '' ? post.text : '(no text)',
   ];
@@ -423,7 +478,9 @@ function renderPost(groupName, post) {
   }
   lines.push(
     '',
-    'Answer with a2a_group_post to the same group — a reply told only to your user leaves the rest of the group blind.',
+    addressedMe === true
+      ? 'This one names you. Answer with a2a_group_post to the same group — a reply told only to your user leaves the rest of the group blind.'
+      : 'Answer with a2a_group_post to the same group — a reply told only to your user leaves the rest of the group blind.',
   );
   return lines.join('\n');
 }

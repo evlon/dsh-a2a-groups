@@ -242,7 +242,10 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       id: 'group/post',
       name: 'Post to a group',
       description:
-        'Post a message to a group. Every member is woken by it, so post what a member should act on, not a running commentary. Returns the sequence number the post landed on.',
+        'Post a message to a group. Pass `mentions` to name who should ACT on it: those '
+        + 'members are woken, everyone else only sees an unread count. Use ["@all"] for a '
+        + 'notice concerning the whole group; omit it for ordinary progress a member can '
+        + 'read when they are already working. Returns the sequence number it landed on.',
       examples: ['Tell the group the migration is done and the branch is merged'],
       async run(input) {
         const data = payload(input);
@@ -268,10 +271,30 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           throw coded('empty_message', 'group/post needs a non-empty text');
         }
         try {
-          const posted = store.post({ groupId, member, text, payload: data.payload });
+          // `mentions` decides who is WOKEN, not merely who is named in the prose.
+          // Without it every post interrupts every member, which is how a group turns
+          // into noise and then gets muted.
+          const posted = store.post({
+            groupId,
+            member,
+            text,
+            payload: data.payload,
+            mentions: data.mentions,
+          });
+          const named = Array.isArray(posted.mentions) && posted.mentions.length > 0;
           return {
-            text: `Posted to the group at seq ${posted.seq}.`,
-            meta: { seq: posted.seq, msgId: posted.msgId, at: posted.atIso },
+            text: `Posted to the group at seq ${posted.seq}.`
+              + (named
+                ? (posted.mentions.includes('@all')
+                  ? '\nAddressed to everyone: every member is woken.'
+                  : `\nAddressed to ${posted.mentions.length} member(s): they are woken, everyone else only sees an unread count.`)
+                : '\nNot addressed to anyone in particular: members see it in their unread count and read it when they are already working.'),
+            meta: {
+              seq: posted.seq,
+              msgId: posted.msgId,
+              at: posted.atIso,
+              mentions: posted.mentions ?? [],
+            },
           };
         } catch (error) {
           refuse(error);

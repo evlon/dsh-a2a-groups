@@ -209,6 +209,10 @@ const PANEL_FEED_TAIL = 8;
         rows.push({
           id: record.groupId,
           groupId: record.groupId,
+          // Explicit so the panel can tell a membership row from a directory row without
+          // inferring it from the presence of a role.
+          joined: true,
+          discovered: false,
           name: summary?.name ?? record.groupName ?? record.groupId,
           topic: summary?.topic ?? '',
           role: summary?.owner?.memberId === record.memberId ? 'owner' : record.role ?? 'member',
@@ -236,6 +240,37 @@ const PANEL_FEED_TAIL = 8;
           rosterInSession: true,
           feed,
         });
+      }
+      // Groups hosted here that this instance is not a member of: these are exactly what
+      // "可加入" means, and they are readable without a network call because the store is
+      // local. A group hosted elsewhere is discovered through a2a_group_directory instead.
+      try {
+        const joinedIds = new Set(rows.map((row) => row.groupId));
+        for (const summary of groups.list() ?? []) {
+          if (joinedIds.has(summary.groupId)) continue;
+          if ((summary.settings?.visibility ?? 'public') === 'unlisted') continue;
+          rows.push({
+            id: summary.groupId,
+            groupId: summary.groupId,
+            joined: false,
+            discovered: true,
+            name: summary.name,
+            topic: summary.topic ?? '',
+            role: 'member',
+            memberCount: summary.memberCount ?? 0,
+            onlineCount: summary.onlineCount ?? 0,
+            unreadCount: 0,
+            lastSeq: summary.lastSeq ?? 0,
+            lastTime: summary.lastPostAt ?? 0,
+            sessionId: '',
+            local: true,
+            rosterInSession: true,
+            feed: [],
+          });
+        }
+      } catch (error) {
+        // A discover list is a convenience; failing to build it must not blank the panel.
+        info(ctx, `a2a: could not list discoverable groups (${describe(error)})`);
       }
       return { updatedAt: clock(), groups: rows, unreadTotal: rows.reduce((sum, row) => sum + row.unreadCount, 0) };
     } catch (error) {
