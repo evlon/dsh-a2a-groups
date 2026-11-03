@@ -39,6 +39,23 @@ import { dirname, join } from 'node:path';
 /** File name inside the plugin's home directory. */
 const FILE_NAME = 'memberships.json';
 
+/**
+ * The `sessionId` used by a HOST that holds a group on behalf of others.
+ *
+ * A pure group host runs no model and therefore has no Session to deliver into. It
+ * still needs a membership record — that record is what carries the owner
+ * credential and the read watermark — so it is filed under this reserved id.
+ *
+ * Consequences, which are exactly what a host wants:
+ *
+ *   - nothing is ever delivered to it (there is no Session to deliver to);
+ *   - a host and a real Session cannot collide, because a real Session id is a
+ *     uuid-shaped string and this is a fixed sentinel;
+ *   - a member instance never uses it, because its memberships are created from a
+ *     tool call that has a Session.
+ */
+export const HOST_SESSION_ID = 'host';
+
 /** Upper bound on remembered memberships, so a runaway join loop cannot grow the file. */
 const MAX_MEMBERSHIPS = 500;
 
@@ -131,8 +148,10 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
    * post, and asking it to re-supply the credential each time would mean the
    * credential travels through one more function than it has to.
    *
-   * `sessionId` is required. A record without one could never be delivered to, so
-   * accepting it would create a membership that silently receives nothing.
+   * `sessionId` is required — it is the first half of the key. A caller with no
+   * Session (a pure group host, which runs no model) passes {@link HOST_SESSION_ID}.
+   * Accepting a missing id instead would create a membership that can never be
+   * delivered to and can collide with another such record.
    *
    * @param {object} input - `{sessionId, groupId, memberId, memberKey, baseUrl, local, groupName, role, lastSeq}`.
    * @returns {object} the stored record.
@@ -142,7 +161,7 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
     if (groupId === '') throw new Error('dsh-a2a: a membership needs a groupId');
     const sessionId = typeof input.sessionId === 'string' ? input.sessionId : '';
     if (sessionId === '') {
-      throw new Error('dsh-a2a: a membership needs a sessionId — a membership that cannot name its Session could never be delivered to');
+      throw new Error(`dsh-a2a: a membership needs a sessionId (use "${HOST_SESSION_ID}" for a host that has no Session)`);
     }
     const key = keyOf(sessionId, groupId);
     const previous = records.get(key) ?? {};

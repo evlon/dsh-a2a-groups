@@ -29,6 +29,12 @@
 
 import { randomFillSync } from 'node:crypto';
 
+// A skill call arrives over A2A and therefore carries no Session: the caller is a
+// remote agent, not a conversation. A pure group host is exactly that case, and it
+// still keeps a membership record (the owner credential lives there). See
+// `HOST_SESSION_ID` for why that record cannot simply be keyed on nothing.
+import { HOST_SESSION_ID } from './memberships.js';
+
 /** How many feed entries a join hands back so a new member has context. */
 const JOIN_FEED_TAIL = 20;
 
@@ -95,7 +101,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       description:
         'Create a collaboration group on this instance. Returns the group id and a one-time owner key: the caller must keep that key, because it is what authenticates the owner to the group from now on.',
       examples: ['Create a group called "invoice refactor" about splitting the invoice service'],
-      async run(input) {
+      async run(input, context) {
         const name = required(payload(input).name, 'name');
         const data = payload(input);
         try {
@@ -118,6 +124,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           const groupId = created.group.groupId;
           const ownerMemberId = created.group.owner.memberId;
           identities.upsert({
+            sessionId: context?.sessionId ?? HOST_SESSION_ID,
             groupId,
             memberId: ownerMemberId,
             memberKey: created.ownerKey,
@@ -189,7 +196,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       description:
         'Join a group with an invite link token and a display name. Returns a member key, shown once: it authenticates every later call. No password is involved — the token is the credential.',
       examples: ['Join group g-7f3a1c with token inv_xxx'],
-      async run(input) {
+      async run(input, context) {
         const data = payload(input);
         const groupId = required(data.groupId, 'groupId');
         try {
@@ -200,6 +207,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             endpoint: typeof data.endpoint === 'string' ? data.endpoint : undefined,
           });
           identities.upsert({
+            sessionId: context?.sessionId ?? HOST_SESSION_ID,
             groupId,
             memberId: joined.member.memberId,
             memberKey: joined.memberKey,
@@ -560,7 +568,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       description:
         'Turn an approved request into a membership, using the claimKey you got when you applied. Needs NO group password: the owner already vouched for you. The claimKey is single-use and only you have it.',
       examples: ['Collect my membership for request r-ab12cd34'],
-      async run(input) {
+      async run(input, context) {
         const data = payload(input);
         try {
           const groupId = required(data.groupId, 'groupId');
@@ -570,6 +578,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             claimKey: required(data.claimKey, 'claimKey'),
           });
           identities.upsert({
+            sessionId: context?.sessionId ?? HOST_SESSION_ID,
             groupId,
             memberId: claimed.member.memberId,
             memberKey: claimed.memberKey,

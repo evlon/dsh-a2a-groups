@@ -650,7 +650,7 @@ test('a group post wakes the other instance with an agent-sourced message', asyn
     // its membership from the join response, so record it the same way.
     assert.ok(joined.data?.memberId, 'the join must return a member credential');
     guest.identities.upsert({
-      groupId,
+      sessionId: 's-guest',      groupId,
       memberId: joined.data.memberId,
       memberKey: joined.data.memberKey,
       local: false,
@@ -721,7 +721,7 @@ test('the inbox never re-delivers a post it already delivered', async () => {
       data: { groupId, token, password: 'a long enough password', displayName: 'guest' },
     });
     guest.identities.upsert({
-      groupId,
+      sessionId: 's-guest',      groupId,
       memberId: joined.data.memberId,
       memberKey: joined.data.memberKey,
       local: false,

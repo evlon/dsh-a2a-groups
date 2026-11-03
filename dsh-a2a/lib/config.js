@@ -76,6 +76,11 @@ export const DEFAULT_CONFIG = Object.freeze({
     publicUrl: '',
     agentName: '',
     gatewayBase: '',
+    // Whether THIS instance hosts groups itself, instead of a standalone dsh-groups
+    // server. Off by default: the normal shape is one shared host behind the gateway
+    // and every DSH instance as a member. Turning it on makes this instance accept
+    // group/create locally, which is only useful for a single-machine setup.
+    embedded: false,
   }),
   delivery: Object.freeze({
     presentation: 'notice',
@@ -155,6 +160,7 @@ export function normalizeConfig(raw) {
       publicUrl: stripTrailingSlash(text(groups.publicUrl, defaults.groups.publicUrl)),
       agentName: text(groups.agentName, defaults.groups.agentName),
       gatewayBase: stripTrailingSlash(text(groups.gatewayBase, defaults.groups.gatewayBase)),
+      embedded: bool(groups.embedded, defaults.groups.embedded),
     },
     delivery: {
       presentation: oneOf(delivery.presentation, PRESENTATIONS, defaults.delivery.presentation),

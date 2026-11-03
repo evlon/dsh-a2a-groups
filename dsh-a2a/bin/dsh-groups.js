@@ -1,0 +1,432 @@
+#!/usr/bin/env node
+/**
+ * dsh-groups — a standalone A2A group host.
+ *
+ * WHAT THIS IS
+ *
+ * A group host is a server that holds collaboration groups and speaks A2A so that
+ * people's DSH instances can join them, post into them and read from them. It is
+ * deliberately NOT a DSH instance:
+ *
+ *   - it runs no model, so it cannot think, and it never acts on a message;
+ *   - it has no Sessions, so there is nothing to deliver into;
+ *   - it is a plain Node program you can leave running on a server for months.
+ *
+ * Earlier this role was played by a DSH instance with the chat half disabled. That
+ * worked, but it was the wrong shape: it made a stateful server depend on a desktop
+ * application, put the host's logs inside somebody's DSH log, and — the symptom that
+ * started this rewrite — forced the host to pretend it had a Session id so that
+ * membership records could be keyed.
+ *
+ * The host has NO membership of its own groups. Members hold memberships; the host
+ * holds groups. That is why nothing here writes to a membership ledger.
+ *
+ * HOW TO RUN
+ *
+ *   node bin/dsh-groups.js --port 3095 --data /var/lib/dsh-groups
+ *   node bin/dsh-groups.js --port 3095 --data ./data --token "$(openssl rand -hex 32)"
+ *   DSH_GROUPS_TOKEN=... node bin/dsh-groups.js --port 3095 --data ./data
+ *
+ * It prints, on startup, the one line an operator needs: the agent card URL and the
+ * AISIX entry that makes it reachable. Nothing else is required to deploy it —
+ * behind a gateway it needs no TLS of its own, and in front of one it does.
+ */
+
+import { createServer as createHttpServer } from 'node:http';
+import { mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { normalizeConfig } from '../lib/config.js';
+import { createGroupStore } from '../lib/groups.js';
+import { createSkillRegistry } from '../lib/skills.js';
+import { createGroupSkills } from '../lib/skills-group.js';
+import { createServer } from '../lib/server.js';
+import { TaskStore } from '../lib/wire.js';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const VERSION = readVersion();
+
+/** Print usage and exit. */
+function usage() {
+  process.stdout.write(`dsh-groups ${VERSION} — an A2A collaboration group host
+
+Usage: dsh-groups [options]
+
+  --port <n>        port to listen on (default 3095, or $DSH_GROUPS_PORT)
+  --host <addr>     address to bind (default 127.0.0.1, or $DSH_GROUPS_HOST)
+  --data <dir>      data directory (default ./data, or $DSH_GROUPS_DATA)
+  --token <secret>  bearer token for /a2a (default $DSH_GROUPS_TOKEN, else none)
+  --agent <name>    this host's agent name inside the gateway, for invite links
+  --gateway <url>   gateway base for invite links, e.g. http://gw:3000/a2a
+  --forward-proto   scheme the gateway should advertise (http or https)
+  --public-url <u>  absolute URL peers should use, when not behind a gateway
+  --help            print this message
+  --version         print the version
+
+Environment variables mirror the flags (DSH_GROUPS_PORT, _HOST, _DATA, _TOKEN,
+_AGENT, _GATEWAY, _FORWARD_PROTO, _PUBLIC_URL). Flags win over the environment.
+
+The data directory holds groups.json and must persist across restarts. Back it up:
+it contains every group's feed, and nothing else can reconstruct that.
+`);
+}
+
+/** Read the package version without importing JSON (keeps the loader simple). */
+function readVersion() {
+  try {
+    const packagePath = join(HERE, '..', 'package.json');
+    return JSON.parse(readFileSync(packagePath, 'utf8')).version ?? '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/**
+ * Parse `--flag value` / `--flag` / `--flag=value`.
+ *
+ * Hand-rolled rather than `node:util.parseArgs` because this program has to keep its
+ * dependency surface at zero for a server install, and `parseArgs` cannot express
+ * "flag wins over env wins over default" as directly as the small table below.
+ *
+ * @param {string[]} argv - `process.argv.slice(2)`.
+ * @returns {Record<string, string|boolean>} parsed flags.
+ */
+function parseFlags(argv) {
+  const flags = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+    if (!token.startsWith('--')) throw new Error(`unexpected argument: ${token}`);
+    const eq = token.indexOf('=');
+    if (eq > 0) {
+      flags[token.slice(2, eq)] = token.slice(eq + 1);
+      continue;
+    }
+    const name = token.slice(2);
+    const next = argv[index + 1];
+    if (next === undefined || next.startsWith('--')) {
+      flags[name] = true;
+      continue;
+    }
+    flags[name] = next;
+    index += 1;
+  }
+  return flags;
+}
+
+/** First defined value, treated as text. Empty strings count as absent. */
+function pick(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim() !== '') return value.trim();
+  }
+  return undefined;
+}
+
+/**
+ * A route registrar over a plain `http.Server`.
+ *
+ * The server facade asks for `{kind, path, handler}` registrations and expects a
+ * disposer back. On a bare Node server there is nothing to unregister, so the
+ * disposer removes the entry from a table the request handler consults — that keeps
+ * `detach()` honest instead of pretending to clean up.
+ *
+ * @returns {{registrar: object, handle: Function, routes: () => object[]}} the adapter.
+ */
+function createHttpRegistrar(logger) {
+  /** @type {Array<{kind: string, path: string, handler: Function}>} */
+  const routes = [];
+
+  const registrar = {
+    register({ kind, path, handler }) {
+      if (typeof path !== 'string' || !path.startsWith('/')) {
+        throw new Error(`dsh-groups: a route path must start with "/" (got ${String(path)})`);
+      }
+      if (typeof handler !== 'function') throw new Error('dsh-groups: a route handler must be a function');
+      const route = { kind: kind === 'prefix' ? 'prefix' : 'exact', path, handler };
+      routes.push(route);
+      return () => {
+        const at = routes.indexOf(route);
+        if (at >= 0) routes.splice(at, 1);
+      };
+    },
+  };
+
+  /**
+   * Dispatch one request.
+   *
+   * Exact matches win over prefix matches, and among prefixes the longest wins — the
+   * same rule the DSH webserver applies, repeated here so the A2A surface behaves
+   * identically whether the host is embedded or standalone.
+   */
+  function handle(request, response) {
+    const url = new URL(request.url ?? '/', 'http://localhost');
+    const pathname = url.pathname;
+    let chosen;
+    for (const route of routes) {
+      if (route.kind === 'exact' && route.path === pathname) {
+        chosen = route;
+        break;
+      }
+    }
+    if (chosen === undefined) {
+      let bestLength = -1;
+      for (const route of routes) {
+        if (route.kind !== 'prefix') continue;
+        if (!pathname.startsWith(route.path)) continue;
+        if (route.path.length > bestLength) {
+          bestLength = route.path.length;
+          chosen = route;
+        }
+      }
+    }
+    if (chosen === undefined) {
+      // No SPA shell here, unlike DSH: a 404 with a JSON body is the honest answer for
+      // a host that serves nothing but A2A.
+      response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
+      response.end(JSON.stringify({ error: 'not_found', path: pathname }));
+      logger.debug?.(`dsh-groups: 404 ${request.method} ${pathname}`);
+      return;
+    }
+    try {
+      const result = chosen.handler(request, response);
+      // A handler may be async; an unhandled rejection would kill the process.
+      if (result !== null && typeof result === 'object' && typeof result.catch === 'function') {
+        result.catch((error) => {
+          logger.warn?.(`dsh-groups: handler failed for ${pathname}: ${error?.message ?? error}`);
+          if (!response.headersSent) {
+            response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+            response.end(JSON.stringify({ error: 'internal_error' }));
+          }
+        });
+      }
+    } catch (error) {
+      logger.warn?.(`dsh-groups: handler threw for ${pathname}: ${error?.message ?? error}`);
+      if (!response.headersSent) {
+        response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+        response.end(JSON.stringify({ error: 'internal_error' }));
+      }
+    }
+  }
+
+  return { registrar, handle, routes: () => [...routes] };
+}
+
+/** Log one line to stdout, timestamped: a server's log is read after the fact. */
+function createLogger(verbose) {
+  const stamp = () => new Date().toISOString();
+  const emit = (level, line) => {
+    process.stdout.write(`${stamp()} ${level} ${line}\n`);
+  };
+  return {
+    info: (line) => emit('info ', line),
+    warn: (line) => emit('warn ', line),
+    // Debug output is per-request noise; only shown with DSH_GROUPS_VERBOSE=1.
+    debug: (line) => {
+      if (verbose) emit('debug', line);
+    },
+    error: (line) => emit('error', line),
+  };
+}
+
+/** Exit with a message an operator can act on, rather than a stack trace. */
+function fail(message, code = 1) {
+  process.stderr.write(`dsh-groups: ${message}\n`);
+  process.exit(code);
+}
+
+async function main() {
+  let flags;
+  try {
+    flags = parseFlags(process.argv.slice(2));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error), 2);
+    return;
+  }
+  if (flags.help === true) {
+    usage();
+    return;
+  }
+  if (flags.version === true) {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
+
+  const port = Number(pick(flags.port, process.env.DSH_GROUPS_PORT) ?? 3095);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`invalid --port: ${String(flags.port)}`, 2);
+  const host = pick(flags.host, process.env.DSH_GROUPS_HOST) ?? '127.0.0.1';
+  const dataDir = resolve(pick(flags.data, process.env.DSH_GROUPS_DATA) ?? 'data');
+  const token = pick(flags.token, process.env.DSH_GROUPS_TOKEN);
+  const agentName = pick(flags.agent, process.env.DSH_GROUPS_AGENT) ?? 'dsh-groups';
+  const gatewayBase = pick(flags.gateway, process.env.DSH_GROUPS_GATEWAY);
+  const forwardProto = pick(flags['forward-proto'], process.env.DSH_GROUPS_FORWARD_PROTO);
+  const publicUrl = pick(flags['public-url'], process.env.DSH_GROUPS_PUBLIC_URL);
+  const verbose = process.env.DSH_GROUPS_VERBOSE === '1';
+  const logger = createLogger(verbose);
+
+  // Fail before doing any work if the data directory is unusable: a host that starts
+  // and then cannot persist is worse than one that refuses to start.
+  try {
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  } catch (error) {
+    fail(`cannot use --data ${dataDir}: ${error instanceof Error ? error.message : String(error)}`);
+    return;
+  }
+
+  const config = normalizeConfig({
+    agent: {
+      name: agentName,
+      description: '协作群宿主：持有协作群，供同事的 DSH 实例通过 A2A 加入、发言与订阅。',
+    },
+    groups: {
+      // The host holds groups; the membership ledger is for MEMBERS. Nothing in this
+      // program writes to one, which is why `home` points at the data directory: the
+      // store still needs somewhere to keep its own file.
+      gatewayBase: gatewayBase ?? '',
+      agentName,
+      home: dataDir,
+    },
+    server: {
+      token: token ?? '',
+      bindSessionId: 'self',
+    },
+    client: {
+      forwardProto: forwardProto ?? '',
+    },
+    delivery: { enabled: false },
+  });
+
+  const store = createGroupStore({
+    home: dataDir,
+    logger,
+    config,
+  });
+
+  const registry = createSkillRegistry();
+  for (const skill of createGroupSkills({
+    store,
+    // A host has no memberships of its own. The ledger is never read here; passing a
+    // stub that refuses loudly stops a future edit from quietly reintroducing the
+    // "host needs a Session" mistake this rewrite removed.
+    identities: {
+      // The host holds no memberships of its own — members do. But the skill bodies
+      // are shared with the member build, and `group/create`/`group/join`/`group/claim`
+      // each record "the caller became a member here". On a host that intent is
+      // satisfied by the group itself (the owner IS a member of the group it created),
+      // so the write is a no-op rather than an error.
+      //
+      // It used to throw. That was wrong in a subtle way: it made a shared code path
+      // unusable, which pushed the host toward having fake memberships (the
+      // `HOST_SESSION_ID` mistake this rewrite removes). Returning silently keeps the
+      // host's ledger empty without pretending.
+      upsert: () => {},
+      get: () => undefined,
+      list: () => [],
+      has: () => false,
+      flush: () => {},
+    },
+    config,
+    logger,
+    clock: () => Date.now(),
+  })) {
+    registry.register(skill);
+  }
+
+  const tasks = new TaskStore({
+    ttlMs: config.server.taskTimeoutMs * 4,
+    persistPath: null,
+    clock: () => Date.now(),
+  });
+  const { registrar, handle, routes } = createHttpRegistrar(logger);
+  const server = createServer({
+    registrar,
+    where: 'standalone dsh-groups',
+    logger,
+    config,
+    // The host never delivers: nobody is on the other end. Kept as a stub because the
+    // facade asks for one, and a loud failure beats a silent no-op if that changes.
+    deliverer: {
+      deliver: async () => {
+        throw new Error('dsh-groups: a group host has no Sessions to deliver into; this is a bug');
+      },
+    },
+    tasks,
+    skills: registry,
+    profileProvider: undefined,
+  });
+
+  server.attach();
+
+  const httpServer = createHttpServer(handle);
+  httpServer.on('clientError', (error, socket) => {
+    logger.warn(`dsh-groups: client error ${error?.message ?? error}`);
+    if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
+  });
+
+  await new Promise((settle, reject) => {
+    httpServer.once('error', reject);
+    httpServer.listen(port, host, settle);
+  });
+
+  const actualPort = httpServer.address().port;
+  const shown = publicUrl ?? `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`;
+  const groups = store.list().length;
+
+  logger.info(`dsh-groups ${VERSION} listening on ${host}:${actualPort} (data: ${dataDir})`);
+  logger.info(`agent card: ${shown}/a2a/.well-known/agent-card.json`);
+  logger.info(`${groups} group(s) hosted`);
+  if (token === undefined) {
+    logger.warn('no token set: every caller is treated as a local, trusted client. Set --token before exposing this host.');
+  }
+  if (gatewayBase === undefined) {
+    logger.warn('no --gateway set: invite links cannot be generated until you pass it (or set it later in the config).');
+  } else {
+    logger.info(`invite links will point at ${gatewayBase}/${agentName}`);
+    logger.info(`AISIX entry (one per host, not per group) — resources.yaml:`);
+    logger.info(`  - name: ${agentName}`);
+    logger.info(`    url: ${shown}/a2a`);
+  }
+  logger.info(`routes: ${routes().map((route) => `${route.kind === 'prefix' ? '' : ''}${route.path}`).join(', ')}`);
+
+  /** Shut down in the order that loses no data: stop accepting, flush, exit. */
+  let stopping = false;
+  const stop = async (signal) => {
+    if (stopping) return;
+    stopping = true;
+    logger.info(`${signal} received; flushing group data and stopping`);
+    try {
+      // A flush failure must not turn a clean shutdown into a crash: the in-memory
+      // state is already correct and the next start will retry the write.
+      await store.flush();
+      server.detach();
+      await new Promise((settle) => httpServer.close(settle));
+    } catch (error) {
+      logger.warn(`shutdown problem: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void stop('SIGINT'));
+  process.on('SIGTERM', () => void stop('SIGTERM'));
+
+  // A server must not die on a stray rejection: log it and keep serving. Anything that
+  // genuinely cannot continue will fail on the next request anyway, with a message
+  // tied to that request rather than to nothing.
+  process.on('unhandledRejection', (reason) => {
+    logger.warn(`unhandled rejection: ${reason instanceof Error ? reason.message : String(reason)}`);
+  });
+  process.on('uncaughtException', (error) => {
+    logger.warn(`uncaught exception: ${error instanceof Error ? error.message : String(error)}`);
+  });
+}
+
+// Only run when invoked directly; importing this file must have no side effects
+// (a test wants to import `createHttpRegistrar`).
+const invokedDirectly = process.argv[1] !== undefined
+  && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url));
+
+if (invokedDirectly) {
+  main().catch((error) => {
+    fail(error instanceof Error ? error.message : String(error));
+  });
+}
+
+export { createHttpRegistrar, parseFlags, usage };

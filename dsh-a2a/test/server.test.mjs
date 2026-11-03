@@ -876,7 +876,7 @@ test('server: attach without a Host webserver fails loudly', () => {
     tasks: new TaskStore(),
     skills: fakeSkills(),
   });
-  assert.throws(() => server.attach(), /webServer\.register\(\) is unavailable/);
+  assert.throws(() => server.attach(), /no route registrar was provided/);
 });
 
 test('server: info() never exposes the configured token', async () => {

@@ -45,6 +45,16 @@ export function registerTools(ctx, deps) {
     return { id, cwd };
   };
 
+  /** A Session's display name for group records: the id, shortened for legibility. */
+  const displayNameOf = (exec) => {
+    const id = senderOf(exec).id;
+    return typeof id === 'string' && id !== '' ? id.slice(0, 12) : 'owner';
+  };
+
+  /** The agent name this instance is known by in the gateway, or undefined. */
+  const settingsAgentName = (settings) => (typeof settings?.groups?.agentName === 'string' && settings.groups.agentName !== ''
+    ? settings.groups.agentName
+    : undefined);
   // -------------------------------------------------------------------------
   // Discovery and calling other agents
   // -------------------------------------------------------------------------
@@ -289,13 +299,19 @@ export function registerTools(ctx, deps) {
   ctx.tools.register(defineTool({
     name: 'a2a_group_create',
     description:
-      'Create a collaboration group on this DSH instance and get the group id plus a one-time owner key. A group is an A2A agent: members reach it through the gateway, so the instance must also be registered there. Use it when several people or Sessions should work on one thing together.',
+      'Create a collaboration group on the group host and get the group id plus a one-time owner key. The group lives on the HOST (a standalone A2A server), not on this machine, so members reach it through the gateway. The calling Session becomes the owner. Use it when several people or Sessions should work on one thing together.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         name: { type: 'string', description: 'Group name, shown to members.' },
         topic: { type: 'string', description: 'One line about what the group is for.' },
+        visibility: {
+          type: 'string',
+          enum: ['public', 'unlisted'],
+          description: 'public: listed in the channel directory. unlisted: absent from it entirely, joinable by invite link only. Defaults to public.',
+        },
+        agent: { type: 'string', description: 'Host to create the group on: a registered agent name or a raw URL. Defaults to the configured group host.' },
       },
       required: ['name'],
     },
@@ -309,61 +325,108 @@ export function registerTools(ctx, deps) {
           memberId: { type: 'string' },
           ownerKey: { type: 'string' },
           agentName: { type: 'string' },
+          remote: { type: 'boolean' },
           nextSteps: { type: 'string' },
         },
       },
       render: (args, value) => [{
         type: 'text',
-        text: `Group "${value.name}" created.\n\n`
-          + `groupId  : ${value.groupId}\n`
-          + `memberId : ${value.memberId}\n`
-          + `ownerKey : ${value.ownerKey}\n`
+        text: `Group "${value.name}" created on ${value.remote === true ? 'the group host' : 'this instance'}.
 
+`
+          + `groupId  : ${value.groupId}
+`
+          + `memberId : ${value.memberId}
+`
+          + `ownerKey : ${value.ownerKey}
+
+`
           + value.nextSteps,
       }],
     },
     async execute(args, exec) {
       const sessionId = requireSession(senderOf(exec).id, 'a2a_group_create');
-      const created = store.create({
-        name: requireText(args.name, 'name'),
-        topic: args.topic ?? '',
-        ownerDisplayName: 'owner',
-      });
-      const groupId = created.group.groupId;
-        sessionId,
+      const name = requireText(args.name, 'name');
+      const topic = args.topic ?? '';
+      const visibility = args.visibility === 'unlisted' ? 'unlisted' : 'public';
+
+      // A local store with groups enabled means this instance is itself a host. That
+      // is the rarer setup now, but it stays supported: a single machine can host its
+      // own groups with no gateway at all.
+      const hostedHere = config.groups.embedded === true;
+      const target = hostedHere ? undefined : hostTarget(registry, config, args.agent);
+
+      let groupId;
+      let memberId;
+      let ownerKey;
+      let groupName;
+      let remote;
+
+      if (hostedHere) {
+        const created = store.create({
+          name,
+          topic,
+          ownerDisplayName: displayNameOf(exec),
+          settings: { visibility },
+        });
+        groupId = created.group.groupId;
+        memberId = created.group.owner.memberId;
+        ownerKey = created.ownerKey;
+        groupName = created.group.name;
+        remote = false;
+      } else {
+        const result = await bridge.send(target, {
+          skill: 'group/create',
+          text: `create a group named ${name}`,
+          data: {
+            name,
+            topic,
+            ownerDisplayName: displayNameOf(exec),
+            // The skill reads this from the top level, not from a nested settings bag.
+            visibility,
+          },
+          timeoutMs: config.client.timeoutMs,
+        });
+        const meta = result.data ?? {};
+        groupId = meta.groupId;
+        memberId = meta.memberId;
+        ownerKey = meta.ownerKey;
+        groupName = meta.name ?? name;
+        remote = true;
+        if (typeof groupId !== 'string' || groupId === '') {
+          throw coded('bad_response', 'the group host did not return a groupId; check that the host runs a compatible dsh-groups version');
+        }
+      }
+
+      // The membership record belongs to the Session that created the group: it is the
+      // owner, and it is where invite/approve calls will be issued from.
       identities.upsert({
         sessionId,
         groupId,
-        memberId: created.group.owner.memberId,
-        memberKey: created.ownerKey,
-        local: true,
-        groupName: created.group.name,
+        memberId,
+        memberKey: ownerKey,
+        local: remote === false,
+        baseUrl: remote === true ? target.baseUrl : undefined,
+        groupName,
         role: 'owner',
-        lastSeq: created.group.lastSeq ?? 0,
+        lastSeq: 0,
       });
-      await store.flush();
       await identities.flush();
-      // One host name, every group. The gateway entry is per-INSTANCE and is set
-      // up once; a group never needs its own. Saying so here is the difference
-      // between "create a group" and "create a group and go edit the gateway",
-      // and the earlier version literally told the user to go edit the gateway.
-      const agentName = config.groups.agentName !== '' ? config.groups.agentName : '';
+      if (remote === false) await store.flush();
+
+      const gatewayName = settingsAgentName(config);
       return {
         groupId,
-        name: created.group.name,
-        memberId: created.group.owner.memberId,
-        ownerKey: created.ownerKey,
-        agentName,
-        nextSteps:
-          'Next: run a2a_group_invite to mint the invite link and a paste-ready message, '
-          + 'then send that message over IM — the colleague pastes the link into their own Session.\n\n'
-          + 'This instance has stored the owner key; you do not need to keep it in the conversation.'
-          + (agentName === ''
-            ? '\n\nOne thing is missing before the link will work for anyone else: this instance\n'
-              + 'needs its host name set once (groups.agentName + groups.gatewayBase), and the\n'
-              + 'gateway needs ONE entry for that name. It is a per-instance setup, not per-group:\n'
-              + 'after that, every group you create works with no further configuration.'
-            : ''),
+        name: groupName,
+        memberId,
+        ownerKey,
+        agentName: gatewayName,
+        remote,
+        nextSteps: remote === true
+          ? 'Next: a2a_group_invite to mint an invite link and a paste-ready message for a colleague.'
+            + `\nThe host serves every group under one gateway entry (${gatewayName ?? 'not configured'}); a new group needs no gateway change.`
+          : 'Next: a2a_group_invite to mint an invite link and a paste-ready message for a colleague.'
+            + '\nThis group lives on this instance, so colleagues reach it directly or through a gateway you configure.',
       };
     },
   }));

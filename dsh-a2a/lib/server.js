@@ -69,8 +69,22 @@ const DEFAULT_SKILL = 'session/ask';
 /**
  * Build the A2A server facade.
  *
+ * The facade needs a way to add four routes and nothing else, so the route table is
+ * injected instead of reached for on `ctx`. That single indirection is what lets the
+ * SAME server code run in two very different homes:
+ *
+ *   - inside DSH (a member instance, and the embedded host): pass
+ *     `ctx.webServer` as `registrar`;
+ *   - as a standalone Node program (a production group host): pass an object whose
+ *     `register` attaches to a plain `http.Server`.
+ *
  * @param {object} options - server options.
- * @param {object} options.ctx - Host context; `webServer` is the only capability used.
+ * @param {object} [options.ctx] - Host context. Optional now; kept so existing
+ *   callers need no change, and unused when `registrar` is given.
+ * @param {object} [options.registrar] - `{register({kind, path, handler}) => disposeFn}`.
+ *   Defaults to `ctx?.webServer`.
+ * @param {string} [options.where] - where this server runs, for error messages
+ *   ("inside DSH" / "standalone").
  * @param {object} [options.logger] - logger with `info` / `warn` / `debug`.
  * @param {object} options.config - normalized plugin config (§3 of the contract).
  * @param {object} options.deliverer - from `createDeliverer`.
@@ -78,7 +92,17 @@ const DEFAULT_SKILL = 'session/ask';
  * @param {object} options.skills - skill registry `{get, list}`.
  * @returns {{attach: () => () => void, detach: () => void, card: () => object, info: () => object}} the facade.
  */
-export function createServer({ ctx, logger, config, deliverer, tasks, skills, profileProvider } = {}) {
+export function createServer({
+  ctx,
+  registrar = ctx?.webServer,
+  where = 'inside DSH',
+  logger,
+  config,
+  deliverer,
+  tasks,
+  skills,
+  profileProvider,
+} = {}) {
   const serverConfig = config?.server ?? {};
   const maxBodyBytes = positiveInt(serverConfig.maxBodyBytes, DEFAULT_MAX_BODY_BYTES);
   const taskTimeoutMs = positiveInt(serverConfig.taskTimeoutMs, DEFAULT_TASK_TIMEOUT_MS);
@@ -102,18 +126,22 @@ export function createServer({ ctx, logger, config, deliverer, tasks, skills, pr
    */
   function attach() {
     if (attached) return detach;
-    const webServer = ctx?.webServer;
-    if (webServer === null || typeof webServer !== 'object' || typeof webServer.register !== 'function') {
-      throw new Error('dsh-a2a: ctx.webServer.register() is unavailable; the A2A endpoint cannot attach');
+    // The route table comes from an injected registrar rather than from `ctx`: a
+    // group host runs as a standalone Node program with a plain `http.Server`, and a
+    // member instance runs inside DSH and uses `ctx.webServer`. Both pass the same
+    // four registrations, so the A2A surface is identical either way.
+    const register = registrar?.register;
+    if (typeof register !== 'function') {
+      throw new Error(`dsh-a2a: no route registrar was provided; the A2A endpoint cannot attach (${where})`);
     }
     if (token === '') {
       warn('no server.token configured; the A2A endpoint accepts loopback callers only. Set config.server.token to expose it.');
     }
     disposers = [
-      webServer.register({ kind: 'exact', path: CARD_PATH, handler: handleCard }),
-      webServer.register({ kind: 'exact', path: CARD_ALIAS_PATH, handler: handleCard }),
-      webServer.register({ kind: 'prefix', path: `${A2A_PATH}/.well-known/`, handler: handleWellKnownFallback }),
-      webServer.register({ kind: 'exact', path: A2A_PATH, handler: handleRpc }),
+      register.call(registrar, { kind: 'exact', path: CARD_PATH, handler: handleCard }),
+      register.call(registrar, { kind: 'exact', path: CARD_ALIAS_PATH, handler: handleCard }),
+      register.call(registrar, { kind: 'prefix', path: `${A2A_PATH}/.well-known/`, handler: handleWellKnownFallback }),
+      register.call(registrar, { kind: 'exact', path: A2A_PATH, handler: handleRpc }),
     ];
     attached = true;
     info();
