@@ -643,7 +643,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     if (agent === undefined || agent === '') {
       throw new GroupError(
         'missing_agent_name',
-        '还没有配置本实例的 agent 名：请在插件设置里填 groups.agentName（例如 "dsh-group"）。它是本实例在网关里的名字，建一次即可，所有群共用，不需要每个群单独配置。',
+        '还没有配置本实例的 agent 名：请在插件设置里填 groups.agentName（例如 "agent-person-zhangsan"）。'
+        + '它是本实例在网关里的名字，建一次即可，所有群共用，不需要每个群单独配置。'
+        + '注意区分两个命名空间：群宿主叫 agent-group-host（一个入口承载所有群，因为群是数据、'
+        + '靠报文里的 groupId 区分），成员实例叫 agent-person-<谁>（一个人一个入口，因为每个人'
+        + '是不同机器上的进程，网关的一条路径只能转发到一个地址）。',
       );
     }
 

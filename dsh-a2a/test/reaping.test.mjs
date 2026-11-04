@@ -40,7 +40,7 @@ function fakeIdentities(overrides = {}) {
 /** A runtime whose bridge fails with a chosen code. */
 function runtimeWith({ code, identities }) {
   return createToolRuntime({
-    config: { groups: { gatewayBase: 'http://gw/a2a', agentName: 'agent-groups' }, client: { timeoutMs: 100 } },
+    config: { groups: { gatewayBase: 'http://gw/a2a', agentName: 'agent-person-test' }, client: { timeoutMs: 100 } },
     registry: { list: () => [], get: () => undefined, resolve: () => ({ baseUrl: 'http://gw/a2a/agent-groups' }) },
     bridge: {
       send: async () => {

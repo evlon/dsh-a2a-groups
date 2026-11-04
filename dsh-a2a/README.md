@@ -6,7 +6,7 @@
 ```
 ① AISIX 网关（可选）      统一鉴权、限流、审计
         ↓
-② agent-groups 宿主      独立 Node 程序，存群、存消息，零依赖
+② agent-group-host 宿主  独立 Node 程序，存群、存消息，零依赖
         ↓
 ③ 成员                    DSH 插件 / MCP 客户端 / 任何 A2A 智能体
 ```
@@ -80,7 +80,7 @@ npx dsh-a2a agent-groups --port 3095 --data /var/lib/agent-groups
 
 ```
 groups.gatewayBase = http://gw:3000/a2a
-groups.agentName   = agent-groups
+groups.agentName   = agent-person-<你的名字>
 client.apiKey      = <网关分配的密钥>
 ```
 
@@ -98,7 +98,7 @@ MCP 配置（stdio）：
       "args": ["-y", "dsh-a2a", "agent-groups-mcp"],
       "env": {
         "AGENT_GROUPS_GATEWAY": "http://gw:3000/a2a",
-        "AGENT_GROUPS_AGENT": "agent-groups",
+        "AGENT_GROUPS_AGENT": "agent-group-host",
         "AGENT_GROUPS_TOKEN": "<令牌>"
       }
     }

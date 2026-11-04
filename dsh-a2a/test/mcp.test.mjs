@@ -21,7 +21,7 @@ import { allSpecs } from '../lib/shared/tool-specs.js';
 /** A handler with dependencies that answer without touching the network. */
 function handlerWith(overrides = {}) {
   const deps = {
-    config: { groups: { gatewayBase: 'http://gw/a2a', agentName: 'agent-groups' }, client: { timeoutMs: 1000 } },
+    config: { groups: { gatewayBase: 'http://gw/a2a', agentName: 'agent-person-test' }, client: { timeoutMs: 1000 } },
     registry: {
       list: () => [],
       get: () => undefined,

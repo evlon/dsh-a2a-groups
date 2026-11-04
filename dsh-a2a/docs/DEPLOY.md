@@ -34,6 +34,27 @@
 - 群宿主**没有会话**。它是服务提供者，不是参与者。
 - 一台群宿主可以承载**所有**群；不需要每个群单独部署。
 
+### 网关里的两个命名空间（最容易搞混的一处）
+
+```
+agent-group-host          群宿主：一个入口，承载所有群
+agent-person-<谁>         成员实例：一个人一个入口
+```
+
+**为什么群能共用一个入口，人不能？**
+
+| | 群 | 人 |
+|---|---|---|
+| 本质 | 一份**数据**（群状态存在宿主里） | 一个**进程**（DSH 跑在各人机器上） |
+| 怎么区分 | 报文里的 `data.groupId` | URL 里的 agent 名 |
+| 能否共入口 | **能**，数据可以共存于一个进程 | **不能**，一条路径只能转发到一个地址 |
+
+所以「加一个群」永远不需要改网关——URL 没变，只是 `groups.json` 里多一条记录。
+而「加一个人」必须改网关，因为那是一个新的地址要转发。
+
+这也意味着：**群宿主的名字起错了会非常难查**。如果宿主和成员都叫 `agent-group-*`，出问题时
+你看到一条 403 或超时，无法从名字判断是"群找不到"还是"某个人联系不上"。
+
 ---
 
 ## 二、服务器要求
@@ -111,9 +132,9 @@ sudo -u agent-groups AGENT_GROUPS_TOKEN='<你的令牌>' \
 2026-01-01T00:00:00.000Z info  agent-groups 0.1.0 listening on 127.0.0.1:3095 (data: /var/lib/agent-groups)
 2026-01-01T00:00:00.000Z info  agent card: http://127.0.0.1:3095/a2a/.well-known/agent-card.json
 2026-01-01T00:00:00.000Z info  0 group(s) hosted
-2026-01-01T00:00:00.000Z info  invite links will point at http://<网关>/a2a/agent-groups
+2026-01-01T00:00:00.000Z info  invite links will point at http://<网关>/a2a/agent-group-host
 2026-01-01T00:00:00.000Z info  AISIX entry (one per host, not per group) — resources.yaml:
-2026-01-01T00:00:00.000Z info    - name: agent-groups
+2026-01-01T00:00:00.000Z info    - name: agent-group-host
 2026-01-01T00:00:00.000Z info      url: http://127.0.0.1:3095/a2a
 ```
 
@@ -192,7 +213,7 @@ sudo journalctl -u agent-groups -f     # 看日志
 
 ```yaml
 agents:
-  - name: agent-groups              # 这个名字要和各人 DSH 里配的 agentName 一致
+  - name: agent-group-host              # 这个名字要和各人 DSH 里配的 agentName 一致
     url: http://127.0.0.1:3095/a2a
     # 或者宿主机在另一台机器上：
     # url: http://10.0.0.5:3095/a2a
@@ -214,7 +235,7 @@ api_keys:
       # 不靠网关 ACL。
 ```
 
-**为什么不在网关做群级隔离**：所有群共享一个 A2A 端点（`/a2a/agent-groups`），
+**为什么不在网关做群级隔离**：所有群共享一个 A2A 端点（`/a2a/agent-group-host`），
 群是请求体里的参数。网关看到的是"访问 agent-groups"，无法区分群。
 群级权限由群宿主自己的 `memberKey` 校验保证——那是更强的一道门。
 
@@ -236,7 +257,7 @@ api_keys:
 | 配置项 | 值 | 说明 |
 |---|---|---|
 | `groups.gatewayBase` | `http://<网关>:3000/a2a` | 网关基址 |
-| `groups.agentName` | `agent-groups` | 与网关 `resources.yaml` 里的 name 一致 |
+| `groups.agentName` | `agent-group-host` | 与网关 `resources.yaml` 里的 name 一致 |
 | `client.apiKey` | 网关分配的密钥 | 每人一个 |
 
 **`groups.embedded` 保持 `false`**（默认）。这表示"我不自己建群，群在共享宿主上"。
@@ -533,7 +554,7 @@ WantedBy=multi-user.target
 
 ```yaml
 agents:
-  - name: agent-groups
+  - name: agent-group-host
     url: http://127.0.0.1:3095/a2a
 ```
 

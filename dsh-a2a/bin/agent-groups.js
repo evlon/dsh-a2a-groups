@@ -256,7 +256,11 @@ async function main() {
   const host = pick(flags.host, process.env.AGENT_GROUPS_HOST) ?? '127.0.0.1';
   const dataDir = resolve(pick(flags.data, process.env.AGENT_GROUPS_DATA) ?? 'data');
   const token = pick(flags.token, process.env.AGENT_GROUPS_TOKEN);
-  const agentName = pick(flags.agent, process.env.AGENT_GROUPS_AGENT) ?? 'agent-groups';
+  // `agent-group-host` is the HOST's name at the gateway: one entry serving every group, because a
+  // group is data addressed by `groupId` inside the payload. Member instances are named
+  // `agent-person-<who>` instead — one entry each, because each is a separate process on a
+  // separate machine and one gateway path can only forward to one address.
+  const agentName = pick(flags.agent, process.env.AGENT_GROUPS_AGENT) ?? 'agent-group-host';
   const gatewayBase = pick(flags.gateway, process.env.AGENT_GROUPS_GATEWAY);
   const forwardProto = pick(flags['forward-proto'], process.env.AGENT_GROUPS_FORWARD_PROTO);
   const publicUrl = pick(flags['public-url'], process.env.AGENT_GROUPS_PUBLIC_URL);

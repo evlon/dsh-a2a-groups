@@ -1,44 +1,36 @@
-refactor: personId identifies a person; add the persons table
+refactor!: two gateway namespaces — group-host for the host, person-* for people
 
-Two changes that belong together, because the second is what makes the first true.
+The gateway named a person with the word "group". Reading a 403 or a timeout in the logs, there was
+no way to tell whether an address belonged to a group entry or to somebody's machine.
 
-IDENTITY
+    agent-group-host       the host: ONE entry, every group
+    agent-person-<who>     a person's DSH: ONE entry per machine
 
-`memberId` was minted per join, so one person in two groups was two ids. That leaked into
-everything a person touches: `@` somebody by id worked in one group and not the other, and a
-colleague card had to be stitched together across groups by display name.
+WHY ONLY ONE OF THEM CAN SHARE AN ENTRY
 
-The allocation was already globally unique — it checked every group before returning — so the
-id space was right and only the reuse was missing. Now a join reuses the id the caller already
-holds, which is what `@` needs and what makes "who is this" answerable across groups.
+A group is DATA. Every group lives in one host's `groups.json`, and a request names the group in the
+payload (`data.groupId`), so one URL path serves all of them — adding a group never touches the
+gateway. That is why the host can carry every group behind one name.
 
-Renamed to say so: memberId → personId, memberKey → personKey, ownerMemberId → ownerPersonId,
-targetMemberId → targetPersonId, allocateMemberId → allocatePersonId. 686 occurrences across 21
-files, plus 213 in the probe scripts.
+A person is a PROCESS on their own machine. The gateway forwards a given path to exactly one
+address, so two people behind one entry would leave one of their DSH instances permanently
+unreachable. One entry per person is not a design preference; it is the only thing that works.
 
-Deliberately NOT renamed: `group.members[]`. A membership row carries role, joinedAt and
-roleAbout — facts about the RELATIONSHIP, not the person. Calling it `persons` would erase the
-distinction the whole change is about.
+ALSO FIXED: the member ACL never admitted members
 
-The credential is still per-group. `resolveMember` looks the id up inside ONE group and compares
-against that group's keyHash, so a key minted in A cannot authenticate in B. A stable id does not
-make a key portable.
+`allowed_agents` listed `agent-groups`, `agent-group*`, `group-*` — but a member instance registers
+as `dsh-group`, which matched none of them. A member could join a group and then get 403 on every
+subsequent call. The earlier commit on this branch added `dsh-group*` as a patch; that patch is
+removed here, because a wrong name that still works is a wrong name that never gets fixed.
 
-PROFILES
+The namespace is now `agent-group-host`, `agent-group*`, `group-*`, `agent-person-*`.
 
-A `persons` table: one row per person, `{ personId, displayName, headline, tags, endpoint }`,
-stored beside `groups` in the same file. Layer A (what I do in THIS group) stays on the
-membership row, because it differs per group; a card now shows the group-independent profile
-instead of restating which groups the reader already shares.
+Docs: DEPLOY gains a section on the two namespaces, including the table of why one is shareable and
+the other is not — that asymmetry is the thing that will confuse the next reader. The rename itself
+touched six lines of prose and left every `/opt/agent-groups`, `bin/agent-groups.js` and
+`useradd agent-groups` alone: those are paths, not gateway names, and a blind replace would have
+broken every command in the deployment guide.
 
-Old data is cleared rather than migrated, by decision: a `personId ?? memberId` read path would
-live in the repository forever to serve files nobody keeps.
-
-One bug worth recording: the first version of the reuse rejected a preferred id that was already
-taken — but a person's own id IS already taken, by their first group. Every new group minted a
-second identity for the same human. The check now honours the id unconditionally, keeping only a
-shape test so a foreign id cannot enter this store.
-
-Verification: 359 tests, MCP probe OK, standalone host OK, and end to end over A2A — same
-personId across two groups, @ by personId resolves, rename/remove/archive all work, history
-survives removal.
+Verified: 403 tests unchanged, MCP probe OK, standalone probe OK, all three gateway entries answer
+200, and end to end through the gateway — create, invite, join, post, read — with the composed
+endpoint now resolving to `agent-group-host` rather than the old name.

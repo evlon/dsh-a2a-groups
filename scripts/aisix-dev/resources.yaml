@@ -25,7 +25,22 @@ api_keys:
   - display_name: "niukl-dev"
     allowed_models: ["*"]
     # Explicit per-agent grant: no `allowed_agents` means NO A2A access at all.
-    allowed_agents: ["mock-a2a", "agent-groups", "agent-group*", "group-*"]
+    #
+    # `dsh-group*` is here because it is the name member instances register under (see the
+    # `dsh-group` entry below, which points at 3091). Without it a member could JOIN a group but
+    # could not call the host through the gateway — the join succeeded and every later call came
+    # back 403, which reads as "the plugin is broken" rather than "the ACL is incomplete".
+    # Two namespaces, because they are two different things:
+    #
+    #   agent-group-host   the host. ONE entry serves every group: a group is data, addressed by
+    #                      data.groupId inside the payload, so adding one never touches the gateway.
+    #   agent-person-*     a person's DSH. ONE entry per machine, because the gateway can only
+    #                      forward a path to one address — two people behind one entry would leave
+    #                      one of them permanently unreachable.
+    #
+    # `agent-group*` also keeps the older single-group name working; `group-*` is kept for the
+    # A2A convention of addressing a group directly.
+    allowed_agents: ["mock-a2a", "agent-group-host", "agent-group*", "group-*", "agent-person-*"]
     key_hash: "c60c4fcb4f33322be5dcc08d7c09fc982b84f8755d41243104ab9d96d0b6a0d7"
 
 a2a_agents:
@@ -43,7 +58,7 @@ a2a_agents:
     timeout_ms: 120000
     enabled: true
 
-  - name: "agent-groups"
+  - name: "agent-group-host"
     # THE GROUP HOST: the instance that actually stores groups, members, invites
     # and the feed. This is the entry a colleague's invite link points at.
     #
@@ -61,7 +76,7 @@ a2a_agents:
     timeout_ms: 600000
     enabled: true
 
-  - name: "dsh-group"
+  - name: "agent-person-dev1"
     # A second DSH instance, kept as the "colleague" side of a two-instance demo:
     # it joins groups hosted by `agent-groups`, so the invite path is exercised
     # across two real processes rather than against itself.
@@ -76,6 +91,22 @@ a2a_agents:
     auth_type: "api_key"
     # The credential the gateway holds for DSH; it never reaches a caller.
     secret: "dsh-a2a-dev-token-2026"
+    timeout_ms: 600000
+    enabled: true
+
+  - name: "agent-person-dev2"
+    # The third instance, so a two-person collaboration is exercised between two REAL member
+    # processes rather than a member talking to the host that hosts it. With only 3091 the
+    # "colleague" side is simulated; with this one, an invite minted on 3091 is redeemed on 3093
+    # and the resulting membership is genuinely remote — the code path whose bugs (path rewriting,
+    # remote credential lookup, not_member handling) never run in a single-instance demo.
+    #
+    # 127.0.0.1 for the same measured reason as the entry above: the WSL gateway mirrors Windows
+    # loopback, while the LAN address hangs its HTTP client for ~100s.
+    url: "http://127.0.0.1:3093/a2a"
+    protocol_version: "1.0"
+    auth_type: "api_key"
+    secret: "dsh-a2a-dev-token-3093"
     timeout_ms: 600000
     enabled: true
 
