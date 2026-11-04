@@ -1,7 +1,7 @@
 # 用 MCP 接入（CodeBuddy / Claude Code / Cursor 等）
 
 群宿主是共享的 A2A 服务，DSH 插件是其中一种客户端。**MCP 是另一种**——它让任何支持
-MCP 的 Agent 都能用同样这 19 个群工具，不需要装 DSH。
+MCP 的 Agent 都能用同样这 26 个群工具，不需要装 DSH。
 
 ```
 CodeBuddy / Claude Code / Cursor ──MCP(stdio)──┐
@@ -110,22 +110,25 @@ node lib/mcp-server.js
 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
 ```
 
-会列出 19 个工具。
+会列出 26 个工具。
 
 ---
 
-## 三、19 个工具
+## 三、26 个工具
 
 和 DSH 插件**完全一致**（同一份 `tool-specs.js`）：
 
 | 组 | 工具 |
 |---|---|
+| **待办（先调这个）** | `a2a_pending` |
 | 找人 | `a2a_agents` `a2a_discover` `a2a_send` `a2a_stream` |
+| 一对一 | `a2a_person_send` `a2a_person_inbox` `a2a_person_ack` |
 | 建群/邀请 | `a2a_group_create` `a2a_group_invite` `a2a_group_join` |
 | 群内 | `a2a_group_post` `a2a_group_read` `a2a_group_info` `a2a_group_role` |
 | 浏览 | `a2a_group_directory` |
 | 申请审批 | `a2a_group_request` `a2a_group_requests` `a2a_group_decide` `a2a_group_claim` |
-| 管理 | `a2a_groups` `a2a_group_inbox` `a2a_serve` |
+| 管理 | `a2a_group_remove` `a2a_group_rename` `a2a_group_archive` |
+| 其他 | `a2a_groups` `a2a_group_inbox` `a2a_serve` |
 
 **描述和 schema 逐字节相同**，所以模型在一个宿主里学会的用法，在另一个宿主里一样成立。
 
@@ -155,18 +158,69 @@ node lib/mcp-server.js
 | | DSH 插件 | MCP 版 |
 |---|---|---|
 | 界面 | 侧边栏 + 标签页 + 成员栏 | **没有** |
-| 收群消息 | 自动进会话（inbox 订阅） | **不会**——要主动调 `a2a_group_read` |
+| 收群消息 | 自动进会话（inbox 订阅） | **不会自动**——要主动调 `a2a_pending` |
 | 启动方式 | DSH 装插件 | 客户端拉起进程 |
-| 凭证存哪 | `$DSH_HOME/a2a/memberships.json` | `AGENT_GROUPS_DATA/memberships.json` |
-| 工具数 | 19 | 19（同一份） |
+| 凭证存哪 | `$DSH_HOME/a2a/memberships.json` | `AGENT_GROUPS_DATA` |
+| 工具数 | 26 | 26（同一份 spec） |
 
-**最大的差别是「收消息」**：MCP 是请求-响应，服务器不能主动推给你。
-所以 MCP 用户要读群消息，得让 Agent 调 `a2a_group_read`。
+### 为什么 MCP 收不到推送
 
-这不是缺陷，是协议形状：MCP 的 Server 不能主动向 Client 发消息。
+**协议本身支持**：MCP 有 `notifications/message`、`notifications/resources/updated`，传输层也支持 SSE。
 
-> **想要推送怎么办？** 用 DSH 插件（它有 inbox 订阅），或者让 Agent 定期调
-> `a2a_group_read`。
+**但没有任何主流客户端把通知变成一轮对话。** 通知到达的是**客户端程序**，不是模型。模型永远是被调用的
+一方，从来没有「被推送唤醒」这回事。
+
+实测的三条路：
+
+| 机制 | 结果 |
+|---|---|
+| `instructions` | CodeBuddy **完全丢弃**（直接问它那句话在不在，答「没有」） |
+| `prompts/list` | 只作为 **slash command** 暴露，要用户手动敲 `/`，不自动进上下文 |
+| `tools` | 进 `<available_deferred_tools>`，**只给名字**，无描述无 schema |
+
+所以这不是本插件的缺陷，是客户端实现的选择。**换个客户端可能就好了，也可能一样。**
+
+### 实际怎么用
+
+既然模型不会被自动唤醒，那就**在提示词里明确要求它查**：
+
+```bash
+# 单次
+codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<你的任务>"
+
+# 长任务
+codebuddy -p "开始前查 a2a_pending；每完成一个阶段再查一次"
+```
+
+`a2a_pending` 是一次调用返回全部待办的入口：
+
+```json
+{"total": 0, "directMessages": [], "groups": [], "summary": "Nothing waiting."}
+```
+
+有东西时：
+
+```json
+{
+  "total": 3,
+  "directMessages": [{"kind": "group-invite", "text": "邀请你加入「发票服务重构」"}],
+  "groups": [{"name": "发票服务重构", "unread": 2}]
+}
+```
+
+**顺序有讲究**：一对一消息在前，因为邀请会阻塞进度（不收就无法参与），而群消息只是上下文。
+
+### 想要真正的推送怎么办
+
+**别在 MCP 上投入。** 可行的是让宿主主动调客户端的非交互模式：
+
+```
+群消息到达 → 宿主 → codebuddy -p "你有新消息：..." → 一个真实的模型轮次
+```
+
+这不依赖 MCP 协议，`codebuddy -p` / `claude -p` / `opencode` 都有类似入口，所以**跨客户端可用**。
+
+代价：每次唤醒冷启动一个进程（几秒），且要按客户端做适配和防抖。**当前没做。**
 
 ---
 
@@ -196,7 +250,7 @@ node scripts/mcp-probe.mjs
 PASS  initialize answered
 PASS  protocol version  (2024-11-05)
 PASS  server name  (agent-groups)
-PASS  tools are listed  (19 tools)
+PASS  tools are listed  (26 tools)
 PASS  every tool declares an input schema
 PASS  no functions leaked into the payload
 PASS  reported as isError  ("unknown tool: no_such_tool")

@@ -1,38 +1,38 @@
-feat(mcp): one call that answers "is anything waiting for me?"
+docs: state the MCP polling limit honestly, and fix every stale tool count
 
-MCP cannot push to a model. Notifications reach the CLIENT PROGRAM, and no mainstream client turns one into
-a turn, so an agent using this server is never woken by a colleague. If it does not ask, it never learns — the
-protocol has no path around that.
+Two corrections, both the kind that erode trust in a doc once a reader checks them.
 
-Asking needs one place to ask. Before this there were three overlapping answers and no entry point:
-`a2a_person_inbox` covers one-to-one messages, `a2a_group_read` needs a group id the caller may not have, and
-nothing computed an unread count at all. A model told "check your groups" had to guess.
+THE POLLING STORY WAS WRONG IN A SUBTLE WAY
 
-`a2a_pending` returns, in one call:
+The old text said "MCP 的 Server 不能主动向 Client 发消息" — that is false. The protocol carries
+`notifications/message` and `notifications/resources/updated`, and the transport supports SSE. What is true is
+that no mainstream client turns a notification into a model turn.
 
-    direct messages   unconfirmed only — an invitation blocks progress
-    groups            name and unread count, computed the same way the panel does
-    nothing           said plainly, so a poll that finds nothing is cheap and unambiguous
+The difference matters. "Impossible" tells a reader not to look; "supported but unused by clients" tells them
+where the actual obstacle is. So MCP.md now says the second thing, with what was measured:
 
-Designed to be called at the start of every turn, so it cannot throw when nothing is joined and never invents
-an unread count for a remote group whose head it has not read — an unknown reported as zero would hide new
-messages.
+    instructions        CodeBuddy drops it entirely — asked whether a sentence from it was present, "没有"
+    prompts/list        exposed as a slash command only; never enters context automatically
+    tools               land in <available_deferred_tools> with the NAME only, no description, no schema
 
-THE INSTRUCTIONS WERE REWRITTEN TO TEACH THE POLL
+And the practical advice follows from that: ask for the poll in the prompt, because nothing else will.
 
-The old preamble described browsing and posting and never said "check for messages". A tool nobody is told to
-call is a tool that does not exist. The new one states the WHEN (start of a turn), the WHY (this server cannot
-reach you), the consequence of skipping it, and what to do with an empty answer.
+    codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<任务>"
 
-MEASURED, AND IT DOES NOT WORK YET
+The alternative — having the host invoke the client's non-interactive mode when a message arrives — is
+described and explicitly marked as not built, with its costs: a cold process per wake, and per-client
+adaptation.
 
-CodeBuddy drops `instructions` entirely — asked directly whether a sentence from it was present, the answer was
-"没有". It also puts MCP tools in a deferred list where only the NAME is visible:
+STALE COUNTS, FIXED EVERYWHERE
 
-    mcp__agent-groups__a2a_pending      (no description, no schema)
+Seven places said 19 tools. The real number is 26. A reader who checks `tools/list` and finds a mismatch stops
+believing the rest of the page, so the count is now taken from the spec by `scripts/sync-tool-count.mjs` rather
+than typed.
 
-so a model would have to `ToolSearch` before calling anything. That is a client-side decision this server
-cannot influence, and it means the poll has to be asked for by the user until a client honours instructions.
+The first run of that script reported 23 — its regex assumed four spaces of indentation where the file uses
+six. Caught by comparing against `TOOL_SPECS.length`, which is exactly why the script counts instead of me.
 
-Verified: 427 tests, 26 tools aligned, and a direct `tools/call` returns
-`{"total":0,"summary":"Nothing waiting."}`.
+Also completed the tool table in MCP.md: it was missing six entries, including `a2a_pending`, the one tool the
+new instructions tell a model to call first.
+
+Verified: 427 tests, MCP probe OK, and `docs` now references all 26 tools with no stale count anywhere.

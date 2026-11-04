@@ -46,8 +46,8 @@ lib/
 │   └── profile.js       名片聚合
 │
 ├── shared/   两个宿主共用，谁也不属于
-│   ├── tool-specs.js    19 个工具的 name/description/schema/render（纯数据）
-│   └── tool-runtime.js  19 个工具的执行（接收 { sessionId }）
+│   ├── tool-specs.js    26 个工具的 name/description/schema/render（纯数据）
+│   └── tool-runtime.js  26 个工具的执行（接收 { sessionId }）
 │
 ├── mcp/      唯一读 MCP 协议的地方
 │   └── mcp-deps.js      为"没有 DSH 的进程"接线
@@ -108,7 +108,7 @@ MCP 配置（stdio）：
 
 **MCP 版没有界面**——协议里只有 tools/resources/prompts。[MCP 文档](docs/MCP.md)
 
-## 19 个工具
+## 26 个工具
 
 | 组 | 工具 |
 |---|---|
