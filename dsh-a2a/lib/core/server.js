@@ -321,9 +321,12 @@ export function createServer({
       return;
     }
 
+    // The group the inviter meant, carried by the token. Absent means "configure only", which is a valid
+    // page: a colleague joining the collaboration before any group concerns them.
+    const groupId = url.searchParams.get('g') ?? '';
     let detail;
     try {
-      detail = typeof joinContext === 'function' ? await joinContext() : undefined;
+      detail = typeof joinContext === 'function' ? await joinContext(groupId === '' ? undefined : groupId) : undefined;
     } catch (error) {
       // A page that cannot build its content must say so rather than render half of it: a config paragraph
       // with missing fields would be pasted and fail somewhere far from here.

@@ -37,10 +37,17 @@ export const JOIN_TOKEN_TTL_MS = 15 * 60 * 1000;
 export const JOIN_PATH = '/join';
 
 /** The sentence the page puts on the clipboard. */
-const INSTRUCTION_TEMPLATE = `帮我配置 DSH 以加入协作群「{groupName}」。
+const INSTRUCTION_HEAD_WITH_GROUP = `帮我配置 DSH 以加入协作群「{groupName}」。
+{groupIdLine}
 
-要做两件事，请先给我看改动，我确认后再写：
+要做两件事，请先给我看改动，我确认后再写：`;
 
+const INSTRUCTION_HEAD_CONFIG_ONLY = `帮我配置 DSH 以接入协作模式（不加入具体的群）。
+
+要做两件事，请先给我看改动，我确认后再写：`;
+
+/** The YAML block, identical in both modes. */
+const INSTRUCTION_BODY = `
 1. 在 profile 的 cordis.patch.yml 里，把 a2a 段替换成：
    - id: a2a
      name: dsh-a2a-groups
@@ -64,12 +71,22 @@ const INSTRUCTION_TEMPLATE = `帮我配置 DSH 以加入协作群「{groupName}�
 2. 确认 <DSH_HOME>/profiles/web/package.json 的 dsh.profile.bundles 里有 dsh-a2a-groups。
    没有就加在数组最后。
 
-改完重启 DSH，然后告诉我「协作群」按钮有没有出现。
+改完重启 DSH，然后告诉我「协作群」按钮有没有出现。`;
+
+const INSTRUCTION_TAIL_WITH_GROUP = `
 如果出现空白面板，让我调 a2a_pending 看有没有待处理的邀请。
 
 群信息：
 - 群名：{groupName}
 - 群 id：{groupId}
+- 网关：{gatewayBase}
+- 你在网关里的名字：{agentName}`;
+
+const INSTRUCTION_TAIL_CONFIG_ONLY = `
+这一步只是把通道打通，不涉及任何具体的群。
+配好之后可以用 a2a_group_directory 看有哪些群，再决定加入哪个。
+
+连接信息：
 - 网关：{gatewayBase}
 - 你在网关里的名字：{agentName}`;
 
@@ -137,9 +154,17 @@ export function createJoinTokenStore({ newToken, now, ttlMs = JOIN_TOKEN_TTL_MS 
  * @returns {string} the paragraph a colleague pastes.
  */
 export function buildJoinInstruction(values) {
-  let text = INSTRUCTION_TEMPLATE;
+  const hasGroup = typeof values.groupId === 'string' && values.groupId !== '';
+
+  // The group id line is its own placeholder so a configure-only page never shows "群 id：" with nothing after it.
+  const head = hasGroup
+    ? INSTRUCTION_HEAD_WITH_GROUP.replace('{groupIdLine}', '群 id 是 ' + values.groupId + '。')
+    : INSTRUCTION_HEAD_CONFIG_ONLY;
+  const tail = hasGroup ? INSTRUCTION_TAIL_WITH_GROUP : INSTRUCTION_TAIL_CONFIG_ONLY;
+
+  let text = head + INSTRUCTION_BODY + tail;
   for (const [key, value] of Object.entries(values)) {
-    text = text.split(`{${key}}`).join(String(value ?? ''));
+    text = text.split('{' + key + '}').join(String(value ?? ''));
   }
   return text;
 }
@@ -167,26 +192,39 @@ export function renderJoinPage(input) {
   const instruction = buildJoinInstruction(input);
   const expiresIn = Math.max(0, Math.round((input.expiresAt - Date.now()) / 60000));
 
+  // One flag decides the wording for the whole page. A page that says "join a group" when there is no group is
+  // the confusion this rewrite exists to remove.
+  const hasGroup = typeof input.groupId === 'string' && input.groupId !== '';
+
+  const title = hasGroup ? `加入协作群「${input.groupName}」` : '加入协作模式';
+  const lede = hasGroup
+    ? '你的 AI 助手加入这个群之后，就能看到群里的历史消息、和同事的助手说话。'
+    : '让你的 AI 助手接入这个协作服务。这一步不涉及任何具体的群 —— 先把通道打通，之后可以再加入具体的群。';
+
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>加入「${escapeHtml(input.groupName)}」</title>
+<title>${escapeHtml(title)}</title>
 <style>
   :root { color-scheme: light dark; }
   body {
-    font: 15px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
-    max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem;
+    font: 15px/1.65 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    max-width: 44rem; margin: 0 auto; padding: 2.5rem 1.25rem 4rem;
   }
-  h1 { font-size: 1.4rem; margin: 0 0 .35rem; }
-  .sub { opacity: .65; margin: 0 0 2rem; font-size: .9rem; }
-  h2 { font-size: 1rem; margin: 2rem 0 .6rem; }
+  .kind {
+    display: inline-block; font-size: 12px; letter-spacing: .04em; text-transform: uppercase;
+    opacity: .55; margin-bottom: .6rem;
+  }
+  h1 { font-size: 1.45rem; margin: 0 0 .5rem; line-height: 1.35; }
+  .lede { opacity: .75; margin: 0 0 2rem; }
+  h2 { font-size: 1rem; margin: 2.2rem 0 .7rem; }
   ol { padding-left: 1.3rem; }
-  li { margin: .4rem 0; }
+  li { margin: .45rem 0; }
   pre {
-    background: rgba(128,128,128,.12); padding: 1rem; border-radius: 8px;
-    overflow-x: auto; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-all;
+    background: rgba(128,128,128,.11); padding: 1rem; border-radius: 8px;
+    overflow-x: auto; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-all;
   }
   button {
     font: inherit; padding: .5rem 1.1rem; border-radius: 7px; cursor: pointer;
@@ -195,97 +233,102 @@ export function renderJoinPage(input) {
   button:hover { background: rgba(128,128,128,.12); }
   .done { border-color: #2e9e5b; color: #2e9e5b; }
   .warn {
-    border-left: 3px solid #d08a2c; padding: .6rem 0 .6rem .9rem; margin: 1.5rem 0;
-    background: rgba(208,138,44,.08); font-size: .88rem;
+    border-left: 3px solid #d08a2c; padding: .7rem 0 .7rem .95rem; margin: 1.6rem 0;
+    background: rgba(208,138,44,.07); font-size: .9rem;
   }
-  code { background: rgba(128,128,128,.15); padding: .1em .35em; border-radius: 4px; font-size: .9em; }
+  .meta { opacity: .6; font-size: .85rem; }
+  code { background: rgba(128,128,128,.15); padding: .1em .35em; border-radius: 4px; font-size: .92em; }
 </style>
 </head>
 <body>
-<h1>加入「${escapeHtml(input.groupName)}」</h1>
-<p class="sub">这个页面一次有效，${expiresIn} 分钟后作废。关掉后重新打开需要新链接。</p>
+<span class="kind">${hasGroup ? '加入协作群' : '加入协作模式'}</span>
+<h1>${escapeHtml(title)}</h1>
+<p class="lede">${escapeHtml(lede)}</p>
 
-<h2>怎么做</h2>
+<h2>你要做的</h2>
 <ol>
-  <li>点下面的按钮，复制那段话</li>
+  <li>点下面的按钮，复制那段配置说明</li>
   <li>粘贴到你的 AI 助手会话里，发送</li>
-  <li>助手会先给你看它要改什么，确认后它改完重启，左上角出现「协作群」</li>
+  <li>助手会先列出它要改的内容，你确认之后它才写</li>
+  <li>改完重启 DSH，左上角出现「协作群」就成功了</li>
 </ol>
 
 <p><button id="copy" type="button">复制配置说明</button></p>
 
-<h2>那段话的内容</h2>
+<h2>那段说明的内容</h2>
+<p class="meta">你不需要读懂它 —— 直接复制粘贴即可。下面的内容就是助手会执行的全部。</p>
 <pre id="text">${escapeHtml(instruction)}</pre>
 
 <div class="warn">
-  <strong>这段话会让助手改你机器上的配置文件。</strong>它会先给你看改动再写。如果你不放心，
-  上面的内容就是全部 —— 你也可以自己照着改。
+  <strong>这段话会让助手修改你机器上的配置文件。</strong>它应当先给你看改动再写。如果你不放心，
+  上面已经是全部内容 —— 你也可以自己照着改。
 </div>
 
 <h2>发给同事</h2>
-<p class="sub">同事打开这个链接就能自己配好。链接里带着一次性邀请，用完即失效。</p>
+<p class="meta">同事打开这个链接就能自己配好。链接一次性有效，用完即失效。</p>
 <pre id="shareLink">…</pre>
 <p><button id="copyShare" type="button">复制链接</button></p>
 
-<h2>群信息</h2>
-<pre>群名  ${escapeHtml(input.groupName)}
+<h2>这次连接的信息</h2>
+<pre>${hasGroup
+  ? `类型  加入协作群
+群名  ${escapeHtml(input.groupName)}
 群 id ${escapeHtml(input.groupId)}
-网关  ${escapeHtml(input.gatewayBase)}</pre>
+网关  ${escapeHtml(input.gatewayBase)}`
+  : `类型  加入协作模式（不含具体群）
+网关  ${escapeHtml(input.gatewayBase)}
+说明  配置完成后可以用 a2a_group_directory 看有哪些群，再决定加入哪个`}</pre>
+
+<p class="meta">这个页面一次性有效，${expiresIn} 分钟后作废。关掉后重新打开需要新的链接。</p>
 
 <script>
   // The page's own URL carries the token, so it is read here rather than templated twice.
   var token = new URLSearchParams(window.location.search).get('t') || '';
 
-  // The shareable link, derived from the address the browser is ACTUALLY on. A gateway may mount this page
-  // at /agent-groups/join and strip the prefix before forwarding, so the host only ever sees /join and cannot
+  // The shareable link, derived from the address the browser is ACTUALLY on. A gateway may mount this page at
+  // /agent-groups/join and strip the prefix before forwarding, so the host only ever sees /join and cannot
   // reconstruct the prefix. location.pathname has it, which is why the browser computes this and not the host.
   function computeShareLink() {
     // RegExp from a string, not a literal: this page is emitted from a template literal, and a regex literal
     // here loses its escapes on the way out, which silently turned the pattern into a comment.
     var prefix = window.location.pathname.replace(new RegExp('/join/?' + '$'), '');
-    return window.location.origin + prefix + '/join?t=' + encodeURIComponent(token);
+    var group = new URLSearchParams(window.location.search).get('g') || '';
+    var url = window.location.origin + prefix + '/join?t=' + encodeURIComponent(token);
+    // Carry the group through, or the colleague lands on a configure-only page while holding an invitation.
+    return group === '' ? url : url + '&g=' + encodeURIComponent(group);
   }
 
   var shareField = document.getElementById('shareLink');
   if (shareField !== null) shareField.textContent = computeShareLink();
 
-  document.getElementById('copyShare').addEventListener('click', async function () {
-    var button = this;
-    try {
-      await navigator.clipboard.writeText(computeShareLink());
-    } catch (error) {
-      // A plain http:// origin is not a secure context, so the clipboard API is unavailable. Selecting the
-      // text is the honest fallback, and the button says what happened rather than claiming success.
-      var range = document.createRange();
-      range.selectNodeContents(shareField);
-      var selection = window.getSelection();
-      selection.removeAllRanges();
-      selection.addRange(range);
-      button.textContent = '已选中，按 Ctrl+C 复制';
-      button.classList.add('done');
-      return;
-    }
+  function markCopied(button) {
     button.textContent = '已复制';
     button.classList.add('done');
-  });
+  }
 
-  document.getElementById('copy').addEventListener('click', async function () {
-    var button = this;
-    var text = document.getElementById('text').textContent;
+  async function copyText(button, text, field) {
     try {
       await navigator.clipboard.writeText(text);
+      markCopied(button);
     } catch (error) {
+      // A plain http:// origin is not a secure context, so the clipboard API is unavailable. Selecting the text
+      // is the honest fallback, and the button says what happened rather than claiming success.
       var range = document.createRange();
-      range.selectNodeContents(document.getElementById('text'));
+      range.selectNodeContents(field);
       var selection = window.getSelection();
       selection.removeAllRanges();
       selection.addRange(range);
       button.textContent = '已选中，按 Ctrl+C 复制';
       button.classList.add('done');
-      return;
     }
-    button.textContent = '已复制';
-    button.classList.add('done');
+  }
+
+  document.getElementById('copyShare').addEventListener('click', function () {
+    copyText(this, computeShareLink(), shareField);
+  });
+
+  document.getElementById('copy').addEventListener('click', function () {
+    copyText(this, document.getElementById('text').textContent, document.getElementById('text'));
   });
 </script>
 </body>

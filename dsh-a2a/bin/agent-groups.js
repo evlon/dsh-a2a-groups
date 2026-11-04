@@ -393,21 +393,28 @@ async function main() {
     onFlush: () => store.flush(),
     // Content for the join page. The first listed group is the example: a page that demands a group id before
     // showing anything cannot be opened by the person who needs it.
-    joinContext: async () => {
-      const listed = (store.listDirectory({}).groups ?? []).filter((group) => group.archived !== true);
-      const first = listed[0];
-      if (first === undefined) {
-        // No group yet means there is nothing to join. The page says so rather than printing an empty
-        // invitation a colleague would paste and then wonder about.
-        throw new Error('no group exists yet, so there is nothing to join');
+    // `groupId` is optional. Absent means "configure this instance to reach the host" — the step that has
+    // to happen before any group exists or applies. Present means the page also describes that group.
+    joinContext: async (groupId) => {
+      let group;
+      if (typeof groupId === 'string' && groupId !== '') {
+        const listed = (store.listDirectory({}).groups ?? []).filter((entry) => entry.archived !== true);
+        group = listed.find((entry) => entry.groupId === groupId);
+        // A link that names a group the host does not have (or has archived) must not fall back to some other
+        // group: the reader would configure themselves into the wrong one.
+        if (group === undefined) {
+          throw new Error(`no such group: ${groupId}`);
+        }
       }
       return {
-        groupName: first.name ?? first.groupId,
-        groupId: first.groupId,
+        // Empty strings rather than placeholders: the page decides how to phrase "no group", and a fake group
+        // name would read as a real invitation.
+        groupName: group === undefined ? '' : (group.name ?? group.groupId),
+        groupId: group === undefined ? '' : group.groupId,
         gatewayBase: config.groups.gatewayBase ?? '',
         agentName: config.groups.agentName ?? '',
         apiKey: config.client.apiKey ?? '',
-        // The member chooses these, not the host: the page cannot know the colleague's port or token. A
+        // The member chooses these, not the host: the page cannot know the colleague port or token. A
         // placeholder is used rather than omitting the key, because a missing key in a YAML block is a silent
         // hole while an obvious placeholder is a question the assistant will ask.
         publicUrl: 'http://<your-machine>:3091/a2a',
@@ -448,6 +455,17 @@ async function main() {
     logger.info(`    url: ${shown}/a2a`);
   }
   logger.info(`routes: ${routes().map((route) => `${route.kind === 'prefix' ? '' : ''}${route.path}`).join(', ')}`);
+
+  // The configure-only link: no group, no invitation, just "your DSH can reach this host". Printed at startup
+  // because it is the ONLY entrance before a group exists — `group/invite` needs a group, and a host with none
+  // would otherwise have no way to hand a colleague a link at all.
+  if (typeof publicOrigin === 'string' && publicOrigin !== '') {
+    const setup = joinTokens.mint();
+    logger.info(`configure-only link (no group): ${publicOrigin}/join?t=${setup.token}`);
+    logger.info('  hand this to a colleague whose DSH is not connected yet; it expires in 15 minutes');
+  } else {
+    logger.warn('cannot print a join link: no public origin known. Set --public-url so links are usable.');
+  }
 
   /** Shut down in the order that loses no data: stop accepting, flush, exit. */
   let stopping = false;

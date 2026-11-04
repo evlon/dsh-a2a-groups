@@ -423,9 +423,11 @@ export function createGroupSkills({
                 const token = mintJoinToken();
                 // Absolute when an origin is known: a relative path pasted into a chat reaches the receiver as
                 // a path with no host, which is the failure mode this feature exists to prevent.
-                return token === undefined
-                  ? undefined
-                  : buildJoinUrl({ token: token.token, origin: joinOrigin ?? '', path: '/join' });
+                if (token === undefined) return undefined;
+                const link = buildJoinUrl({ token: token.token, origin: joinOrigin ?? '', path: '/join' });
+                // Name the group in the URL. Without it the page describes whichever group the host lists first,
+                // which is how an invitation ends up landing somebody in a group they were never invited to.
+                return `${link}&g=${encodeURIComponent(groupId)}`;
               } catch {
                 return undefined;
               }
