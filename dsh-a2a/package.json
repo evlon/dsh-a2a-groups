@@ -75,12 +75,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/evlon/dsh-a2a.git",
+    "url": "git+https://github.com/evlon/dsh-a2a-groups.git",
     "directory": "dsh-a2a"
   },
   "bugs": {
-    "url": "https://github.com/evlon/dsh-a2a/issues"
+    "url": "https://github.com/evlon/dsh-a2a-groups/issues"
   },
-  "homepage": "https://github.com/evlon/dsh-a2a#readme",
+  "homepage": "https://github.com/evlon/dsh-a2a-groups#readme",
   "author": "evlon"
 }
