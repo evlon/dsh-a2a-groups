@@ -1,32 +1,30 @@
-feat: a removed member finds out, because their local record goes
+feat: colleague cards that say something, with mine first
 
-`group/remove` disturbed nothing on the removed person's machine. Their memberships.json
-kept the record, so their panel kept listing the group, their unread count kept growing from
-nothing, and every action failed with `not_member` — a code they never saw. From their side
-the feature looked broken rather than their access having ended.
+The card list read "李四 · 在 1 个群" — a number the reader could derive by looking at the
+list beneath it, and one that says nothing about the person. The reader is looking at the
+card from inside a group they already share, so it restated the premise.
 
-The runtime now notices the two codes that mean "your membership is gone" and deletes the
-local record:
+Three fixes, each answering a different question:
 
-    not_member      the credential is no longer valid for the group
-    unknown_group   the group is gone, or the cache points at a host that lacks it
+- WHAT they do: the role they declared. It was already being collected and then thrown
+  away in favour of the group count.
+- WHERE they do it: the group names, so I know which context to approach them in.
+- WHETHER now is a good time: an online dot. The group COUNT is gone rather than demoted —
+  a number the reader can derive is not information.
 
-Centralised in `call()` rather than per handler: the alternative is the same eight lines in
-twenty places, and one of them gets forgotten. The error keeps its code and gains
-`membershipDropped`, so a caller can tell "you were removed" from "that call failed".
+And my own card now comes first, marked 「我」, outlined, with a line saying how to change it.
+Every other card is read-only by nature; mine is the only one I own, and "what do others see
+when they look at me" comes before "who else is around".
 
-Two deliberate narrowings:
+Root cause of the empty cards: `group/info` deliberately returned no roster, so the only
+rosters ever cached were the ones a dev script wrote — meaning no `roleAbout` and no `tags`
+reached a card. It now carries the roster, which does not widen who can see it: the skill
+already required a member credential, and `group/members` already returns the same rows to
+the same caller.
 
-- it removes exactly one (groupId, sessionId) pair. A failure on one group says nothing
-  about the others, and a broader sweep would turn one stale credential into a wiped ledger.
-- it reaps only on those two codes. A network blip or a rate limit says nothing about
-  membership, and dropping a valid membership over one bad afternoon is worse than the
-  confusion being fixed.
+Ownership is decided by member id from the ledger, never by display name: two people can
+share a name, and mistaking a stranger's row for mine would offer an edit that changes the
+wrong person's profile. A test pins that.
 
-I considered keeping a "recent departures" ring so the panel could say "you were removed
-from X", and dropped it: the panel renders from the injected snapshot, so a cleaned record
-already removes the group, which is what happened. The extra field would be one more thing
-to keep correct for one line of text.
-
-Verification: 345 tests (8 new), and end to end with a real ledger — only the failing group
-is dropped, the other membership is untouched.
+Verification: 359 tests (4 new for self-identity), and the live page shows 李四「我」 first
+with 我在这个群做测试 / 测试, then 王五 兼产品 / 产品 研发, then 张工 转到后端 / 研发 后端.

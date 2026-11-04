@@ -382,7 +382,10 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       id: 'group/info',
       name: 'Group metadata',
       description:
-        'Name, topic, member count, online count and MY role in one group. Needs a member credential, because "which group is this and what am I here" is a member question. Returns no roster: use group/members for that.',
+        'Name, topic, member count, online count, MY role, and the roster — who is in it and '
+        + 'what each person declared they do here. Needs a member credential: a roster names '
+        + 'people, so it is a member fact, not a directory fact. Returned in one call because a '
+        + 'caller that needs both the group and its people should not have to fetch twice.',
       examples: ['What is this group called and how many people are in it?'],
       async run(input, context) {
         const data = payload(input);
@@ -404,6 +407,17 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               lastSeq: snapshot.lastSeq,
               lastPostAt: snapshot.lastPostAt ?? 0,
               isOwner: member.memberId === snapshot.owner?.memberId,
+              // The roster travels with the metadata: a colleague card is built from these
+              // rows, and fetching them separately would double the round trips for every
+              // caller that wants to know both "what is this group" and "who is in it".
+              members: store.members({ groupId, member }).map((entry) => ({
+                memberId: entry.memberId,
+                displayName: entry.displayName,
+                role: entry.role,
+                roleAbout: entry.roleAbout ?? '',
+                tags: Array.isArray(entry.tags) ? entry.tags : [],
+                online: entry.online === true,
+              })),
               // Surfaced so a member instance can tell a stale cache from live data.
               fetchedAt: Date.now(),
             },

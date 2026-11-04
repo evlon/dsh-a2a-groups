@@ -871,6 +871,15 @@ window.__ModuleLoader__.load({
 						return typeof tag === "string" && tag !== "";
 					}),
 					groups: Array.isArray(entry.groups) ? entry.groups : [],
+					// Every role they declared, in group order. The card shows the group names
+					// beside the roles, so a person who is "研发" in one group and "产品" in
+					// another reads as one colleague with two contexts rather than two people.
+					roles: (Array.isArray(entry.roles) ? entry.roles : []).filter(function (role) {
+						return typeof role === "string" && role !== "";
+					}),
+					// My own card: the only one the reader can change, so the only one styled as
+					// editable. The Host decides this by member id, not by name.
+					isSelf: entry.isSelf === true,
 					online: entry.online === true
 				});
 			}
@@ -967,7 +976,11 @@ window.__ModuleLoader__.load({
 						flexDirection: "column",
 						gap: "3px",
 						padding: "8px 10px",
-						border: "1px solid var(--dsh-color-border, #2a2f3a)",
+						// Mine is outlined: the list is otherwise read-only, and the one card the
+						// reader owns should not look like the ones they cannot touch.
+						border: card.isSelf === true
+							? "1px solid var(--dsh-color-accent, #4c8dff)"
+							: "1px solid var(--dsh-color-border, #2a2f3a)",
 						borderRadius: "6px"
 					}
 				},
@@ -975,6 +988,22 @@ window.__ModuleLoader__.load({
 					"div",
 					{ style: { display: "flex", alignItems: "baseline", gap: "6px" } },
 					h("span", { style: { fontWeight: 600, fontSize: "13px" } }, card.name),
+					card.isSelf === true
+						? h(
+								"span",
+								{
+									style: {
+										padding: "0 5px",
+										borderRadius: "3px",
+										fontSize: "10px",
+										background: "var(--dsh-color-accent, #4c8dff)",
+										color: "#fff"
+									},
+									title: "这是你自己的名片，只有你能改"
+								},
+								"我"
+							)
+						: null,
 					card.headline !== ""
 						? h("span", { style: { fontSize: "11px", opacity: 0.7 } }, card.headline)
 						: null
@@ -1010,9 +1039,44 @@ window.__ModuleLoader__.load({
 								);
 							})
 						),
+				// Where to find them, by name. The group COUNT used to live here, which told the
+				// reader nothing: they are looking at the card from inside a group they already
+				// share, so the number restates the premise. Names answer the real question —
+				// which context to approach this person in.
 				card.groups.length === 0
 					? null
-					: h("span", { style: { fontSize: "11px", opacity: 0.6 } }, "在 " + String(card.groups.length) + " 个群")
+					: h(
+							"div",
+							{ style: { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" } },
+							h("span", {
+								style: {
+									width: "5px",
+									height: "5px",
+									borderRadius: "50%",
+									flex: "0 0 auto",
+									background: card.online
+										? "var(--dsh-color-success, #3fb950)"
+										: "var(--dsh-color-border, #555)"
+								},
+								title: card.online ? "最近在群里活动过" : "最近没有活动"
+							}),
+							h(
+								"span",
+								{ style: { fontSize: "11px", opacity: 0.65 } },
+								card.groups.slice(0, 3).join("、")
+									+ (card.groups.length > 3 ? " 等 " + String(card.groups.length) + " 个群" : "")
+							)
+						),
+				// Where the edit happens. Stated on the card because the panel cannot host an
+				// editor: the profile is group-scoped and lives on the host, so the change has to
+				// go through a Session that holds the credential.
+				card.isSelf === true
+					? h(
+							"span",
+							{ style: { fontSize: "10px", opacity: 0.55 } },
+							"这是你自己的名片：在会话里说「我在这个群负责 X，标签 A、B」即可更新，或让助手帮你生成"
+						)
+					: null
 			);
 		}
 

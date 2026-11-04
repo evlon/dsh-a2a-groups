@@ -634,6 +634,10 @@ function requireSession(sessionId, tool) {
       lastSeq: Number.isFinite(meta.lastSeq) ? meta.lastSeq : undefined,
       lastTime: Number.isFinite(meta.lastPostAt) ? meta.lastPostAt : undefined,
       isOwner: meta.isOwner === true,
+      // The roster is what makes a colleague card useful: without roleAbout and tags a card
+      // can only say "in N groups", which is the one thing the reader already knows.
+      members: Array.isArray(meta.members) ? meta.members : undefined,
+      rosterCachedAt: Array.isArray(meta.members) ? Date.now() : undefined,
     });
     await identities.flush();
     return {
@@ -644,6 +648,7 @@ function requireSession(sessionId, tool) {
       onlineCount: Number.isFinite(meta.onlineCount) ? meta.onlineCount : 0,
       lastSeq: Number.isFinite(meta.lastSeq) ? meta.lastSeq : 0,
       isOwner: meta.isOwner === true,
+      rosterCount: Array.isArray(meta.members) ? meta.members.length : 0,
     };
   },
   'a2a_group_read': async function a2a_group_read(args, exec) {

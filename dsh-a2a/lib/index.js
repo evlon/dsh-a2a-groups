@@ -32,6 +32,7 @@ import { readFileSync } from 'node:fs';
 import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './core/config.js';
 import { createServer } from './core/server.js';
 import { createBridge } from './core/bridge.js';
+import { aggregateColleagueCards } from './core/colleague-cards.js';
 import { createRegistry } from './core/registry.js';
 import { createDeliverer } from './dsh/deliver.js';
 import { createGroupStore } from './core/groups.js';
@@ -184,6 +185,7 @@ const PANEL_FEED_TAIL = 8;
   // Read on every index render, so a page refresh always sees the current groups
   // and a group created after boot appears without a restart. Pushing into an
   // open page is the panel's own 2s signature poll — one mechanism, not two.
+
   const publishGroups = () => {
     try {
       const rows = [];
@@ -277,12 +279,29 @@ const PANEL_FEED_TAIL = 8;
         // A discover list is a convenience; failing to build it must not blank the panel.
         info(ctx, `a2a: could not list discoverable groups (${describe(error)})`);
       }
-      return { updatedAt: clock(), groups: rows, unreadTotal: rows.reduce((sum, row) => sum + row.unreadCount, 0) };
+      return {
+        updatedAt: clock(),
+        groups: rows,
+        // Colleague cards travel with the group list because the panel renders both from one
+        // snapshot: a second channel would mean a second way for the two to disagree.
+        // The aggregator is a pure function in core/: rosters in, cards out. Keeping it here
+        // would make it testable only by mounting the whole plugin.
+        cards: (() => {
+          try {
+            return aggregateColleagueCards(identities.list());
+          } catch (error) {
+            // Cards are reference material; a failure must not blank the panel.
+            info(ctx, `a2a: could not aggregate colleague cards (${describe(error)})`);
+            return [];
+          }
+        })(),
+        unreadTotal: rows.reduce((sum, row) => sum + row.unreadCount, 0),
+      };
     } catch (error) {
       // A panel with no data shows its empty state; it must never be a mount
       // failure or a broken page.
       info(ctx, `a2a: could not build the panel snapshot (${describe(error)})`);
-      return { updatedAt: clock(), groups: [], unreadTotal: 0 };
+      return { updatedAt: clock(), groups: [], cards: [], unreadTotal: 0 };
     }
   };
 
