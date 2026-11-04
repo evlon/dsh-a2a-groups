@@ -43,12 +43,12 @@ function harness() {
 function seed(store) {
   const created = store.create({ name: '发票重构', ownerDisplayName: '张工' });
   const groupId = created.group.groupId;
-  const owner = { memberId: created.group.owner.memberId, memberKey: created.ownerKey };
+  const owner = { personId: created.group.owner.personId, personKey: created.ownerKey };
 
   const addMember = (displayName) => {
     const invite = store.invite({ groupId, ownerKey: created.ownerKey });
     const joined = store.join({ groupId, token: invite.token, displayName });
-    return { memberId: joined.member.memberId, memberKey: joined.memberKey };
+    return { personId: joined.member.personId, personKey: joined.personKey };
   };
 
   return { groupId, owner, li: addMember('李四'), wang: addMember('王五') };
@@ -76,11 +76,11 @@ test('a member id is kept as a mention', () => {
       groupId,
       member: owner,
       text: '看下这个 MR',
-      mentions: [li.memberId],
+      mentions: [li.personId],
     });
-    assert.deepEqual(posted.mentions, [li.memberId]);
+    assert.deepEqual(posted.mentions, [li.personId]);
     const page = env.store.read({ groupId, member: owner, sinceSeq: 0 });
-    assert.deepEqual(page.entries.at(-1).mentions, [li.memberId]);
+    assert.deepEqual(page.entries.at(-1).mentions, [li.personId]);
   } finally {
     env.cleanup();
   }
@@ -91,7 +91,7 @@ test('a display name resolves to the member, because that is what a caller types
   try {
     const { groupId, owner, li } = seed(env.store);
     const posted = env.store.post({ groupId, member: owner, text: '@李四 看下', mentions: ['李四'] });
-    assert.deepEqual(posted.mentions, [li.memberId]);
+    assert.deepEqual(posted.mentions, [li.personId]);
   } finally {
     env.cleanup();
   }
@@ -102,7 +102,7 @@ test('@all collapses any individual names into the sentinel', () => {
   try {
     const { groupId, owner, li } = seed(env.store);
     for (const spelling of [MENTION_ALL, 'all', '@所有人', '所有人']) {
-      const posted = env.store.post({ groupId, member: owner, text: '明天上线', mentions: [spelling, li.memberId] });
+      const posted = env.store.post({ groupId, member: owner, text: '明天上线', mentions: [spelling, li.personId] });
       assert.deepEqual(posted.mentions, [MENTION_ALL], `spelling ${spelling} must mean everyone`);
     }
   } finally {
@@ -115,7 +115,7 @@ test('an ambiguous display name is dropped rather than guessed', () => {
   try {
     const { groupId, owner, li } = seed(env.store);
     // Two members named the same: waking either one would be a guess.
-    const invite = env.store.invite({ groupId, ownerKey: owner.memberKey });
+    const invite = env.store.invite({ groupId, ownerKey: owner.personKey });
     env.store.join({ groupId, token: invite.token, displayName: '李四' });
 
     const posted = env.store.post({ groupId, member: owner, text: '@李四 看下', mentions: ['李四'] });
@@ -147,7 +147,7 @@ test('the mention list is bounded', () => {
   try {
     const { groupId, owner, li } = seed(env.store);
     const many = Array.from({ length: MAX_MENTIONS_PER_POST + 50 }, (_, index) => `nobody-${index}`);
-    many.push(li.memberId);
+    many.push(li.personId);
     const posted = env.store.post({ groupId, member: owner, text: 'hi', mentions: many });
     assert.ok(posted.mentions.length <= MAX_MENTIONS_PER_POST, `got ${posted.mentions.length}`);
   } finally {
@@ -159,7 +159,7 @@ test('mentions survive a reload, so a restart does not lose the addressing', () 
   const env = harness();
   try {
     const { groupId, owner, li } = seed(env.store);
-    env.store.post({ groupId, member: owner, text: '@李四 看下', mentions: [li.memberId] });
+    env.store.post({ groupId, member: owner, text: '@李四 看下', mentions: [li.personId] });
     env.store.flush();
 
     const reloaded = createGroupStore({
@@ -170,7 +170,7 @@ test('mentions survive a reload, so a restart does not lose the addressing', () 
     });
     const page = reloaded.read({ groupId, member: owner, sinceSeq: 0 });
     const entry = page.entries.at(-1);
-    assert.deepEqual(entry.mentions, [li.memberId]);
+    assert.deepEqual(entry.mentions, [li.personId]);
   } finally {
     env.cleanup();
   }

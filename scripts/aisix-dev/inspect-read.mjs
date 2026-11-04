@@ -44,13 +44,13 @@ async function call(skill, data = {}, text = skill) {
 
 const created = await call('group/create', { name: 'inspect', password: 'pw12345678' });
 const groupId = /groupId\s*:\s*(\S+)/.exec(created.reply)[1];
-const memberId = /memberId:\s*(\S+)/.exec(created.reply)[1];
-const memberKey = /ownerKey:\s*(\S+)/.exec(created.reply)[1];
-console.log('group:', groupId, 'member:', memberId);
+const personId = /personId:\s*(\S+)/.exec(created.reply)[1];
+const personKey = /ownerKey:\s*(\S+)/.exec(created.reply)[1];
+console.log('group:', groupId, 'member:', personId);
 
-await call('group/post', { groupId, memberId, memberKey, text: '第一条测试消息' });
+await call('group/post', { groupId, personId, personKey, text: '第一条测试消息' });
 
-const read = await call('group/read', { groupId, memberId, memberKey, sinceSeq: 0 });
+const read = await call('group/read', { groupId, personId, personKey, sinceSeq: 0 });
 console.log('\n--- group/read rendered TEXT ---');
 console.log(JSON.stringify(read.reply, null, 2));
 

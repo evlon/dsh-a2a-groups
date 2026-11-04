@@ -99,7 +99,7 @@ function seed(env, overrides = {}) {
   return {
     ...created,
     groupId: created.group.groupId,
-    ownerId: created.group.owner.memberId,
+    ownerId: created.group.owner.personId,
   };
 }
 
@@ -127,7 +127,7 @@ function assertNoSecrets(value, label) {
     assert.equal(keys.has(forbidden), false, `${label} must not expose ${forbidden}`);
   }
   // Plaintext credentials: shown once at issuance, never in a read view.
-  for (const forbidden of ['token', 'ownerKey', 'memberKey', 'claimKey']) {
+  for (const forbidden of ['token', 'ownerKey', 'personKey', 'claimKey']) {
     assert.equal(keys.has(forbidden), false, `${label} must not expose plaintext ${forbidden}`);
   }
 }
@@ -253,7 +253,7 @@ test('invite() honours expiresInHours and maxUses overrides, and puts a custom g
 test('join() creates a member, returns its credential once, and hands back the feed tail', () => {
   const env = harness();
   const owner = seed(env);
-  env.store.post({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: owner.ownerKey }, text: '开工了' });
+  env.store.post({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey }, text: '开工了' });
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
 
   const joined = env.store.join({
@@ -263,7 +263,7 @@ test('join() creates a member, returns its credential once, and hands back the f
     endpoint: 'gw://dsh-zhang',
   });
 
-  assert.match(joined.memberKey, /^mk_[A-Za-z0-9_-]{43}$/u);
+  assert.match(joined.personKey, /^mk_[A-Za-z0-9_-]{43}$/u);
   assert.equal(joined.member.displayName, '张工');
   assert.equal(joined.member.role, 'member');
   assert.equal(joined.group.groupId, owner.groupId);
@@ -271,16 +271,16 @@ test('join() creates a member, returns its credential once, and hands back the f
   // The one documented exception to "no secret in a view": `join` is the response
   // that hands the new member its credential, exactly once.
   const withoutCredential = { ...joined };
-  delete withoutCredential.memberKey;
+  delete withoutCredential.personKey;
   assertNoSecrets(withoutCredential, 'join() apart from the one-time credential');
   assertNoSecrets(joined.group, 'join().group');
 
   const raw = readFileSync(env.file, 'utf8');
-  assert.equal(raw.includes(joined.memberKey), false);
+  assert.equal(raw.includes(joined.personKey), false);
   assert.equal(raw.includes(invite.token), false);
   const stored = readState(env).groups[0];
   assert.equal(stored.members.length, 2);
-  assert.equal(stored.members[1].keyHash, sha256Hex(joined.memberKey));
+  assert.equal(stored.members[1].keyHash, sha256Hex(joined.personKey));
   // No use counter any more: a link that admitted one person still works for the
   // next, until it expires or is revoked. Asserting the absence is deliberate — a
   // counter reappearing would be a decision, not something to pass silently.
@@ -338,11 +338,11 @@ test('authenticate() returns undefined for a wrong key, a wrong member and a wro
   const env = harness();
   const owner = seed(env);
 
-  assert.equal(env.store.authenticate({ groupId: owner.groupId, memberId: owner.ownerId, memberKey: 'wrong' }), undefined);
-  assert.equal(env.store.authenticate({ groupId: owner.groupId, memberId: 'm-nobody', memberKey: owner.ownerKey }), undefined);
-  assert.equal(env.store.authenticate({ groupId: 'g-nobody', memberId: owner.ownerId, memberKey: owner.ownerKey }), undefined);
+  assert.equal(env.store.authenticate({ groupId: owner.groupId, personId: owner.ownerId, personKey: 'wrong' }), undefined);
+  assert.equal(env.store.authenticate({ groupId: owner.groupId, personId: 'm-nobody', personKey: owner.ownerKey }), undefined);
+  assert.equal(env.store.authenticate({ groupId: 'g-nobody', personId: owner.ownerId, personKey: owner.ownerKey }), undefined);
   assert.equal(env.store.authenticate({}), undefined);
-  assert.equal(env.store.authenticate({ groupId: owner.groupId, memberId: owner.ownerId, memberKey: '' }), undefined);
+  assert.equal(env.store.authenticate({ groupId: owner.groupId, personId: owner.ownerId, personKey: '' }), undefined);
 });
 
 test('every credential check goes through the injected constant-time comparator', () => {
@@ -358,9 +358,9 @@ test('every credential check goes through the injected constant-time comparator'
 
   // A good key, a bad key and a nonexistent member must all reach the comparator:
   // if any of these paths short-circuited, the timing would leak membership.
-  assert.ok(env.store.authenticate({ groupId: owner.groupId, memberId: owner.ownerId, memberKey: owner.ownerKey }));
-  assert.equal(env.store.authenticate({ groupId: owner.groupId, memberId: owner.ownerId, memberKey: 'wrong' }), undefined);
-  assert.equal(env.store.authenticate({ groupId: owner.groupId, memberId: 'm-nobody', memberKey: 'wrong' }), undefined);
+  assert.ok(env.store.authenticate({ groupId: owner.groupId, personId: owner.ownerId, personKey: owner.ownerKey }));
+  assert.equal(env.store.authenticate({ groupId: owner.groupId, personId: owner.ownerId, personKey: 'wrong' }), undefined);
+  assert.equal(env.store.authenticate({ groupId: owner.groupId, personId: 'm-nobody', personKey: 'wrong' }), undefined);
   assert.equal(calls.length, 3);
 
   for (const [left, right] of calls) {
@@ -383,32 +383,32 @@ test('constantTimeEquals never throws on mismatched lengths', () => {
 test('authenticate() marks a member online and presence expires with the clock', () => {
   const env = harness();
   const owner = seed(env);
-  const ownerMember = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const ownerMember = { personId: owner.ownerId, personKey: owner.ownerKey };
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({
     groupId: owner.groupId,
     token: invite.token,
     displayName: '张工',
   });
-  const peer = { memberId: joined.member.memberId, memberKey: joined.memberKey };
+  const peer = { personId: joined.member.personId, personKey: joined.personKey };
 
-  const authenticated = env.store.authenticate({ groupId: owner.groupId, memberId: owner.ownerId, memberKey: owner.ownerKey });
+  const authenticated = env.store.authenticate({ groupId: owner.groupId, personId: owner.ownerId, personKey: owner.ownerKey });
   assert.equal(authenticated.online, true);
 
   // Presence is computed from lastSeenAt, so it must go stale by itself: a
   // crashed host never gets to un-set an "online" flag.
   env.clock.t = START + ONLINE_WINDOW_MS + 1;
   const listed = env.store.members({ groupId: owner.groupId, member: peer });
-  const ownerView = listed.find((entry) => entry.memberId === owner.ownerId);
-  const peerView = listed.find((entry) => entry.memberId === joined.member.memberId);
+  const ownerView = listed.find((entry) => entry.personId === owner.ownerId);
+  const peerView = listed.find((entry) => entry.personId === joined.member.personId);
   assert.equal(ownerView.online, false, 'no activity for longer than the window');
   assert.equal(peerView.online, false);
 
   env.clock.t = START + 2 * ONLINE_WINDOW_MS;
-  const reauthenticated = env.store.authenticate({ groupId: owner.groupId, memberId: joined.member.memberId, memberKey: joined.memberKey });
+  const reauthenticated = env.store.authenticate({ groupId: owner.groupId, personId: joined.member.personId, personKey: joined.personKey });
   assert.equal(reauthenticated.online, true, 'one authenticate() brings the member back online');
   assert.equal(env.store.snapshot({ groupId: owner.groupId }).onlineCount, 1);
-  assert.ok(ownerMember.memberId);
+  assert.ok(ownerMember.personId);
 });
 
 // ---------------------------------------------------------------------------
@@ -418,7 +418,7 @@ test('authenticate() marks a member online and presence expires with the clock',
 test('post() appends with a monotonic seq and a fresh uuid', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
 
   const first = env.store.post({ groupId: owner.groupId, member, text: '第一条' });
   const second = env.store.post({ groupId: owner.groupId, member, text: '第二条', payload: { kind: 'task', id: 7 } });
@@ -437,7 +437,7 @@ test('post() appends with a monotonic seq and a fresh uuid', () => {
 test('read() is incremental and reports the cursor', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
 
   const a = env.store.post({ groupId: owner.groupId, member, text: 'a' });
   const b = env.store.post({ groupId: owner.groupId, member, text: 'b' });
@@ -462,7 +462,7 @@ test('read() is incremental and reports the cursor', () => {
 test('read() clamps a nonsense limit instead of returning everything', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   // Seeded before the first post: `create` writes one system entry, so the feed
   // already has a seq 1 and `sinceSeq: 0` starts after it.
   for (let index = 0; index < 5; index += 1) env.store.post({ groupId: owner.groupId, member, text: `m${index}` });
@@ -477,7 +477,7 @@ test('read() clamps a nonsense limit instead of returning everything', () => {
 test('post() enforces maxPostChars and rejects an empty message', () => {
   const env = harness({ groups: { maxPostChars: 50 } });
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
 
   assert.throws(
     () => env.store.post({ groupId: owner.groupId, member, text: 'x'.repeat(51) }),
@@ -497,11 +497,11 @@ test('post() refuses a member object that did not come from authenticate()', () 
   const env = harness();
   const owner = seed(env);
   assert.throws(
-    () => env.store.post({ groupId: owner.groupId, member: { memberId: owner.ownerId }, text: 'forged' }),
+    () => env.store.post({ groupId: owner.groupId, member: { personId: owner.ownerId }, text: 'forged' }),
     (error) => error instanceof GroupError && error.code === 'not_member',
   );
   assert.throws(
-    () => env.store.post({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: 'wrong' }, text: 'forged' }),
+    () => env.store.post({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: 'wrong' }, text: 'forged' }),
     (error) => error.code === 'not_member',
   );
   assert.throws(() => env.store.post({ groupId: owner.groupId, text: 'no member' }), (error) => error.code === 'not_member');
@@ -510,7 +510,7 @@ test('post() refuses a member object that did not come from authenticate()', () 
 test('post() rate-limits a member with a token bucket, and refills over time', () => {
   const env = harness({ groups: { maxPostsPerMinute: 3 } });
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
 
   for (let index = 0; index < 3; index += 1) env.store.post({ groupId: owner.groupId, member, text: `spam ${index}` });
   assert.throws(
@@ -536,8 +536,8 @@ test('the rate limit is per member, not per group', () => {
   const owner = seed(env);
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
-  const ownerMember = { memberId: owner.ownerId, memberKey: owner.ownerKey };
-  const peerMember = { memberId: joined.member.memberId, memberKey: joined.memberKey };
+  const ownerMember = { personId: owner.ownerId, personKey: owner.ownerKey };
+  const peerMember = { personId: joined.member.personId, personKey: joined.personKey };
 
   for (let index = 0; index < 2; index += 1) env.store.post({ groupId: owner.groupId, member: ownerMember, text: `o${index}` });
   assert.throws(() => env.store.post({ groupId: owner.groupId, member: ownerMember, text: 'o2' }), (error) => error.code === 'rate_limited');
@@ -551,7 +551,7 @@ test('the rate limit is per member, not per group', () => {
 test('subscribe() delivers new posts to every subscriber and isolates a throwing one', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   const seen = [];
   const other = [];
 
@@ -595,20 +595,20 @@ test('members() lists every member without leaking hashes', () => {
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
 
-  const list = env.store.members({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: owner.ownerKey } });
+  const list = env.store.members({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey } });
   assert.equal(list.length, 2);
   assert.deepEqual(list.map((entry) => entry.displayName), ['牛昆仑', '张工']);
   assert.deepEqual(list.map((entry) => entry.role), ['owner', 'member']);
   assertNoSecrets(list, 'members()');
   // And the raw JSON cannot even be substring-matched for a key hash.
   const raw = readFileSync(env.file, 'utf8');
-  for (const entry of list) assert.equal(raw.includes(entry.memberId), true, 'the id is stored, the key is not');
+  for (const entry of list) assert.equal(raw.includes(entry.personId), true, 'the id is stored, the key is not');
 });
 
 test('snapshot() summarizes a group with no secrets and no member credential required', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   env.store.post({ groupId: owner.groupId, member, text: '一条消息' });
 
   const anon = env.store.snapshot({ groupId: owner.groupId });
@@ -636,19 +636,19 @@ test('an authenticated member view cannot be edited into another identity', () =
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
 
-  const viewer = env.store.authenticate({ groupId: owner.groupId, memberId: joined.member.memberId, memberKey: joined.memberKey });
+  const viewer = env.store.authenticate({ groupId: owner.groupId, personId: joined.member.personId, personKey: joined.personKey });
   assert.equal(Object.isFrozen(viewer), true);
 
   // A copy of a verified view is not a verified identity: spreading it drops the
-  // binding, and with no memberKey on it there is nothing to check, so it fails.
-  const tampered = { ...viewer, memberId: owner.ownerId, role: 'owner' };
+  // binding, and with no personKey on it there is nothing to check, so it fails.
+  const tampered = { ...viewer, personId: owner.ownerId, role: 'owner' };
   assert.throws(
     () => env.store.post({ groupId: owner.groupId, member: tampered, text: '假装群主' }),
     (error) => error instanceof GroupError && error.code === 'not_member',
   );
   // Even a valid key does not let the copy claim another id: the credential is
   // checked against the member the id names, so a mismatched pair simply fails.
-  const withKey = { ...tampered, memberKey: joined.memberKey };
+  const withKey = { ...tampered, personKey: joined.personKey };
   assert.throws(
     () => env.store.post({ groupId: owner.groupId, member: withKey, text: '假装群主' }),
     (error) => error instanceof GroupError && error.code === 'not_member',
@@ -657,14 +657,14 @@ test('an authenticated member view cannot be edited into another identity', () =
   // And the frozen original still works, as itself.
   const own = env.store.post({ groupId: owner.groupId, member: viewer, text: '我自己' });
   const ownEntry = env.store.read({ groupId: owner.groupId, member: viewer, sinceSeq: own.seq - 1 }).entries[0];
-  assert.equal(ownEntry.from.memberId, joined.member.memberId);
+  assert.equal(ownEntry.from.personId, joined.member.personId);
   assert.equal(ownEntry.from.displayName, '张工');
 });
 
 test('read() reports the head cursor even when nothing is new, and never invents entries', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   const head = env.store.snapshot({ groupId: owner.groupId }).lastSeq;
   const idle = env.store.read({ groupId: owner.groupId, member, sinceSeq: 0 });
   assert.equal(idle.entries.some((entry) => entry.kind === 'message'), false);
@@ -675,7 +675,7 @@ test('read() reports the head cursor even when nothing is new, and never invents
 test('every public read view is hash-free, checked structurally', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
   env.store.post({ groupId: owner.groupId, member, text: 'hi' });
@@ -693,7 +693,7 @@ test('every public read view is hash-free, checked structurally', () => {
   for (const [label, view] of Object.entries(views)) assertNoSecrets(view, label);
   // The raw text of every view, not just its keys: a hash could be smuggled as a value.
   const serialized = JSON.stringify(views);
-  for (const secret of [sha256Hex(joined.memberKey), sha256Hex(owner.ownerKey)]) {
+  for (const secret of [sha256Hex(joined.personKey), sha256Hex(owner.ownerKey)]) {
     assert.equal(serialized.includes(secret), false, 'no sha256 digest of a credential may leave the store');
   }
   assert.equal(serialized.includes('scrypt$'), false, 'no password hash may leave the store');
@@ -702,7 +702,7 @@ test('every public read view is hash-free, checked structurally', () => {
 test('post() rejects a payload that could not be persisted, before mutating the feed', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   const before = env.store.snapshot({ groupId: owner.groupId }).lastSeq;
 
   const cyclic = { name: 'loop' };
@@ -727,7 +727,7 @@ test('post() rejects a payload that could not be persisted, before mutating the 
 test('a payload within the limit round-trips through the file', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   const payload = { task: 'T-1', files: ['a/b.md', 'c/d.md'], nested: { ok: true }, count: 3 };
   env.store.post({ groupId: owner.groupId, member, text: '带 payload', payload });
   const reloaded = createGroupStore({ home: env.home, clock: () => env.clock.t, config: { groups: { gatewayBase: 'x' } } });
@@ -738,7 +738,7 @@ test('a payload within the limit round-trips through the file', () => {
 test('snapshot() refuses a forged member object', () => {
   const env = harness();
   const owner = seed(env);
-  assert.throws(() => env.store.snapshot({ groupId: owner.groupId, member: { memberId: owner.ownerId } }), (error) => error.code === 'not_member');
+  assert.throws(() => env.store.snapshot({ groupId: owner.groupId, member: { personId: owner.ownerId } }), (error) => error.code === 'not_member');
 });
 
 test('leave() removes the member and their credential stops working', () => {
@@ -747,10 +747,10 @@ test('leave() removes the member and their credential stops working', () => {
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
 
-  assert.equal(env.store.leave({ groupId: owner.groupId, member: { memberId: joined.member.memberId, memberKey: joined.memberKey } }), true);
-  assert.equal(env.store.authenticate({ groupId: owner.groupId, memberId: joined.member.memberId, memberKey: joined.memberKey }), undefined);
+  assert.equal(env.store.leave({ groupId: owner.groupId, member: { personId: joined.member.personId, personKey: joined.personKey } }), true);
+  assert.equal(env.store.authenticate({ groupId: owner.groupId, personId: joined.member.personId, personKey: joined.personKey }), undefined);
   assert.equal(readState(env).groups[0].members.length, 1);
-  assert.equal(readState(env).groups[0].members.some((entry) => entry.keyHash === sha256Hex(joined.memberKey)), false);
+  assert.equal(readState(env).groups[0].members.some((entry) => entry.keyHash === sha256Hex(joined.personKey)), false);
 });
 
 test('leave() transfers ownership when the owner leaves, so the group stays manageable', () => {
@@ -759,14 +759,14 @@ test('leave() transfers ownership when the owner leaves, so the group stays mana
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
 
-  env.store.leave({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: owner.ownerKey } });
+  env.store.leave({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey } });
   const snapshot = env.store.snapshot({ groupId: owner.groupId });
-  assert.equal(snapshot.owner.memberId, joined.member.memberId);
+  assert.equal(snapshot.owner.personId, joined.member.personId);
   assert.equal(snapshot.owner.displayName, '张工');
 
   // The new owner can mint and revoke invites with the credential it was given.
-  const next = env.store.invite({ groupId: owner.groupId, ownerKey: joined.memberKey });
-  assert.equal(env.store.revokeInvite({ groupId: owner.groupId, ownerKey: joined.memberKey, token: next.token }), true);
+  const next = env.store.invite({ groupId: owner.groupId, ownerKey: joined.personKey });
+  assert.equal(env.store.revokeInvite({ groupId: owner.groupId, ownerKey: joined.personKey, token: next.token }), true);
 });
 
 // ---------------------------------------------------------------------------
@@ -799,7 +799,7 @@ test('revokeInvite() by id does not need the token', () => {
 test('pruning drops expired entries on the next write, and on an idle flush too', () => {
   const env = harness({ groups: { retentionDays: 1 } });
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
 
   const old = env.store.post({ groupId: owner.groupId, member, text: '前天的消息' });
   env.clock.t = START + 2 * DAY;
@@ -833,14 +833,14 @@ test('the store reloads from disk: credentials, seq and members survive a restar
   const owner = seed(env);
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
-  const posted = env.store.post({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: owner.ownerKey }, text: '重启前' });
+  const posted = env.store.post({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey }, text: '重启前' });
   env.store.flush();
 
   const reloaded = createGroupStore({ home: env.home, clock: () => env.clock.t, config: { groups: { gatewayBase: 'https://gw.ict.cmcc' } } });
-  assert.ok(reloaded.authenticate({ groupId: owner.groupId, memberId: owner.ownerId, memberKey: owner.ownerKey }));
-  assert.ok(reloaded.authenticate({ groupId: owner.groupId, memberId: joined.member.memberId, memberKey: joined.memberKey }));
+  assert.ok(reloaded.authenticate({ groupId: owner.groupId, personId: owner.ownerId, personKey: owner.ownerKey }));
+  assert.ok(reloaded.authenticate({ groupId: owner.groupId, personId: joined.member.personId, personKey: joined.personKey }));
 
-  const next = reloaded.post({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: owner.ownerKey }, text: '重启后' });
+  const next = reloaded.post({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey }, text: '重启后' });
   assert.equal(next.seq > posted.seq, true, 'seq continues instead of restarting at 1');
   assert.equal(reloaded.snapshot({ groupId: owner.groupId }).memberCount, 2);
 });
@@ -861,7 +861,7 @@ test('a reloaded store still refuses a mint with the wrong owner key, and keeps 
 test('writeFileAtomic leaves no temporary file behind', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   for (let index = 0; index < 5; index += 1) env.store.post({ groupId: owner.groupId, member, text: `m${index}` });
   const leftovers = readdirSync(env.home).filter((name) => name.includes('.tmp-'));
   assert.deepEqual(leftovers, []);
@@ -909,8 +909,8 @@ test('a group with no surviving valid member is dropped on load', () => {
     JSON.stringify({
       version: 1,
       groups: [
-        { groupId: 'g-ok', name: 'ok', createdAt: START, members: [{ memberId: 'm-1', keyHash: 'a'.repeat(64), joinedAt: START, lastSeenAt: START, role: 'owner', displayName: 'a' }], feed: [], nextSeq: 1, invites: [] },
-        { groupId: 'g-bad', name: 'bad', members: [{ memberId: 'm-2' }], feed: [] },
+        { groupId: 'g-ok', name: 'ok', createdAt: START, members: [{ personId: 'm-1', keyHash: 'a'.repeat(64), joinedAt: START, lastSeenAt: START, role: 'owner', displayName: 'a' }], feed: [], nextSeq: 1, invites: [] },
+        { groupId: 'g-bad', name: 'bad', members: [{ personId: 'm-2' }], feed: [] },
         { groupId: 'g-nofeed', name: 'nofeed', members: [] },
       ],
     }),
@@ -932,16 +932,16 @@ test('redact() is what a log line shows for a secret', () => {
 test('no log line contains a plaintext credential', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
   env.store.post({ groupId: owner.groupId, member, text: 'hi' });
-  env.store.leave({ groupId: owner.groupId, member: { memberId: joined.member.memberId, memberKey: joined.memberKey } });
+  env.store.leave({ groupId: owner.groupId, member: { personId: joined.member.personId, personKey: joined.personKey } });
 
   const serialized = JSON.stringify(env.logs);
   assert.equal(serialized.includes('correct-horse-battery'), false);
   assert.equal(serialized.includes(invite.token), false);
-  assert.equal(serialized.includes(joined.memberKey), false);
+  assert.equal(serialized.includes(joined.personKey), false);
   assert.equal(serialized.includes(owner.ownerKey), false);
   assert.equal(serialized.includes('sha256:'), true, 'secrets appear only as a short digest');
 });
@@ -956,7 +956,7 @@ test('has() answers the join routing question without a credential', () => {
   const owner = seed(env);
   assert.equal(env.store.has(owner.groupId), true, 'a local group is hosted here');
 
-  env.store.leave({ groupId: owner.groupId, member: { memberId: owner.ownerId, memberKey: owner.ownerKey } });
+  env.store.leave({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey } });
   // The group record survives an owner leaving (it has no members left, so it is
   // inert but still on disk); `has` reports the record, not a usable group.
   assert.equal(env.store.has(owner.groupId), true);
@@ -965,7 +965,7 @@ test('has() answers the join routing question without a credential', () => {
 test('lastEntry() returns the newest entry, or undefined when there is none', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
 
   // `create` writes a "created" system entry, so the feed is never empty here.
   const created = env.store.lastEntry({ groupId: owner.groupId, member });
@@ -982,7 +982,7 @@ test('lastEntry() returns the newest entry, or undefined when there is none', ()
   assertNoSecrets(newest, 'lastEntry()');
 
   assert.throws(
-    () => env.store.lastEntry({ groupId: owner.groupId, member: { memberId: owner.ownerId } }),
+    () => env.store.lastEntry({ groupId: owner.groupId, member: { personId: owner.ownerId } }),
     (error) => error instanceof GroupError && error.code === 'not_member',
     'the preview is message text, so it needs a credential',
   );
@@ -992,7 +992,7 @@ test('lastEntry() returns the newest entry, or undefined when there is none', ()
 test('snapshot() without a member yields no content, and `list()` never carries feed text', () => {
   const env = harness();
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   env.store.post({ groupId: owner.groupId, member, text: '不该出现在列表里的正文' });
 
   // This is the answer to "why is feedTail empty": without `member`, a snapshot
@@ -1014,7 +1014,7 @@ test('snapshot() without a member yields no content, and `list()` never carries 
 test('a feed tail on join is capped at FEED_TAIL_LIMIT', () => {
   const env = harness({ groups: { maxPostsPerMinute: 10_000 } });
   const owner = seed(env);
-  const member = { memberId: owner.ownerId, memberKey: owner.ownerKey };
+  const member = { personId: owner.ownerId, personKey: owner.ownerKey };
   for (let index = 0; index < FEED_TAIL_LIMIT + 5; index += 1) env.store.post({ groupId: owner.groupId, member, text: `m${index}` });
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
   const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '新人' });

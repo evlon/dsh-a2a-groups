@@ -36,12 +36,12 @@ function harness() {
 function seed(store) {
   const created = store.create({ name: '发票重构', topic: '拆分服务', ownerDisplayName: '张工' });
   const groupId = created.group.groupId;
-  const owner = { memberId: created.group.owner.memberId, memberKey: created.ownerKey };
+  const owner = { personId: created.group.owner.personId, personKey: created.ownerKey };
 
   const addMember = (displayName) => {
     const invite = store.invite({ groupId, ownerKey: created.ownerKey });
     const joined = store.join({ groupId, token: invite.token, displayName });
-    return { memberId: joined.member.memberId, memberKey: joined.memberKey };
+    return { personId: joined.member.personId, personKey: joined.personKey };
   };
 
   return { groupId, owner, li: addMember('李四'), wang: addMember('王五') };
@@ -56,7 +56,7 @@ test('remove drops the member but keeps their messages', () => {
     const { groupId, owner, li } = seed(env.store);
     env.store.post({ groupId, member: li, text: '我发的这条不能消失' });
 
-    const removed = env.store.removeMember({ groupId, member: owner, targetMemberId: li.memberId });
+    const removed = env.store.removeMember({ groupId, member: owner, targetPersonId: li.personId });
     assert.equal(removed.removed, true);
     assert.equal(removed.displayName, '李四');
 
@@ -65,7 +65,7 @@ test('remove drops the member but keeps their messages', () => {
     const page = env.store.read({ groupId, member: owner, sinceSeq: 0 });
     assert.ok(page.entries.some((entry) => entry.text === '我发的这条不能消失'));
     assert.equal(
-      page.entries.some((entry) => entry.from?.memberId === li.memberId),
+      page.entries.some((entry) => entry.from?.personId === li.personId),
       true,
       'the removed member still appears as the author of their own history',
     );
@@ -78,7 +78,7 @@ test('remove writes a system entry naming who and why', () => {
   const env = harness();
   try {
     const { groupId, owner, li } = seed(env.store);
-    env.store.removeMember({ groupId, member: owner, targetMemberId: li.memberId, reason: '转岗' });
+    env.store.removeMember({ groupId, member: owner, targetPersonId: li.personId, reason: '转岗' });
 
     const page = env.store.read({ groupId, member: owner, sinceSeq: 0 });
     const system = page.entries.filter((entry) => entry.kind === 'system');
@@ -96,7 +96,7 @@ test('a removed member can no longer post', () => {
   const env = harness();
   try {
     const { groupId, owner, li } = seed(env.store);
-    env.store.removeMember({ groupId, member: owner, targetMemberId: li.memberId });
+    env.store.removeMember({ groupId, member: owner, targetPersonId: li.personId });
     assert.throws(
       () => env.store.post({ groupId, member: li, text: '还能说话吗' }),
       (error) => error instanceof GroupError && error.code === 'not_member',
@@ -111,7 +111,7 @@ test('the owner cannot remove themselves', () => {
   try {
     const { groupId, owner } = seed(env.store);
     assert.throws(
-      () => env.store.removeMember({ groupId, member: owner, targetMemberId: owner.memberId }),
+      () => env.store.removeMember({ groupId, member: owner, targetPersonId: owner.personId }),
       (error) => error.code === 'bad_argument' && /leave/.test(error.message),
     );
   } finally {
@@ -124,7 +124,7 @@ test('a non-owner cannot remove anybody', () => {
   try {
     const { groupId, li, wang } = seed(env.store);
     assert.throws(
-      () => env.store.removeMember({ groupId, member: li, targetMemberId: wang.memberId }),
+      () => env.store.removeMember({ groupId, member: li, targetPersonId: wang.personId }),
       (error) => error.code === 'not_owner',
     );
   } finally {
@@ -137,7 +137,7 @@ test('removing somebody who is not in the group is a clear error', () => {
   try {
     const { groupId, owner } = seed(env.store);
     assert.throws(
-      () => env.store.removeMember({ groupId, member: owner, targetMemberId: 'm-nobody' }),
+      () => env.store.removeMember({ groupId, member: owner, targetPersonId: 'm-nobody' }),
       (error) => error.code === 'not_member',
     );
   } finally {

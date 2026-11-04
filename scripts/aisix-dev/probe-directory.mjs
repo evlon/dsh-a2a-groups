@@ -60,7 +60,7 @@ async function call(skill, data = {}, text = skill) {
 // ---------------------------------------------------------------------------
 console.log('1. the directory is browsable WITHOUT a credential');
 //
-// No memberKey anywhere in this call: that is the point. A person who has not
+// No personKey anywhere in this call: that is the point. A person who has not
 // joined anything must be able to see what a host offers, or the invite flow has
 // no first step.
 const listing = await call('group/directory', {});
@@ -76,7 +76,7 @@ if (rows.length > 0) {
   check('a row carries what a person needs to decide', first.name !== undefined && first.memberCount !== undefined
     && first.joinPolicy !== undefined, first.name);
   // The boundaries. Each of these is a field that must NOT exist.
-  check('no member identities', first.members === undefined && first.memberIds === undefined, 'absent');
+  check('no member identities', first.members === undefined && first.personIds === undefined, 'absent');
   check('no feed content', first.feed === undefined && first.entries === undefined && first.lastMessage === undefined,
     'absent');
   check('no owner identity', first.owner === undefined, 'absent');
@@ -86,7 +86,7 @@ if (rows.length > 0) {
 // ---------------------------------------------------------------------------
 console.log('\n2. the raw response never carries a credential or a member name');
 const raw = JSON.stringify(listing.data);
-check('no memberKey in the directory', !/mk_[A-Za-z0-9_-]{10,}/.test(raw), 'no key pattern');
+check('no personKey in the directory', !/mk_[A-Za-z0-9_-]{10,}/.test(raw), 'no key pattern');
 check('no password field', !raw.includes('passwordHash') && !raw.includes('"password"'), 'no password');
 check('no key hash', !raw.includes('keyHash'), 'no hash');
 
@@ -148,9 +148,9 @@ check('searching for it by name finds nothing',
 
 // ---------------------------------------------------------------------------
 console.log('\n6. the directory agrees with a member\'s own view on the countable facts');
-const memberId = /memberId:\s*(\S+)/.exec(created.text)?.[1];
-const memberKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
-const selfView = await call('group/members', { groupId, memberId, memberKey });
+const personId = /personId:\s*(\S+)/.exec(created.text)?.[1];
+const personKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
+const selfView = await call('group/members', { groupId, personId, personKey });
 const dirRow = (afterSecret.data?.groups ?? []).find((group) => group.groupId === groupId);
 check('member count agrees', dirRow?.memberCount === (selfView.data?.members ?? []).length,
   `${dirRow?.memberCount} vs ${(selfView.data?.members ?? []).length}`);

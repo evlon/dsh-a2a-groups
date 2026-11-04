@@ -4,12 +4,12 @@
 // row the panel renders came from the server. Only the CACHE write is local — that is
 // what `a2a_group_info` does, and the panel reads the ledger rather than the network.
 //
-//   node scripts/aisix-dev/seed-members.mjs <sessionId> <groupId> <memberId> <memberKey>
+//   node scripts/aisix-dev/seed-members.mjs <sessionId> <groupId> <personId> <personKey>
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const [sessionId, groupId, memberId, memberKey] = process.argv.slice(2);
-if ([sessionId, groupId, memberId, memberKey].some((value) => value === undefined)) {
-  throw new Error('usage: seed-members.mjs <sessionId> <groupId> <memberId> <memberKey>');
+const [sessionId, groupId, personId, personKey] = process.argv.slice(2);
+if ([sessionId, groupId, personId, personKey].some((value) => value === undefined)) {
+  throw new Error('usage: seed-members.mjs <sessionId> <groupId> <personId> <personKey>');
 }
 
 const HOST = 'http://127.0.0.1:3095/a2a';
@@ -43,7 +43,7 @@ async function call(skill, data) {
   return body.result.task.metadata?.result;
 }
 
-const creds = { groupId, memberId, memberKey };
+const creds = { groupId, personId, personKey };
 const info = await call('group/info', creds);
 const roster = await call('group/members', creds);
 const page = await call('group/read', { ...creds, sinceSeq: 0, limit: 20 });
@@ -63,8 +63,8 @@ if (!Array.isArray(state.memberships)) state.memberships = [];
 const record = {
   sessionId,
   groupId,
-  memberId,
-  memberKey,
+  personId,
+  personKey,
   local: false,
   baseUrl: HOST,
   groupName: info.name,
@@ -78,7 +78,7 @@ const record = {
   // The roster the panel draws. `group/members` is the only source that may name
   // people, and it needs a member credential — which this script has.
   members: roster.members.map((member) => ({
-    memberId: member.memberId,
+    personId: member.personId,
     displayName: member.displayName,
     role: member.role,
     online: member.online === true,

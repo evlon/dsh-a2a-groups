@@ -217,7 +217,7 @@ const PANEL_FEED_TAIL = 8;
           discovered: false,
           name: summary?.name ?? record.groupName ?? record.groupId,
           topic: summary?.topic ?? '',
-          role: summary?.owner?.memberId === record.memberId ? 'owner' : record.role ?? 'member',
+          role: summary?.owner?.personId === record.personId ? 'owner' : record.role ?? 'member',
           // A remote group has no local snapshot, so the counts come from what the
           // member-side tool cached after calling group/info. Zero would read as
           // \"this group is empty\" rather than \"not fetched yet\", which is the difference

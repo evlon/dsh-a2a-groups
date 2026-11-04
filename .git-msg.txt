@@ -1,30 +1,44 @@
-feat: colleague cards that say something, with mine first
+refactor: personId identifies a person; add the persons table
 
-The card list read "李四 · 在 1 个群" — a number the reader could derive by looking at the
-list beneath it, and one that says nothing about the person. The reader is looking at the
-card from inside a group they already share, so it restated the premise.
+Two changes that belong together, because the second is what makes the first true.
 
-Three fixes, each answering a different question:
+IDENTITY
 
-- WHAT they do: the role they declared. It was already being collected and then thrown
-  away in favour of the group count.
-- WHERE they do it: the group names, so I know which context to approach them in.
-- WHETHER now is a good time: an online dot. The group COUNT is gone rather than demoted —
-  a number the reader can derive is not information.
+`memberId` was minted per join, so one person in two groups was two ids. That leaked into
+everything a person touches: `@` somebody by id worked in one group and not the other, and a
+colleague card had to be stitched together across groups by display name.
 
-And my own card now comes first, marked 「我」, outlined, with a line saying how to change it.
-Every other card is read-only by nature; mine is the only one I own, and "what do others see
-when they look at me" comes before "who else is around".
+The allocation was already globally unique — it checked every group before returning — so the
+id space was right and only the reuse was missing. Now a join reuses the id the caller already
+holds, which is what `@` needs and what makes "who is this" answerable across groups.
 
-Root cause of the empty cards: `group/info` deliberately returned no roster, so the only
-rosters ever cached were the ones a dev script wrote — meaning no `roleAbout` and no `tags`
-reached a card. It now carries the roster, which does not widen who can see it: the skill
-already required a member credential, and `group/members` already returns the same rows to
-the same caller.
+Renamed to say so: memberId → personId, memberKey → personKey, ownerMemberId → ownerPersonId,
+targetMemberId → targetPersonId, allocateMemberId → allocatePersonId. 686 occurrences across 21
+files, plus 213 in the probe scripts.
 
-Ownership is decided by member id from the ledger, never by display name: two people can
-share a name, and mistaking a stranger's row for mine would offer an edit that changes the
-wrong person's profile. A test pins that.
+Deliberately NOT renamed: `group.members[]`. A membership row carries role, joinedAt and
+roleAbout — facts about the RELATIONSHIP, not the person. Calling it `persons` would erase the
+distinction the whole change is about.
 
-Verification: 359 tests (4 new for self-identity), and the live page shows 李四「我」 first
-with 我在这个群做测试 / 测试, then 王五 兼产品 / 产品 研发, then 张工 转到后端 / 研发 后端.
+The credential is still per-group. `resolveMember` looks the id up inside ONE group and compares
+against that group's keyHash, so a key minted in A cannot authenticate in B. A stable id does not
+make a key portable.
+
+PROFILES
+
+A `persons` table: one row per person, `{ personId, displayName, headline, tags, endpoint }`,
+stored beside `groups` in the same file. Layer A (what I do in THIS group) stays on the
+membership row, because it differs per group; a card now shows the group-independent profile
+instead of restating which groups the reader already shares.
+
+Old data is cleared rather than migrated, by decision: a `personId ?? memberId` read path would
+live in the repository forever to serve files nobody keeps.
+
+One bug worth recording: the first version of the reuse rejected a preferred id that was already
+taken — but a person's own id IS already taken, by their first group. Every new group minted a
+second identity for the same human. The check now honours the id unconditionally, keeping only a
+shape test so a foreign id cannot enter this store.
+
+Verification: 359 tests, MCP probe OK, standalone host OK, and end to end over A2A — same
+personId across two groups, @ by personId resolves, rename/remove/archive all work, history
+survives removal.

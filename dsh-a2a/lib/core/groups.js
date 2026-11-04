@@ -364,13 +364,13 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *
    * A WeakMap instead of a WeakSet, and frozen views, because a verified object
    * that the caller can still edit is not a verified identity: with a WeakSet,
-   * `member.memberId = victimId` on your own view would make `post()` act as the
+   * `member.personId = victimId` on your own view would make `post()` act as the
    * victim. Binding the id inside the WeakMap means the identity used for the
    * lookup is the one captured at authentication time, and freezing the view
    * stops the mutation from happening in the first place.
    */
   const authenticated = new WeakMap();
-  /** In-memory token buckets, keyed `groupId\u0000memberId`. Never persisted: see `consume`. */
+  /** In-memory token buckets, keyed `groupId\u0000personId`. Never persisted: see `consume`. */
   const buckets = new Map();
   /**
    * Wrong-password timestamps, keyed by group id.
@@ -382,7 +382,29 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   /** Live subscribers, keyed by group id. */
   const subscribers = new Map();
 
+  /**
+   * personId → the person's own profile.
+   *
+   * Keyed by `personId`, which identifies a person across every group on this host. One row
+   * per person, so "what I do" is stored once rather than repeated per membership.
+   *
+   * Declared BEFORE `loadState()` because the load hydrates it: a `const` sits in the temporal
+   * dead zone until its own line runs, and touching it earlier throws.
+   */
+  const persons = new Map();
+
   let state = loadState();
+  // Populated once at startup: a profile read is far more common than a profile write.
+  for (const entry of state.persons ?? []) {
+    persons.set(entry.personId, {
+      personId: entry.personId,
+      displayName: typeof entry.displayName === 'string' ? entry.displayName : '',
+      headline: typeof entry.headline === 'string' ? entry.headline : '',
+      tags: Array.isArray(entry.tags) ? entry.tags.filter((tag) => typeof tag === 'string') : [],
+      endpoint: typeof entry.endpoint === 'string' ? entry.endpoint : '',
+      updatedAt: Number.isFinite(entry.updatedAt) ? entry.updatedAt : 0,
+    });
+  }
   let dirty = false;
 
   // -------------------------------------------------------------------------
@@ -408,6 +430,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {string} [input.topic]
    * @param {string} [input.ownerDisplayName]
    * @param {object} [input.settings] per-group overrides of the store defaults
+   * @param {string} [input.personId] the id this person already holds in another group, so
+   *   creating a second group does not mint a second identity for the same human
    * @returns {{group: object, ownerKey: string}}
    */
   function create(input = {}) {
@@ -421,7 +445,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
 
     const groupId = allocateGroupId();
     const createdAt = now();
-    const ownerMemberId = allocateMemberId();
+    const ownerPersonId = allocatePersonId(input.personId);
     const ownerKey = randomToken(32);
 
     const group = {
@@ -429,7 +453,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       name,
       topic,
       createdAt,
-      ownerMemberId,
+      ownerPersonId,
       // No `passwordHash`: see the doc comment on `create`. Admission is an invite
       // token or an approved request, both of which are revocable per person.
       settings: mergeSettings(input.settings),
@@ -439,7 +463,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       requests: [],
       members: [
         {
-          memberId: ownerMemberId,
+          personId: ownerPersonId,
           displayName: ownerDisplayName,
           role: 'owner',
           keyHash: sha256Hex(ownerKey),
@@ -509,7 +533,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Owner-only, unconditionally. The owner credential is what makes minting an
     // act of the person who can also revoke; allowing any member to mint would let
     // somebody create links the owner cannot attribute.
-    const owner = group.members.find((entry) => entry.memberId === group.ownerMemberId);
+    const owner = group.members.find((entry) => entry.personId === group.ownerPersonId);
     if (owner === undefined) {
       throw new GroupError('not_owner', '这个群现在没有群主，无法生成邀请。');
     }
@@ -608,7 +632,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {string} [input.token] invite token
    * @param {string} [input.displayName]
    * @param {string} [input.endpoint] optional callback address for the member
-   * @returns {{member: object, memberKey: string, group: object, feedTail: object[]}}
+   * @returns {{member: object, personKey: string, group: object, feedTail: object[]}}
    */
   function join(input = {}) {
     const group = requireGroup(input.groupId);
@@ -640,12 +664,14 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       });
     }
 
-    const memberKey = `mk_${randomToken(32)}`;
+    const personKey = `mk_${randomToken(32)}`;
     const member = {
-      memberId: allocateMemberId(),
+      // The caller may present an id it already holds from another group; reusing it is what
+      // makes this person the same person here.
+      personId: allocatePersonId(input.personId),
       displayName,
       role: 'member',
-      keyHash: sha256Hex(memberKey),
+      keyHash: sha256Hex(personKey),
       joinedAt: at,
       lastSeenAt: at,
       endpoint,
@@ -657,19 +683,22 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       profileUpdatedAt: at,
     };
     group.members.push(member);
+    // Join is the only chance to learn a member's address, so it is kept on their profile as
+    // well as the membership row.
+    noteEndpoint(member.personId, endpoint);
     appendSystem(group, `${displayName} 加入了群`);
     persist();
 
     log.info('member joined', {
       groupId: group.groupId,
-      memberId: member.memberId,
+      personId: member.personId,
       inviteId: usedInvite?.inviteId,
-      memberKey: redact(memberKey),
+      personKey: redact(personKey),
     });
 
     return {
       member: publicMember(member, at),
-      memberKey,
+      personKey,
       group: withFeedTail(group, at),
       feedTail: group.feed.slice(-FEED_TAIL_LIMIT).map((entry) => publicEntry(entry)),
     };
@@ -686,26 +715,26 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *
    * The returned object is registered in a WeakMap. That is what lets later calls
    * (`post`, `read`, …) accept it without asking for the key again, while still
-   * refusing a hand-built `{memberId}` object — the difference between "came out
+   * refusing a hand-built `{personId}` object — the difference between "came out
    * of authenticate()" and "was constructed by the caller" is unforgeable.
    *
    * @param {object} input
    * @param {string} input.groupId
-   * @param {string} input.memberId
-   * @param {string} input.memberKey
+   * @param {string} input.personId
+   * @param {string} input.personKey
    * @returns {object|undefined} a public member view (never contains `keyHash`)
    */
   function authenticate(input = {}) {
     const group = findGroup(input.groupId);
-    const supplied = sha256Hex(typeof input.memberKey === 'string' ? input.memberKey : '');
+    const supplied = sha256Hex(typeof input.personKey === 'string' ? input.personKey : '');
     if (group === undefined) {
       // Compare against a dummy digest so an unknown group costs the same as a
       // wrong key; a fast "no such group" path would leak group existence.
       compareSecrets(supplied, dummyKeyHash());
       return undefined;
     }
-    const memberId = typeof input.memberId === 'string' ? input.memberId : '';
-    const member = group.members.find((entry) => entry.memberId === memberId);
+    const personId = typeof input.personId === 'string' ? input.personId : '';
+    const member = group.members.find((entry) => entry.personId === personId);
     if (member === undefined) {
       compareSecrets(supplied, dummyKeyHash());
       return undefined;
@@ -718,7 +747,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     member.lastSeenAt = at; // in-memory only; the next mutation or flush persists it
     dirty = true;
     const view = deepFreeze(publicMember(member, at));
-    authenticated.set(view, member.memberId);
+    authenticated.set(view, member.personId);
     return view;
   }
 
@@ -733,7 +762,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *
    * @param {object} input
    * @param {string} input.groupId
-   * @param {object} input.member authenticated member (or `{memberId, memberKey}`)
+   * @param {object} input.member authenticated member (or `{personId, personKey}`)
    * @param {string} [input.text]
    * @param {object} [input.payload] structured payload; not interpreted here
    * @returns {{seq: number, msgId: string, at: number, atIso: string}}
@@ -776,7 +805,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       at,
       msgId: randomUUID(),
       kind: 'message',
-      from: { memberId: member.memberId, displayName: member.displayName },
+      from: { personId: member.personId, displayName: member.displayName },
       text,
       payload,
       // Absent rather than an empty array when nobody was addressed: the distinction
@@ -822,14 +851,14 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
         // the whole group, and keeping both would make the grading logic pick one.
         return [MENTION_ALL];
       }
-      const byId = group.members.find((member) => member.memberId === token);
+      const byId = group.members.find((member) => member.personId === token);
       if (byId !== undefined) {
-        if (!out.includes(byId.memberId)) out.push(byId.memberId);
+        if (!out.includes(byId.personId)) out.push(byId.personId);
         continue;
       }
       const byName = group.members.filter((member) => member.displayName === token);
       if (byName.length === 1) {
-        if (!out.includes(byName[0].memberId)) out.push(byName[0].memberId);
+        if (!out.includes(byName[0].personId)) out.push(byName[0].personId);
       }
     }
     return out.slice(0, MAX_MENTIONS_PER_POST);
@@ -903,22 +932,22 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * doing it over the network would put a round trip inside card rendering.
    *
    * This is safe to expose because it is not a lookup service: it returns a view
-   * only for a `memberId` the caller already knows, and it reveals nothing beyond
+   * only for a `personId` the caller already knows, and it reveals nothing beyond
    * what `members()` would show to any member of that group. It cannot be used to
    * enumerate members (`members()` requires a credential for that) and it exposes
    * no key material.
    *
    * @param {object} input
    * @param {string} input.groupId
-   * @param {string} input.memberId
+   * @param {string} input.personId
    * @returns {object|undefined} the public member view, or undefined.
    */
   function memberView(input = {}) {
     const group = findGroup(input.groupId);
     if (group === undefined) return undefined;
-    const memberId = typeof input.memberId === 'string' ? input.memberId : '';
-    if (memberId === '') return undefined;
-    const member = group.members.find((entry) => entry.memberId === memberId);
+    const personId = typeof input.personId === 'string' ? input.personId : '';
+    if (personId === '') return undefined;
+    const member = group.members.find((entry) => entry.personId === personId);
     if (member === undefined) return undefined;
     return publicMember(member, now());
   }
@@ -968,10 +997,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *
    * @param {object} input
    * @param {string} input.groupId
-   * @param {object} input.member authenticated member view, or `{memberId, memberKey}`
+   * @param {object} input.member authenticated member view, or `{personId, personKey}`
    * @param {string} [input.about] one sentence; omit to leave unchanged
    * @param {string[]} [input.tags] up to MAX_TAGS short labels; `[]` clears them
-   * @returns {{memberId: string, roleAbout: (string|undefined), tags: string[], updatedAt: number}}
+   * @returns {{personId: string, roleAbout: (string|undefined), tags: string[], updatedAt: number}}
    */
   function setProfile(input = {}) {
     const group = requireGroup(input.groupId);
@@ -993,11 +1022,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     appendSystem(group, `${member.displayName} 更新了本群角色`);
     log.info('member profile updated', {
       groupId: group.groupId,
-      memberId: member.memberId,
+      personId: member.personId,
       tags: member.tags,
     });
     return {
-      memberId: member.memberId,
+      personId: member.personId,
       roleAbout: member.roleAbout,
       tags: [...member.tags],
       updatedAt: at,
@@ -1021,25 +1050,25 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {object} input
    * @param {string} input.groupId
    * @param {object} input.member owner credential
-   * @param {string} input.targetMemberId who to remove
+   * @param {string} input.targetPersonId who to remove
    * @param {string} [input.reason] one line for the system entry
-   * @returns {{removed: boolean, memberId: string, feedSeq: number|undefined}}
+   * @returns {{removed: boolean, personId: string, feedSeq: number|undefined}}
    */
   function removeMember(input = {}) {
     const group = requireGroup(input.groupId);
     const owner = resolveMember(group, input.member);
-    if (owner.memberId !== group.ownerMemberId) {
+    if (owner.personId !== group.ownerPersonId) {
       throw new GroupError('not_owner', '只有群主可以移除成员。');
     }
-    const targetId = typeof input.targetMemberId === 'string' ? input.targetMemberId.trim() : '';
-    if (targetId === '') throw new GroupError('bad_argument', '缺少 targetMemberId。');
-    if (targetId === owner.memberId) {
+    const targetId = typeof input.targetPersonId === 'string' ? input.targetPersonId.trim() : '';
+    if (targetId === '') throw new GroupError('bad_argument', '缺少 targetPersonId。');
+    if (targetId === owner.personId) {
       throw new GroupError(
         'bad_argument',
         '群主不能用移除操作离开：请用 group/leave，它会把群主身份交给下一位成员。',
       );
     }
-    const index = group.members.findIndex((entry) => entry.memberId === targetId);
+    const index = group.members.findIndex((entry) => entry.personId === targetId);
     if (index < 0) throw new GroupError('not_member', '要移除的人不在这个群里。');
 
     const target = group.members[index];
@@ -1047,7 +1076,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // The rate-limit bucket is keyed by group+member; leaving it behind would leak one
     // entry per removal for the life of the process.
     for (const key of buckets.keys()) {
-      if (key === `${group.groupId}\u0000${target.memberId}`) buckets.delete(key);
+      if (key === `${group.groupId}\u0000${target.personId}`) buckets.delete(key);
     }
 
     const reason = optionalText(input.reason, MAX_REQUEST_REASON_CHARS, '原因');
@@ -1056,10 +1085,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       `${owner.displayName} 将 ${target.displayName} 移出了群${reason === undefined ? '' : `（${reason}）`}`,
     );
     persist();
-    log.info('member removed', { groupId: group.groupId, memberId: target.memberId, by: owner.memberId });
+    log.info('member removed', { groupId: group.groupId, personId: target.personId, by: owner.personId });
     return {
       removed: true,
-      memberId: target.memberId,
+      personId: target.personId,
       displayName: target.displayName,
       feedSeq: group.nextSeq - 1,
     };
@@ -1082,7 +1111,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   function renameGroup(input = {}) {
     const group = requireGroup(input.groupId);
     const owner = resolveMember(group, input.member);
-    if (owner.memberId !== group.ownerMemberId) {
+    if (owner.personId !== group.ownerPersonId) {
       throw new GroupError('not_owner', '只有群主可以改群名或主题。');
     }
 
@@ -1133,7 +1162,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   function archiveGroup(input = {}) {
     const group = requireGroup(input.groupId);
     const owner = resolveMember(group, input.member);
-    if (owner.memberId !== group.ownerMemberId) {
+    if (owner.personId !== group.ownerPersonId) {
       throw new GroupError('not_owner', '只有群主可以归档或恢复群。');
     }
     const archived = input.archived !== false;
@@ -1163,25 +1192,25 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    */
   function leave(input = {}) {    const group = requireGroup(input.groupId);
     const member = resolveMember(group, input.member);
-    const index = group.members.findIndex((entry) => entry.memberId === member.memberId);
+    const index = group.members.findIndex((entry) => entry.personId === member.personId);
     group.members.splice(index, 1);
     for (const key of buckets.keys()) {
-      if (key === `${group.groupId}\u0000${member.memberId}`) buckets.delete(key);
+      if (key === `${group.groupId}\u0000${member.personId}`) buckets.delete(key);
     }
     appendSystem(group, `${member.displayName} 退出了群`);
 
-    if (member.memberId === group.ownerMemberId) {
+    if (member.personId === group.ownerPersonId) {
       const next = [...group.members].sort((a, b) => a.joinedAt - b.joinedAt)[0];
       if (next === undefined) {
-        group.ownerMemberId = undefined; // no members left; the group is inert but retained
+        group.ownerPersonId = undefined; // no members left; the group is inert but retained
       } else {
         next.role = 'owner';
-        group.ownerMemberId = next.memberId;
+        group.ownerPersonId = next.personId;
         appendSystem(group, `${next.displayName} 成为新群主`);
       }
     }
     persist();
-    log.info('member left', { groupId: group.groupId, memberId: member.memberId });
+    log.info('member left', { groupId: group.groupId, personId: member.personId });
     return true;
   }
 
@@ -1201,7 +1230,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    */
   function revokeInvite(input = {}) {
     const group = requireGroup(input.groupId);
-    const owner = group.members.find((entry) => entry.memberId === group.ownerMemberId);
+    const owner = group.members.find((entry) => entry.personId === group.ownerPersonId);
     const supplied = sha256Hex(typeof input.ownerKey === 'string' ? input.ownerKey : '');
     if (owner === undefined || !compareSecrets(supplied, owner.keyHash)) {
       throw new GroupError('not_owner', '只有群主可以撤销邀请。');
@@ -1401,7 +1430,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   function listRequests(input = {}) {
     const group = requireGroup(input.groupId);
     const member = resolveMember(group, input.member);
-    if (member.memberId !== group.ownerMemberId) {
+    if (member.personId !== group.ownerPersonId) {
       throw new GroupError('not_owner', '只有群主可以查看入群申请。');
     }
     const at = now();
@@ -1440,7 +1469,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   function decideRequest(input = {}) {
     const group = requireGroup(input.groupId);
     const member = resolveMember(group, input.member);
-    if (member.memberId !== group.ownerMemberId) {
+    if (member.personId !== group.ownerPersonId) {
       throw new GroupError('not_owner', '只有群主可以审批入群申请。');
     }
     const requestId = typeof input.requestId === 'string' ? input.requestId.trim() : '';
@@ -1466,7 +1495,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       groupId: group.groupId,
       requestId,
       status: request.status,
-      by: member.memberId,
+      by: member.personId,
     });
     // A system line so members can see the door working, without naming the
     // applicant's stated reason (that was written for the owner, not the group).
@@ -1503,7 +1532,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {string} input.groupId
    * @param {string} input.requestId
    * @param {string} input.claimKey the secret from `requestJoin`
-   * @returns {{member: object, memberKey: string, group: object}}
+   * @returns {{member: object, personKey: string, group: object}}
    */
   function claimJoin(input = {}) {
     const group = requireGroup(input.groupId);
@@ -1541,12 +1570,12 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       throw new GroupError('group_full', `该群成员已达上限（${MAX_MEMBERS_PER_GROUP}）。`);
     }
 
-    const memberKey = `mk_${randomToken(32)}`;
+    const personKey = `mk_${randomToken(32)}`;
     const member = {
-      memberId: allocateMemberId(),
+      personId: allocatePersonId(),
       displayName: request.displayName,
       role: 'member',
-      keyHash: sha256Hex(memberKey),
+      keyHash: sha256Hex(personKey),
       joinedAt: at,
       lastSeenAt: at,
       endpoint: undefined,
@@ -1559,8 +1588,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     request.claimedAt = at;
     appendSystem(group, `${request.displayName} 通过申请加入了群`);
     persist();
-    log.info('join claimed', { groupId: group.groupId, memberId: member.memberId });
-    return { member: publicMember(member, at), memberKey, group: publicGroup(group) };
+    log.info('join claimed', { groupId: group.groupId, personId: member.personId });
+    return { member: publicMember(member, at), personKey, group: publicGroup(group) };
   }
 
   /**
@@ -1602,7 +1631,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *
    * Concretely, each row carries the group's name, topic, join policy, member
    * count and last-activity time — the things a person needs to decide whether to
-   * ask for an invite — and nothing else. No member identities, no `memberId`
+   * ask for an invite — and nothing else. No member identities, no `personId`
    * list, no feed text, no invite tokens, no owner id. A caller who wants any of
    * that must present a member credential and use `members()` / `read()`.
    *
@@ -1693,6 +1722,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Layer A: re-declare what I am in this group. Only ever applies to the
     // caller's own membership — never another member's.
     setProfile,
+    // The person layer: one profile per person, independent of any group. Kept beside the
+    // group API because it lives in the same file, not because it is the same concept.
+    personProfile,
+    setPersonProfile,
+    listPersons,
     // Owner-only group administration. `remove` keeps the target's messages, `rename`
     // fixes a name without losing history, and `archive` retires a group reversibly.
     removeMember,
@@ -1749,32 +1783,32 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *
    * Two accepted forms, and only two: an object that came out of
    * `authenticate()` in this process (unforgeable, tracked in a WeakMap), or an
-   * object carrying `memberId` + `memberKey`. A bare `{memberId}` is rejected —
+   * object carrying `personId` + `personKey`. A bare `{personId}` is rejected —
    * that is the shape a JSON body has, and accepting it would turn any A2A caller
    * into any member.
    */
   function resolveMember(group, candidate) {
     if (!isPlainObject(candidate)) {
-      throw new GroupError('not_member', '缺少成员身份：请先入群，或用 memberId + memberKey 调用。');
+      throw new GroupError('not_member', '缺少成员身份：请先入群，或用 personId + personKey 调用。');
     }
     // An authenticated view carries its identity inside the WeakMap, not in a
-    // field, so editing `candidate.memberId` cannot change who the caller is.
+    // field, so editing `candidate.personId` cannot change who the caller is.
     const authenticatedId = authenticated.get(candidate);
-    const memberId = authenticatedId ?? (typeof candidate.memberId === 'string' ? candidate.memberId : '');
-    const record = group.members.find((entry) => entry.memberId === memberId);
+    const personId = authenticatedId ?? (typeof candidate.personId === 'string' ? candidate.personId : '');
+    const record = group.members.find((entry) => entry.personId === personId);
 
     if (authenticatedId !== undefined) {
-      if (record === undefined) throw new GroupError('not_member', '你已不在这个群里。', { memberId });
+      if (record === undefined) throw new GroupError('not_member', '你已不在这个群里。', { personId });
       return record;
     }
 
-    const supplied = sha256Hex(typeof candidate.memberKey === 'string' ? candidate.memberKey : '');
+    const supplied = sha256Hex(typeof candidate.personKey === 'string' ? candidate.personKey : '');
     if (record === undefined) {
       compareSecrets(supplied, dummyKeyHash());
-      throw new GroupError('not_member', '成员凭证无效：你已不在这个群里，或凭证已失效。', { memberId });
+      throw new GroupError('not_member', '成员凭证无效：你已不在这个群里，或凭证已失效。', { personId });
     }
     if (!compareSecrets(supplied, record.keyHash)) {
-      throw new GroupError('not_member', '成员凭证无效：你已不在这个群里，或凭证已失效。', { memberId });
+      throw new GroupError('not_member', '成员凭证无效：你已不在这个群里，或凭证已失效。', { personId });
     }
     return record;
   }
@@ -1854,7 +1888,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    */
   function consume(group, member) {
     const capacity = group.settings.maxPostsPerMinute;
-    const key = `${group.groupId}\u0000${member.memberId}`;
+    const key = `${group.groupId}\u0000${member.personId}`;
     const at = now();
     const bucket = buckets.get(key) ?? { tokens: capacity, updatedAt: at };
     const elapsed = Math.max(0, at - bucket.updatedAt);
@@ -1882,7 +1916,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       at: now(),
       msgId: randomUUID(),
       kind: 'system',
-      from: { memberId: 'system', displayName: '系统' },
+      from: { personId: 'system', displayName: '系统' },
       text,
     };
     group.nextSeq += 1;
@@ -1924,7 +1958,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     try {
       raw = readFileSync(file, 'utf8');
     } catch (error) {
-      if (error?.code === 'ENOENT') return { version: 1, groups: [] };
+      if (error?.code === 'ENOENT') return { version: 1, groups: [], persons: [] };
       // Unreadable for any other reason (permissions, EIO) must not be treated as
       // "empty": starting empty would silently drop every group and credential.
       throw new GroupError('storage_unreadable', `无法读取群状态文件 ${file}：${error?.code ?? error?.message ?? 'unknown'}。`, {
@@ -1939,10 +1973,16 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // old install kept credentials world-readable.
       bestEffortChmod(file, 0o600);
       const parsed = JSON.parse(raw);
-      return {
-        version: 1,
-        groups: Array.isArray(parsed?.groups) ? parsed.groups.map(sanitizeGroup).filter((group) => group !== undefined) : [],
-      };
+      const loadedGroups = Array.isArray(parsed?.groups)
+        ? parsed.groups.map(sanitizeGroup).filter((group) => group !== undefined)
+        : [];
+      // A file written before this table existed yields an empty one, and `listPersons`
+      // reconstructs names and endpoints from the membership rows. Nobody is lost; they simply
+      // have no headline until somebody sets one.
+      const loadedPersons = Array.isArray(parsed?.persons)
+        ? parsed.persons.filter((entry) => isPlainObject(entry) && typeof entry.personId === 'string')
+        : [];
+      return { version: 1, groups: loadedGroups, persons: loadedPersons };
     } catch (error) {
       // Corrupt JSON: keep the bytes for a human, start clean, and make noise. The
       // alternative (refusing to mount) turns a single bad byte into "the plugin
@@ -1959,7 +1999,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
         backup,
         error: error?.message ?? String(error),
       });
-      return { version: 1, groups: [] };
+      return { version: 1, groups: [], persons: [] };
     }
   }
 
@@ -1991,7 +2031,13 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     prune();
     let payload;
     try {
-      payload = JSON.stringify({ version: 1, groups: state.groups }, null, 2);
+      // One file for everything the host owns. A second file would be a second write that can
+      // half-succeed, and the two halves would drift after a crash.
+      payload = JSON.stringify(
+        { version: 1, groups: state.groups, persons: [...persons.values()] },
+        null,
+        2,
+      );
     } catch (error) {
       throw new GroupError('bad_argument', `群状态无法序列化：${error?.message ?? String(error)}。`, {
         cause: error?.name,
@@ -2024,10 +2070,152 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   }
 
   /** Allocate an unused member id within the current state. */
-  function allocateMemberId() {
+  /**
+   * Read one person's profile, or a blank one for somebody never seen.
+   *
+   * @param {string} personId - the person.
+   * @returns {object} the profile.
+   */
+  function personProfile(personId) {
+    const record = persons.get(personId);
+    if (record === undefined) {
+      return { personId, displayName: '', headline: '', tags: [], endpoint: '', updatedAt: 0 };
+    }
+    return {
+      personId: record.personId,
+      displayName: record.displayName,
+      headline: record.headline,
+      tags: [...record.tags],
+      endpoint: record.endpoint,
+      updatedAt: record.updatedAt,
+    };
+  }
+
+  /**
+   * Update a person's own profile. Self-service only.
+   *
+   * The credential comes from any group the caller belongs to, and it can only ever write
+   * its own row: there is no path here that names somebody else.
+   *
+   * @param {object} input - `{ groupId, member, displayName?, headline?, tags?, endpoint? }`.
+   * @returns {object} the stored profile.
+   */
+  function setPersonProfile(input = {}) {
+    const group = requireGroup(input.groupId);
+    const member = resolveMember(group, input.member);
+    const at = now();
+
+    const previous = persons.get(member.personId);
+    const record = {
+      personId: member.personId,
+      displayName: optionalText(input.displayName, MAX_DISPLAY_NAME_CHARS, '昵称')
+        ?? previous?.displayName
+        ?? member.displayName,
+      // A group-independent self-description. An empty string clears it; undefined leaves it.
+      headline: input.headline === undefined
+        ? (previous?.headline ?? '')
+        : (input.headline === null ? '' : optionalText(input.headline, MAX_ROLE_ABOUT_CHARS, '简介') ?? ''),
+      tags: input.tags === undefined ? (previous?.tags ?? []) : normalizeTags(input.tags),
+      endpoint: input.endpoint === undefined
+        ? (previous?.endpoint ?? '')
+        : (input.endpoint === null ? '' : optionalText(input.endpoint, MAX_ENDPOINT_CHARS, 'endpoint') ?? ''),
+      updatedAt: at,
+    };
+    persons.set(member.personId, record);
+    persist();
+    log.info('person profile updated', { personId: member.personId });
+    return personProfile(member.personId);
+  }
+
+  /**
+   * Every known person's profile.
+   *
+   * Built from the table plus the membership rows, so somebody who joined before this table
+   * existed still appears: name and endpoint come from the membership, and the headline stays
+   * empty rather than being invented.
+   *
+   * @returns {object[]} one profile per person.
+   */
+  function listPersons() {
+    /** personId → the first membership row seen, for fields the table may not have. */
+    const fromMembers = new Map();
+    for (const group of state.groups) {
+      for (const member of group.members) {
+        if (!fromMembers.has(member.personId)) fromMembers.set(member.personId, member);
+      }
+    }
+
+    const out = [];
+    for (const personId of new Set([...persons.keys(), ...fromMembers.keys()])) {
+      const stored = persons.get(personId);
+      const seen = fromMembers.get(personId);
+      out.push({
+        personId,
+        displayName: stored?.displayName || seen?.displayName || '',
+        headline: stored?.headline ?? '',
+        tags: stored?.tags ?? [],
+        endpoint: stored?.endpoint || seen?.endpoint || '',
+        updatedAt: stored?.updatedAt ?? 0,
+      });
+    }
+    return out;
+  }
+
+  /** Record an endpoint a member presented at join time, so others can reach them. */
+  function noteEndpoint(personId, endpoint) {
+    if (typeof endpoint !== 'string' || endpoint === '') return;
+    const previous = persons.get(personId);
+    persons.set(personId, {
+      personId,
+      displayName: previous?.displayName ?? '',
+      headline: previous?.headline ?? '',
+      tags: previous?.tags ?? [],
+      endpoint,
+      updatedAt: now(),
+    });
+  }
+  /**
+   * A member id for this person, reusing one they already hold when they have it.
+   *
+   * The id identifies a PERSON across every group on this host, so joining a second group
+   * keeps the id instead of minting a new one. That is what makes `@` work the same way
+   * everywhere and lets a colleague card be one card rather than a per-group fragment.
+   *
+   * A preferred id is accepted only when nobody else holds it. If it is taken — a stale value
+   * from another instance, or a hand-written one — a fresh id is allocated rather than
+   * failing: joining a group matters more than the id a caller happened to suggest.
+   *
+   * @param {string} [preferred] an id the caller already owns, e.g. from a previous join.
+   * @returns {string} the member id.
+   */
+  /**
+   * The member id for this person, reusing the one they already hold.
+   *
+   * The id identifies a PERSON across every group on this host, so joining a second group keeps
+   * it instead of minting a new one. That is what makes `@` work the same way everywhere and
+   * lets a colleague card be one card rather than a per-group fragment.
+   *
+   * A preferred id is honoured unconditionally. It is, by construction, this host's own id for
+   * the caller — it must already appear in the groups the caller belongs to, so checking "is it
+   * taken" would reject exactly the case reuse exists for. The first version did that and minted
+   * a second identity for the same person on every new group.
+   *
+   * A malformed id falls back to a fresh one: joining a group matters more than the exact shape
+   * of a caller-supplied value.
+   *
+   * @param {string} [preferred] the id this person already holds.
+   * @returns {string} the member id.
+   */
+  function allocatePersonId(preferred) {
+    if (typeof preferred === 'string') {
+      const candidate = preferred.trim();
+      // Keep the shape check: an id from a future or foreign version must not enter this store,
+      // where every other id follows \`m-<hex>\`.
+      if (/^m-[0-9a-f]{4,32}$/u.test(candidate)) return candidate;
+    }
     for (let attempt = 0; attempt < 16; attempt += 1) {
       const candidate = `m-${randomBytes(4).toString('hex')}`;
-      const taken = state.groups.some((group) => group.members.some((member) => member.memberId === candidate));
+      const taken = state.groups.some((group) => group.members.some((member) => member.personId === candidate));
       if (!taken) return candidate;
     }
     throw new GroupError('group_full', '无法分配新的成员 id，请重试。');
@@ -2069,8 +2257,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       createdAt: group.createdAt,
       createdAtIso: new Date(group.createdAt).toISOString(),
       owner: {
-        memberId: group.ownerMemberId,
-        displayName: group.members.find((member) => member.memberId === group.ownerMemberId)?.displayName,
+        personId: group.ownerPersonId,
+        displayName: group.members.find((member) => member.personId === group.ownerPersonId)?.displayName,
       },
       settings: { ...group.settings },
       memberCount: group.members.length,
@@ -2083,7 +2271,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   /** Public view of a member. Never includes `keyHash`. */
   function publicMember(member, at) {
     return {
-      memberId: member.memberId,
+      personId: member.personId,
       displayName: member.displayName,
       role: member.role,
       joinedAt: member.joinedAt,
@@ -2198,7 +2386,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const members = raw.members.filter(
       (member) =>
         isPlainObject(member) &&
-        typeof member.memberId === 'string' &&
+        typeof member.personId === 'string' &&
         typeof member.keyHash === 'string' &&
         member.keyHash.length === 64,
     );
@@ -2210,9 +2398,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       name: typeof raw.name === 'string' ? raw.name : groupId,
       topic: typeof raw.topic === 'string' ? raw.topic : '',
       createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : now(),
-      ownerMemberId: members.some((member) => member.memberId === raw.ownerMemberId)
-        ? raw.ownerMemberId
-        : members.find((member) => member.role === 'owner')?.memberId,
+      ownerPersonId: members.some((member) => member.personId === raw.ownerPersonId)
+        ? raw.ownerPersonId
+        : members.find((member) => member.role === 'owner')?.personId,
       settings: mergeSettings(raw.settings),
       invites: Array.isArray(raw.invites)
         ? raw.invites.filter((invite) => isPlainObject(invite) && typeof invite.tokenHash === 'string' && invite.tokenHash.length === 64)

@@ -6,13 +6,13 @@
 // MEMBERSHIP LEDGER, which is what `a2a_group_join` writes. Doing it through the ledger
 // keeps the test at the same layer the panel reads from.
 //
-//   node scripts/aisix-dev/member-join.mjs <sessionId> <groupId> <memberId> <memberKey> <baseUrl>
+//   node scripts/aisix-dev/member-join.mjs <sessionId> <groupId> <personId> <personKey> <baseUrl>
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-const [sessionId, groupId, memberId, memberKey, baseUrl] = process.argv.slice(2);
-if ([sessionId, groupId, memberId, memberKey].some((value) => value === undefined)) {
-  throw new Error('usage: member-join.mjs <sessionId> <groupId> <memberId> <memberKey> [baseUrl]');
+const [sessionId, groupId, personId, personKey, baseUrl] = process.argv.slice(2);
+if ([sessionId, groupId, personId, personKey].some((value) => value === undefined)) {
+  throw new Error('usage: member-join.mjs <sessionId> <groupId> <personId> <personKey> [baseUrl]');
 }
 
 const file = 'C:/Users/niukl/.dsh-a2a-dev/a2a/memberships.json';
@@ -30,8 +30,8 @@ const existing = state.memberships.findIndex(
 const record = {
   sessionId,
   groupId,
-  memberId,
-  memberKey,
+  personId,
+  personKey,
   local: false,
   baseUrl,
   groupName: undefined,

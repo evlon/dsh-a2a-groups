@@ -70,7 +70,7 @@ check('ping reports the plugin version', /"version"/.test(pingText), 'version pr
 const created = await call('group/create', { name: 'gateway proof', topic: 'proving the chain'}, 'create a group');
 const createdText = (created.body?.result?.task?.artifacts ?? []).flatMap((a) => a.parts ?? []).map((p) => p.text ?? '').join('');
 const groupId = /groupId\s*:\s*(\S+)/.exec(createdText)?.[1];
-const ownerId = /memberId:\s*(\S+)/.exec(createdText)?.[1];
+const ownerId = /personId:\s*(\S+)/.exec(createdText)?.[1];
 const ownerKey = /ownerKey:\s*(\S+)/.exec(createdText)?.[1];
 check('group/create works through the gateway', groupId !== undefined, groupId ?? createdText.slice(0, 80));
 check('group/create returns an owner credential once', ownerId !== undefined && ownerKey !== undefined, 'credential issued');
@@ -78,7 +78,7 @@ check('group/create returns an owner credential once', ownerId !== undefined && 
 // 5. An invite, which is the artifact a person actually sends to a colleague.
 if (groupId !== undefined) {
   const invited = await call('group/invite', {
-    groupId, memberId: ownerId, memberKey: ownerKey, label: 'probe',
+    groupId, personId: ownerId, personKey: ownerKey, label: 'probe',
   }, 'invite');
   const inviteText = (invited.body?.result?.task?.artifacts ?? []).flatMap((a) => a.parts ?? []).map((p) => p.text ?? '').join('');
   check('group/invite mints a link', /dsh-a2a:\/\/group\?/.test(inviteText), 'link present');

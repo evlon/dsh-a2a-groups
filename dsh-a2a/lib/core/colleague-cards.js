@@ -52,7 +52,7 @@ const MAX_GROUPS = 20;
 export function aggregateColleagueCards(records) {
   if (!Array.isArray(records)) return [];
 
-  /** memberId (or `name:<display>`) → accumulating card. */
+  /** personId (or `name:<display>`) → accumulating card. */
   const byPerson = new Map();
 
   /**
@@ -66,7 +66,7 @@ export function aggregateColleagueCards(records) {
   const selfNames = new Set();
   for (const record of records) {
     if (record === null || typeof record !== 'object') continue;
-    if (typeof record.memberId === 'string' && record.memberId !== '') selfIds.add(record.memberId);
+    if (typeof record.personId === 'string' && record.personId !== '') selfIds.add(record.personId);
   }
 
   for (const record of records) {
@@ -82,14 +82,14 @@ export function aggregateColleagueCards(records) {
       // A row with no name cannot become a card: "unnamed person" is not a colleague.
       if (name === '') continue;
 
-      const key = typeof member.memberId === 'string' && member.memberId !== ''
-        ? member.memberId
+      const key = typeof member.personId === 'string' && member.personId !== ''
+        ? member.personId
         : `name:${name}`;
 
       let card = byPerson.get(key);
       if (card === undefined) {
         card = {
-          memberId: typeof member.memberId === 'string' ? member.memberId : '',
+          personId: typeof member.personId === 'string' ? member.personId : '',
           name,
           tags: [],
           roles: [],
@@ -98,7 +98,7 @@ export function aggregateColleagueCards(records) {
           // Set from the ledger's own member id, never from the name: two people can share a
           // display name, and mistaking somebody else's row for mine would offer an edit that
           // changes the wrong person's profile.
-          isSelf: selfIds.has(member.memberId) || (typeof member.memberId !== 'string' && selfNames.has(name)),
+          isSelf: selfIds.has(member.personId) || (typeof member.personId !== 'string' && selfNames.has(name)),
         };
         byPerson.set(key, card);
       }
@@ -120,12 +120,12 @@ export function aggregateColleagueCards(records) {
       // A roster row that carries my member id confirms which card is mine. Doing it here
       // rather than only at creation also covers the case where the first roster seen for a
       // group arrived without ids.
-      if (selfIds.has(member.memberId)) card.isSelf = true;
+      if (selfIds.has(member.personId)) card.isSelf = true;
     }
   }
 
   const cards = [...byPerson.values()].map((card) => ({
-    memberId: card.memberId,
+    personId: card.personId,
     name: card.name,
     isSelf: card.isSelf === true,
     // The first role they declared. Empty when they never declared one — deliberately not a

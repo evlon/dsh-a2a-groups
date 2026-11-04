@@ -80,13 +80,13 @@ console.log('\n2. a group is created, with no password anywhere');
 const name = `独立宿主群-${Date.now() % 100000}`;
 const created = await call('group/create', { name, topic: '验证不需要 DSH', ownerDisplayName: '张工' });
 const groupId = /groupId\s*:\s*(\S+)/.exec(created.text)?.[1];
-const ownerId = /memberId:\s*(\S+)/.exec(created.text)?.[1];
+const ownerId = /personId:\s*(\S+)/.exec(created.text)?.[1];
 const ownerKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
 check('group created', groupId !== undefined, groupId);
 check('the response carries no password', !/password/i.test(created.text));
 
 console.log('\n3. an invite needs only the owner key, and states its own expiry');
-const invited = await call('group/invite', { groupId, memberId: ownerId, memberKey: ownerKey });
+const invited = await call('group/invite', { groupId, personId: ownerId, personKey: ownerKey });
 const token = /[?&]t=([A-Za-z0-9_-]+)/.exec(invited.text)?.[1];
 check('invite minted', token !== undefined, token === undefined ? '' : token.slice(0, 12));
 check('the prompt mentions no password', !/群密码/.test(invited.text));
@@ -94,16 +94,16 @@ check('the prompt says the owner can revoke', /可以随时撤销/.test(invited.
 
 console.log('\n4. joining takes the token and nothing else');
 const joined = await call('group/join', { groupId, token, displayName: '李四' });
-const guestKey = /memberKey:\s*(\S+)/.exec(joined.text)?.[1];
+const guestKey = /personKey:\s*(\S+)/.exec(joined.text)?.[1];
 check('joined with only a token', guestKey !== undefined, 'ok');
-check('the guest got a distinct member id', /memberId\s*:\s*(\S+)/.exec(joined.text)?.[1] !== ownerId);
+check('the guest got a distinct member id', /personId\s*:\s*(\S+)/.exec(joined.text)?.[1] !== ownerId);
 
 console.log('\n5. the invite has no use counter: it admits a second person');
 const second = await call('group/join', { groupId, token, displayName: '王五' });
-check('a second person joined with the same link', /memberKey:\s*(\S+)/.test(second.text), 'ok');
+check('a second person joined with the same link', /personKey:\s*(\S+)/.test(second.text), 'ok');
 
 console.log('\n6. the directory lists the group without any credential');
-const guestId = /memberId\s*:\s*(\S+)/.exec(joined.text)?.[1];
+const guestId = /personId\s*:\s*(\S+)/.exec(joined.text)?.[1];
 const dir = await call('group/directory', {});
 const row = (dir.data?.groups ?? []).find((group) => group.groupId === groupId);
 check('the group is listed', row !== undefined, row?.name);
@@ -117,11 +117,11 @@ check('no feed body in the directory', !serializedDir.includes('我是李四'), 
 check('no feed entries in the directory', !/"feed"|"entries"|"text":/.test(serializedDir), 'no feed shape');
 
 console.log('\n7. posting and reading need a member credential');
-const posted = await call('group/post', { groupId, memberId: guestId, memberKey: guestKey, text: '我是李四，已加入' });
+const posted = await call('group/post', { groupId, personId: guestId, personKey: guestKey, text: '我是李四，已加入' });
 check('the guest can post', posted.data !== undefined || posted.text !== '', 'ok');
-const read = await call('group/read', { groupId, memberId: ownerId, memberKey: ownerKey, sinceSeq: 0 });
+const read = await call('group/read', { groupId, personId: ownerId, personKey: ownerKey, sinceSeq: 0 });
 check('the owner sees the post', /我是李四/.test(read.text), 'ok');
-const refused = await call('group/read', { groupId, memberId: ownerId, memberKey: 'mk_wrong' })
+const refused = await call('group/read', { groupId, personId: ownerId, personKey: 'mk_wrong' })
   .catch((error) => error);
 check('a wrong credential is refused', refused instanceof Error, refused.code ?? 'no error');
 

@@ -6,7 +6,7 @@
  * decisions deserve their reasons written down, because each looks odd without
  * one:
  *
- *   **Every member call carries `memberId` + `memberKey` in the payload, not in
+ *   **Every member call carries `personId` + `personKey` in the payload, not in
  *   a header.** A2A's auth story is the transport's (the gateway's API key), and
  *   that credential says "this caller may reach this agent" — not "this caller
  *   is a member of this group". Keeping the membership proof in the payload
@@ -89,9 +89,9 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
   const requireMember = (input) => {
     const data = payload(input);
     const groupId = required(data.groupId, 'groupId');
-    const memberId = required(data.memberId, 'memberId');
-    const memberKey = required(data.memberKey, 'memberKey');
-    return { groupId, member: { memberId, memberKey } };
+    const personId = required(data.personId, 'personId');
+    const personKey = required(data.personKey, 'personKey');
+    return { groupId, member: { personId, personKey } };
   };
 
   return [
@@ -122,12 +122,12 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             },
           });
           const groupId = created.group.groupId;
-          const ownerMemberId = created.group.owner.memberId;
+          const ownerPersonId = created.group.owner.personId;
           identities.upsert({
             sessionId: context?.sessionId ?? HOST_SESSION_ID,
             groupId,
-            memberId: ownerMemberId,
-            memberKey: created.ownerKey,
+            personId: ownerPersonId,
+            personKey: created.ownerKey,
             local: true,
             groupName: created.group.name,
             role: 'owner',
@@ -137,13 +137,13 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           return {
             text: `Group "${name}" created.\n\n`
               + `groupId : ${groupId}\n`
-              + `memberId: ${ownerMemberId}\n`
+              + `personId: ${ownerPersonId}\n`
               + `ownerKey: ${created.ownerKey}   ← shown once; this instance has stored it, and you need it nowhere else\n\n`
               + 'Next: a2a_group_invite to mint an invite link and a paste-ready message for a colleague.',
             meta: {
               groupId,
               name: created.group.name,
-              memberId: ownerMemberId,
+              personId: ownerPersonId,
               ownerKey: created.ownerKey,
             },
           };
@@ -170,7 +170,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             expiresInHours: data.expiresInHours === undefined ? undefined : data.expiresInHours,
             // Only the owner may mint, and the store enforces it against the owner
             // credential itself — the caller-side role check is a courtesy.
-            ownerKey: member.memberKey,
+            ownerKey: member.personKey,
             gatewayBase: settings.gatewayBase === '' ? undefined : settings.gatewayBase,
             agent: settings.agentName === '' ? undefined : settings.agentName,
           });
@@ -209,8 +209,8 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           identities.upsert({
             sessionId: context?.sessionId ?? HOST_SESSION_ID,
             groupId,
-            memberId: joined.member.memberId,
-            memberKey: joined.memberKey,
+            personId: joined.member.personId,
+            personKey: joined.personKey,
             local: true,
             groupName: joined.group.name,
             role: joined.member.role,
@@ -219,13 +219,13 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           return {
             text: `Joined "${joined.group.name}".\n\n`
               + `groupId  : ${groupId}\n`
-              + `memberId : ${joined.member.memberId}\n`
-              + `memberKey: ${joined.memberKey}   ← shown once; this instance has stored it\n\n`
+              + `personId : ${joined.member.personId}\n`
+              + `personKey: ${joined.personKey}   ← shown once; this instance has stored it\n\n`
               + `${joined.feedTail.length} recent message(s) are included in the result.`,
             meta: {
               groupId,
-              memberId: joined.member.memberId,
-              memberKey: joined.memberKey,
+              personId: joined.member.personId,
+              personKey: joined.personKey,
               groupName: joined.group.name,
               topic: joined.group.topic ?? '',
               members: joined.group.memberCount,
@@ -335,7 +335,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
                 at: entry.at,
                 atIso: entry.atIso,
                 from: entry.from.displayName,
-                memberId: entry.from.memberId,
+                personId: entry.from.personId,
                 kind: entry.kind,
                 text: entry.text,
               })),
@@ -397,7 +397,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               + (snapshot.topic === '' ? '' : ` — ${snapshot.topic}`)
               + `\n${snapshot.memberCount} 人`
               + (snapshot.onlineCount > 0 ? `，${snapshot.onlineCount} 人在线` : '')
-              + `\n我在这个群的角色：${member.memberId === snapshot.owner?.memberId ? '群主' : '成员'}`,
+              + `\n我在这个群的角色：${member.personId === snapshot.owner?.personId ? '群主' : '成员'}`,
             meta: {
               groupId,
               name: snapshot.name,
@@ -406,12 +406,12 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               onlineCount: snapshot.onlineCount,
               lastSeq: snapshot.lastSeq,
               lastPostAt: snapshot.lastPostAt ?? 0,
-              isOwner: member.memberId === snapshot.owner?.memberId,
+              isOwner: member.personId === snapshot.owner?.personId,
               // The roster travels with the metadata: a colleague card is built from these
               // rows, and fetching them separately would double the round trips for every
               // caller that wants to know both "what is this group" and "who is in it".
               members: store.members({ groupId, member }).map((entry) => ({
-                memberId: entry.memberId,
+                personId: entry.personId,
                 displayName: entry.displayName,
                 role: entry.role,
                 roleAbout: entry.roleAbout ?? '',
@@ -453,7 +453,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             meta: {
               groupId,
               members: members.map((item) => ({
-                memberId: item.memberId,
+                personId: item.personId,
                 displayName: item.displayName,
                 role: item.role,
                 // Layer A, self-declared. An older member that never set these
@@ -652,8 +652,8 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           identities.upsert({
             sessionId: context?.sessionId ?? HOST_SESSION_ID,
             groupId,
-            memberId: claimed.member.memberId,
-            memberKey: claimed.memberKey,
+            personId: claimed.member.personId,
+            personKey: claimed.personKey,
             local: true,
             groupName: claimed.group.name,
             role: claimed.member.role,
@@ -661,13 +661,13 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           });
           return {
             text: `已加入「${claimed.group.name}」。\n\n`
-              + `memberId : ${claimed.member.memberId}\n`
-              + `memberKey: ${claimed.memberKey}\n\n`
+              + `personId : ${claimed.member.personId}\n`
+              + `personKey: ${claimed.personKey}\n\n`
               + '这份凭证本机已保存；从现在起你在群里发言都用它。',
             meta: {
               groupId,
-              memberId: claimed.member.memberId,
-              memberKey: claimed.memberKey,
+              personId: claimed.member.personId,
+              personKey: claimed.personKey,
               groupName: claimed.group.name,
             },
           };
@@ -699,7 +699,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               + `tags : ${(updated.tags ?? []).join('、') || '(none)'}`,
             meta: {
               groupId,
-              memberId: updated.memberId,
+              personId: updated.personId,
               about: updated.roleAbout ?? '',
               tags: updated.tags ?? [],
               updatedAt: updated.updatedAt,
@@ -723,7 +723,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
           const removed = store.removeMember({
             groupId,
             member,
-            targetMemberId: required(data.targetMemberId, 'targetMemberId'),
+            targetPersonId: required(data.targetPersonId, 'targetPersonId'),
             reason: typeof data.reason === 'string' ? data.reason : undefined,
           });
           return {
@@ -732,7 +732,7 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               + '\n对方下次发帖会得到「不是成员」，客户端应当据此清掉本机记录。',
             meta: {
               groupId,
-              memberId: removed.memberId,
+              personId: removed.personId,
               displayName: removed.displayName,
               feedSeq: removed.feedSeq ?? 0,
             },

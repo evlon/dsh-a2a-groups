@@ -43,7 +43,7 @@ const LEDGER_LIMIT = 2000;
 const IDLE_POLL_MS = 50;
 
 /** A credential-looking field, scrubbed from any text before it is logged. */
-const SECRET_FIELDS = Object.freeze(['token', 'password', 'memberKey', 'apiKey', 'secret', 'key']);
+const SECRET_FIELDS = Object.freeze(['token', 'password', 'personKey', 'apiKey', 'secret', 'key']);
 
 /**
  * Build the deliverer.

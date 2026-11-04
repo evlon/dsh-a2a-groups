@@ -23,7 +23,7 @@
  * watermark lives, because "I am member X in group Y and have read up to N" is one
  * fact about one membership.
  *
- * Threat model, stated plainly: `memberKey` is cleartext in a 0600 file. It has to
+ * Threat model, stated plainly: `personKey` is cleartext in a 0600 file. It has to
  * be — the plugin must present it on every call, so any local encryption would need
  * its key stored on the same machine, which protects nothing against the threat
  * that matters (another process on this machine). 0600 does protect against other
@@ -153,7 +153,7 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
    * Accepting a missing id instead would create a membership that can never be
    * delivered to and can collide with another such record.
    *
-   * @param {object} input - `{sessionId, groupId, memberId, memberKey, baseUrl, local, groupName, role, lastSeq}`.
+   * @param {object} input - `{sessionId, groupId, personId, personKey, baseUrl, local, groupName, role, lastSeq}`.
    * @returns {object} the stored record.
    */
   function upsert(input = {}) {
@@ -168,8 +168,8 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
     const record = {
       sessionId,
       groupId,
-      memberId: input.memberId ?? previous.memberId,
-      memberKey: input.memberKey ?? previous.memberKey,
+      personId: input.personId ?? previous.personId,
+      personKey: input.personKey ?? previous.personKey,
       // `local` means the group is hosted by this very instance, so a call never
       // leaves the process. Kept on the record because the answer decides the code
       // path (a local call has no gateway and no network failure mode).
@@ -290,8 +290,8 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       map.set(keyOf(entry.sessionId, entry.groupId), {
         sessionId: entry.sessionId,
         groupId: entry.groupId,
-        memberId: typeof entry.memberId === 'string' ? entry.memberId : undefined,
-        memberKey: typeof entry.memberKey === 'string' ? entry.memberKey : undefined,
+        personId: typeof entry.personId === 'string' ? entry.personId : undefined,
+        personKey: typeof entry.personKey === 'string' ? entry.personKey : undefined,
         local: entry.local === true,
         baseUrl: typeof entry.baseUrl === 'string' ? entry.baseUrl : undefined,
         groupName: typeof entry.groupName === 'string' ? entry.groupName : undefined,

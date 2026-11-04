@@ -241,11 +241,13 @@ window.__ModuleLoader__.load({
 			return undefined;
 		}
 
-		/** One roster member. `memberId`/`displayName` are lib/groups.js `publicMember`. */
+		/** One roster member. `personId`/`displayName` are lib/groups.js `publicMember`. */
 		function normalizeMember(raw, index) {
 			if (!raw || typeof raw !== "object") return undefined;
 			const name = pickString(firstDefined(raw, ["displayName", "name", "title", "label"]));
-			const id = pickString(firstDefined(raw, ["memberId", "id", "sessionId", "key"])) || "member-" + String(index);
+			// Both names are accepted: this bundle is cached by the page and may talk to a Host
+			// that still sends the older field.
+			const id = pickString(firstDefined(raw, ["personId", "memberId", "id", "sessionId", "key"])) || "member-" + String(index);
 			return {
 				id: id,
 				name: name !== "" ? name : id,
@@ -258,15 +260,15 @@ window.__ModuleLoader__.load({
 		/**
 		 * One feed / last-message entry.
 		 *
-		 * `seq`/`msgId`/`at`/`from:{memberId,displayName}`/`kind`/`text` is exactly
+		 * `seq`/`msgId`/`at`/`from:{personId,displayName}`/`kind`/`text` is exactly
 		 * `lib/groups.js` `publicEntry()`; the rest are conveniences for other Hosts.
 		 */
 		function normalizeEntry(raw, index) {
 			if (!raw || typeof raw !== "object") return undefined;
 			const text = pickString(firstDefined(raw, ["text", "body", "summary", "message", "content", "preview"]));
-			// `from` is an object in groups.js (`{memberId, displayName}`), a string elsewhere.
+			// `from` is an object in groups.js (`{personId, displayName}`), a string elsewhere.
 			const from = raw.from;
-			const fromName = from !== null && typeof from === "object" ? pickString(firstDefined(from, ["displayName", "name", "memberId"])) : pickString(from);
+			const fromName = from !== null && typeof from === "object" ? pickString(firstDefined(from, ["displayName", "name", "personId", "memberId"])) : pickString(from);
 			const senderName = fromName !== "" ? fromName : pickString(firstDefined(raw, ["senderName", "sender", "author", "name"]));
 			const time = pickTime(firstDefined(raw, ["at", "time", "ts", "createdAt", "sentAt"]));
 			const seq = pickNumber(firstDefined(raw, ["seq", "sequence"]));
@@ -864,7 +866,7 @@ window.__ModuleLoader__.load({
 				const name = pickString(firstDefined(entry, [ "name", "displayName", "title" ]));
 				if (name === "") continue;
 				cards.push({
-					id: pickString(firstDefined(entry, [ "memberId", "id", "name" ])) || name,
+					id: pickString(firstDefined(entry, [ "personId", "memberId", "id", "name" ])) || name,
 					name: name,
 					headline: pickString(firstDefined(entry, [ "headline", "role", "about" ])),
 					tags: (Array.isArray(entry.tags) ? entry.tags : []).filter(function (tag) {

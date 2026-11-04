@@ -51,7 +51,7 @@ export function buildProfile({ identities, store, config } = {}) {
     // What this instance said about itself in THAT group. For a hosted group the
     // store is authoritative; for a joined one only the ledger knows, and it
     // carries no role detail, so `about` stays empty rather than being invented.
-    const own = ownMembership(store, groupId, record.memberId);
+    const own = ownMembership(store, groupId, record.personId);
     groups.push({
       groupId,
       groupName: own?.groupName ?? record.groupName ?? groupId,
@@ -159,14 +159,14 @@ function pickHeadline({ config, tags, groups }) {
  * in would mean a network call inside card rendering — the opposite of what the
  * card is for.
  */
-function ownMembership(store, groupId, memberId) {
+function ownMembership(store, groupId, personId) {
   if (typeof store?.has !== 'function' || store.has(groupId) !== true) return undefined;
-  if (typeof memberId !== 'string' || memberId === '') return undefined;
+  if (typeof personId !== 'string' || personId === '') return undefined;
   try {
     // `snapshot` is anonymous by design; the self-view needs the credential, which
     // this module deliberately does not hold. `memberView` (added for exactly this)
     // answers "what does the store know about member X" without one.
-    if (typeof store.memberView === 'function') return store.memberView({ groupId, memberId });
+    if (typeof store.memberView === 'function') return store.memberView({ groupId, personId });
     return undefined;
   } catch {
     // A store that cannot answer must not break the card; the group just shows no

@@ -98,7 +98,7 @@ const owner = await call(HOST_AGENT, 'group/create', {
   topic: 'proving a colleague can join with only a link',
 });
 const groupId = /groupId\s*:\s*(\S+)/.exec(owner.text)?.[1];
-const ownerId = /memberId:\s*(\S+)/.exec(owner.text)?.[1];
+const ownerId = /personId:\s*(\S+)/.exec(owner.text)?.[1];
 const ownerKey = /ownerKey:\s*(\S+)/.exec(owner.text)?.[1];
 check('group created', groupId !== undefined, groupId);
 check('owner credential issued once', ownerId !== undefined && ownerKey !== undefined, 'owner');
@@ -106,7 +106,7 @@ check('owner credential issued once', ownerId !== undefined && ownerKey !== unde
 // ---------------------------------------------------------------------------
 console.log('\n2. host mints an invite');
 const invited = await call(HOST_AGENT, 'group/invite', {
-  groupId, memberId: ownerId, memberKey: ownerKey, label: '给同事',
+  groupId, personId: ownerId, personKey: ownerKey, label: '给同事',
 });
 const inviteMeta = invited.data ?? {};
 check('invite carries a link', typeof inviteMeta.link === 'string' && inviteMeta.link.includes('dsh-a2a://group'),
@@ -140,10 +140,10 @@ const joined = await call(HOST_AGENT, 'group/join', {
   token,
   displayName: '同事（guest）',
 });
-const guestMemberId = joined.data?.memberId;
-const guestKey = joined.data?.memberKey;
+const guestMemberId = joined.data?.personId;
+const guestKey = joined.data?.personKey;
 check('guest joined the host\'s group', guestMemberId !== undefined, guestMemberId);
-check('guest got its own credential', typeof guestKey === 'string', 'memberKey');
+check('guest got its own credential', typeof guestKey === 'string', 'personKey');
 check('join reported the group name', joined.data?.groupName === '双实例验证群', joined.data?.groupName);
 // The distinction that matters: a guest's join must be a member, not the owner.
 check('the joiner is a member, not the owner', guestMemberId !== ownerId, `${guestMemberId} != ${ownerId}`);
@@ -166,7 +166,7 @@ check('a group is owned by its host: calling another instance directly refuses',
 // ---------------------------------------------------------------------------
 console.log('\n4. the host sees two members');
 const members = await call(HOST_AGENT, 'group/members', {
-  groupId, memberId: ownerId, memberKey: ownerKey,
+  groupId, personId: ownerId, personKey: ownerKey,
 });
 check('host lists 2 members', (members.data?.members ?? []).length === 2, `${(members.data?.members ?? []).length}`);
 check('the guest appears by display name',
@@ -175,16 +175,16 @@ check('the guest appears by display name',
 // ---------------------------------------------------------------------------
 console.log('\n5. the guest posts, the host reads');
 // Same rule as the join: the feed lives on the host, so the guest's `group/post`
-// TOOL routes here. The credential is the guest's own memberKey, which is what
+// TOOL routes here. The credential is the guest's own personKey, which is what
 // makes this "the guest posting" rather than "the owner posting on its behalf".
 const posted = await call(HOST_AGENT, 'group/post', {
-  groupId, memberId: guestMemberId, memberKey: guestKey,
+  groupId, personId: guestMemberId, personKey: guestKey,
   text: '我是同事，已加入，这是第一条消息',
 });
 check('guest post accepted', typeof posted.data?.seq === 'number', `seq ${posted.data?.seq}`);
 
 const hostRead = await call(HOST_AGENT, 'group/read', {
-  groupId, memberId: ownerId, memberKey: ownerKey, sinceSeq: 0,
+  groupId, personId: ownerId, personKey: ownerKey, sinceSeq: 0,
 });
 check('host reads the guest\'s message', /已加入/.test(hostRead.text), 'found');
 check('the message is attributed to the guest',
@@ -193,13 +193,13 @@ check('the message is attributed to the guest',
 // ---------------------------------------------------------------------------
 console.log('\n6. the host posts, the guest reads');
 const hostPost = await call(HOST_AGENT, 'group/post', {
-  groupId, memberId: ownerId, memberKey: ownerKey,
+  groupId, personId: ownerId, personKey: ownerKey,
   text: '收到，请看一下 MR 42',
 });
 check('host post accepted', typeof hostPost.data?.seq === 'number', `seq ${hostPost.data?.seq}`);
 
 const guestRead = await call(HOST_AGENT, 'group/read', {
-  groupId, memberId: guestMemberId, memberKey: guestKey, sinceSeq: posted.data.seq,
+  groupId, personId: guestMemberId, personKey: guestKey, sinceSeq: posted.data.seq,
 });
 check('guest reads only what is new (sinceSeq works)', /MR 42/.test(guestRead.text) && !/已加入/.test(guestRead.text),
   'incremental');
@@ -207,7 +207,7 @@ check('guest reads only what is new (sinceSeq works)', /MR 42/.test(guestRead.te
 // ---------------------------------------------------------------------------
 console.log('\n7. the guest\'s own post is in the feed exactly once');
 const guestAll = await call(HOST_AGENT, 'group/read', {
-  groupId, memberId: guestMemberId, memberKey: guestKey, sinceSeq: 0,
+  groupId, personId: guestMemberId, personKey: guestKey, sinceSeq: 0,
 });
 const ownEcho = (guestAll.data?.entries ?? []).filter(
   (entry) => String(entry.from).includes('guest') && /已加入/.test(String(entry.text)),
@@ -224,12 +224,12 @@ const second = await call(HOST_AGENT, 'group/create', {
   topic: 'same host, same gateway entry',
 });
 const secondId = /groupId\s*:\s*(\S+)/.exec(second.text)?.[1];
-const secondOwner = /memberId:\s*(\S+)/.exec(second.text)?.[1];
+const secondOwner = /personId:\s*(\S+)/.exec(second.text)?.[1];
 const secondKey = /ownerKey:\s*(\S+)/.exec(second.text)?.[1];
 check('a second group was created without touching the gateway', secondId !== undefined && secondId !== groupId,
   secondId);
 const secondInvite = await call(HOST_AGENT, 'group/invite', {
-  groupId: secondId, memberId: secondOwner, memberKey: secondKey,
+  groupId: secondId, personId: secondOwner, personKey: secondKey,
 });
 check('its invite names the SAME host agent',
   typeof secondInvite.data?.link === 'string' && secondInvite.data.link.includes(`agent=${HOST_AGENT}`),

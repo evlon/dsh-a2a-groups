@@ -48,7 +48,7 @@ function makeGroup(store, name, options = {}) {
   });
   return {
     groupId: created.group.groupId,
-    owner: { memberId: created.group.owner.memberId, memberKey: created.ownerKey },
+    owner: { personId: created.group.owner.personId, personKey: created.ownerKey },
   };
 }
 
@@ -71,8 +71,8 @@ test('the directory lists a public group with counts and no identities', (t) => 
   // The whole point: a credential-free read must not name anybody.
   const serialized = JSON.stringify(page);
   assert.ok(!serialized.includes('张工'), 'the owner display name must not appear');
-  assert.ok(!serialized.includes(group.owner.memberId), 'no member ids');
-  assert.ok(!serialized.includes(group.owner.memberKey), 'no member keys');
+  assert.ok(!serialized.includes(group.owner.personId), 'no member ids');
+  assert.ok(!serialized.includes(group.owner.personKey), 'no member keys');
 });
 
 test('an unlisted group is absent, not flagged', (t) => {

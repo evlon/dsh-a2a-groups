@@ -70,7 +70,7 @@ test('the store file is JSON with mode 0600 and carries no unexpected fields', (
       baseUrl: 'http://127.0.0.1:3092/a2a',
       apiKey: 'sk-alice',
       // 下面这些字段不该进盘：白名单只允许契约里列出的那几个。
-      memberKey: 'mk-should-not-persist',
+      personKey: 'mk-should-not-persist',
       internalCache: { secret: true },
     });
 
@@ -79,7 +79,7 @@ test('the store file is JSON with mode 0600 and carries no unexpected fields', (
     const serialized = JSON.stringify(onDisk);
 
     assert.equal(serialized.includes('hunter2'), false, 'an unexpected password field must never reach the disk');
-    assert.equal(serialized.includes('mk-should-not-persist'), false, 'an unexpected memberKey must never reach the disk');
+    assert.equal(serialized.includes('mk-should-not-persist'), false, 'an unexpected personKey must never reach the disk');
     assert.equal(serialized.includes('internalCache'), false);
     assert.equal(serialized.includes('sk-alice'), true, 'the apiKey itself is stored as-is (mode 0600 is the boundary)');
 

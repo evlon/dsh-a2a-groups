@@ -576,20 +576,20 @@ test("normalizes the exact shape lib/groups.js snapshot() produces", () => {
 		createdAt: now - 86400000,
 		createdAtIso: new Date(now - 86400000).toISOString(),
 		joinPolicy: "invite",
-		owner: { memberId: "m-a", displayName: "阿强" },
+		owner: { personId: "m-a", displayName: "阿强" },
 		settings: { maxPostChars: 32000 },
 		memberCount: 2,
 		inviteCount: 1,
 		lastSeq: 7,
 		members: [
-			{ memberId: "m-a", displayName: "阿强", role: "owner", joinedAt: now - 86400000, online: true, endpoint: "http://x/a2a" },
-			{ memberId: "m-b", displayName: "小美", role: "member", joinedAt: now - 3600000, online: false },
+			{ personId: "m-a", displayName: "阿强", role: "owner", joinedAt: now - 86400000, online: true, endpoint: "http://x/a2a" },
+			{ personId: "m-b", displayName: "小美", role: "member", joinedAt: now - 3600000, online: false },
 		],
 		feedTail: [
-			{ seq: 6, at: now - 120000, msgId: "uuid-6", kind: "message", from: { memberId: "m-a", displayName: "阿强" }, text: "证书我换好了" },
-			{ seq: 7, at: now - 60000, msgId: "uuid-7", kind: "message", from: { memberId: "m-b", displayName: "小美" }, text: "收到，我这边回归" },
+			{ seq: 6, at: now - 120000, msgId: "uuid-6", kind: "message", from: { personId: "m-a", displayName: "阿强" }, text: "证书我换好了" },
+			{ seq: 7, at: now - 60000, msgId: "uuid-7", kind: "message", from: { personId: "m-b", displayName: "小美" }, text: "收到，我这边回归" },
 		],
-		lastPost: { seq: 7, at: now - 60000, msgId: "uuid-7", kind: "message", from: { memberId: "m-b", displayName: "小美" }, text: "收到，我这边回归" },
+		lastPost: { seq: 7, at: now - 60000, msgId: "uuid-7", kind: "message", from: { personId: "m-b", displayName: "小美" }, text: "收到，我这边回归" },
 		lastPostAt: now - 60000,
 		lastPostAtIso: new Date(now - 60000).toISOString(),
 		onlineCount: 1,
@@ -603,7 +603,7 @@ test("normalizes the exact shape lib/groups.js snapshot() produces", () => {
 	assert.equal(group.topic, "证书轮换与网关灰度");
 	assert.equal(group.memberCount, 2, "memberCount is authoritative, not members.length");
 	assert.equal(group.members.length, 2);
-	assert.equal(group.members[0].id, "m-a", "memberId must be picked up");
+	assert.equal(group.members[0].id, "m-a", "personId must be picked up");
 	assert.equal(group.members[0].name, "阿强", "displayName must be picked up");
 	assert.equal(group.members[0].role, "owner");
 	assert.equal(group.members[0].online, true);

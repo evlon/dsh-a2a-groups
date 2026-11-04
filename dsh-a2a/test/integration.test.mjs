@@ -493,17 +493,17 @@ test('group/create, invite, join, post and read work end to end over A2A', async
     });
     const meta = JSON.parse(created.text.includes('{') ? created.text.slice(created.text.indexOf('{')) : '{}');
     void meta;
-    const ownerId = /memberId:\s*(\S+)/.exec(created.text)?.[1];
+    const ownerId = /personId:\s*(\S+)/.exec(created.text)?.[1];
     const ownerKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
     const groupId = /groupId\s*:\s*(\S+)/.exec(created.text)?.[1];
-    assert.ok(ownerId, `no memberId in ${created.text}`);
+    assert.ok(ownerId, `no personId in ${created.text}`);
     assert.ok(ownerKey, `no ownerKey in ${created.text}`);
     assert.ok(groupId, `no groupId in ${created.text}`);
 
     const invited = await callSkill(host, 'group/invite', {
       groupId,
-      memberId: ownerId,
-      memberKey: ownerKey,
+      personId: ownerId,
+      personKey: ownerKey,
       label: 'for 张工',
     });
     const token = /[?&]t=([A-Za-z0-9_-]+)/.exec(invited.text)?.[1];
@@ -523,13 +523,13 @@ test('group/create, invite, join, post and read work end to end over A2A', async
       data: { groupId, token, password: 'correct horse battery', displayName: '张工' },
     });
     assert.equal(joined.state, 'completed');
-    assert.ok(joined.data?.memberId, 'the join must return a member credential');
-    assert.ok(joined.data?.memberKey, 'the join must return a member credential');
+    assert.ok(joined.data?.personId, 'the join must return a member credential');
+    assert.ok(joined.data?.personKey, 'the join must return a member credential');
 
     // The host has a second member now, and the guest's credential authenticates.
     const members = await host.store.members({
       groupId,
-      member: { memberId: ownerId, memberKey: ownerKey },
+      member: { personId: ownerId, personKey: ownerKey },
     });
     assert.equal(members.length, 2);
     assert.ok(members.some((member) => member.displayName === '张工'));
@@ -540,8 +540,8 @@ test('group/create, invite, join, post and read work end to end over A2A', async
       text: 'the migration is done',
       data: {
         groupId,
-        memberId: joined.data.memberId,
-        memberKey: joined.data.memberKey,
+        personId: joined.data.personId,
+        personKey: joined.data.personKey,
         text: 'the migration is done',
       },
     });
@@ -550,8 +550,8 @@ test('group/create, invite, join, post and read work end to end over A2A', async
 
     const read = await callSkill(host, 'group/read', {
       groupId,
-      memberId: ownerId,
-      memberKey: ownerKey,
+      personId: ownerId,
+      personKey: ownerKey,
       sinceSeq: 0,
     });
     assert.match(read.text, /the migration is done/);
@@ -567,9 +567,9 @@ test('a bad invite token is refused, and a revoked one stops working', async () 
   try {
     const created = await callSkill(host, 'group/create', { name: 'token group' });
     const groupId = /groupId\s*:\s*(\S+)/.exec(created.text)?.[1];
-    const ownerId = /memberId:\s*(\S+)/.exec(created.text)?.[1];
+    const ownerId = /personId:\s*(\S+)/.exec(created.text)?.[1];
     const ownerKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
-    const invited = await callSkill(host, 'group/invite', { groupId, memberId: ownerId, memberKey: ownerKey });
+    const invited = await callSkill(host, 'group/invite', { groupId, personId: ownerId, personKey: ownerKey });
     const token = /[?&]t=([A-Za-z0-9_-]+)/.exec(invited.text)?.[1];
     assert.ok(token, 'the invite carries a token');
 
@@ -611,7 +611,7 @@ test('a bad invite token is refused, and a revoked one stops working', async () 
           parts: [{ kind: 'text', text: 'revoke' }],
           metadata: {
             skill: 'group/leave',
-            data: { groupId, memberId: ownerId, memberKey: ownerKey, targetMemberId: 'nobody' },
+            data: { groupId, personId: ownerId, personKey: ownerKey, targetPersonId: 'nobody' },
           },
         },
       },
@@ -632,10 +632,10 @@ test('a group post wakes the other instance with an agent-sourced message', asyn
   try {
     const created = await callSkill(host, 'group/create', { name: 'wake group', password: 'a long enough password' });
     const groupId = /groupId\s*:\s*(\S+)/.exec(created.text)?.[1];
-    const ownerId = /memberId:\s*(\S+)/.exec(created.text)?.[1];
+    const ownerId = /personId:\s*(\S+)/.exec(created.text)?.[1];
     const ownerKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
     const invited = await callSkill(host, 'group/invite', {
-      groupId, memberId: ownerId, memberKey: ownerKey, password: 'a long enough password',
+      groupId, personId: ownerId, personKey: ownerKey, password: 'a long enough password',
     });
     const token = /[?&]t=([A-Za-z0-9_-]+)/.exec(invited.text)?.[1];
 
@@ -648,11 +648,11 @@ test('a group post wakes the other instance with an agent-sourced message', asyn
     // The join ran on the HOST, so the host's store now has this member. The
     // guest's own ledger has no record of it — a real colleague's instance learns
     // its membership from the join response, so record it the same way.
-    assert.ok(joined.data?.memberId, 'the join must return a member credential');
+    assert.ok(joined.data?.personId, 'the join must return a member credential');
     guest.identities.upsert({
       sessionId: 's-guest',      groupId,
-      memberId: joined.data.memberId,
-      memberKey: joined.data.memberKey,
+      personId: joined.data.personId,
+      personKey: joined.data.personKey,
       local: false,
       baseUrl: host.url,
       groupName: 'wake group',
@@ -676,8 +676,8 @@ test('a group post wakes the other instance with an agent-sourced message', asyn
 
     await callSkill(host, 'group/post', {
       groupId,
-      memberId: ownerId,
-      memberKey: ownerKey,
+      personId: ownerId,
+      personKey: ownerKey,
       text: 'please review MR 42',
     }, 'please review MR 42');
 
@@ -709,10 +709,10 @@ test('the inbox never re-delivers a post it already delivered', async () => {
   try {
     const created = await callSkill(host, 'group/create', { name: 'dupe', password: 'a long enough password' });
     const groupId = /groupId\s*:\s*(\S+)/.exec(created.text)?.[1];
-    const ownerId = /memberId:\s*(\S+)/.exec(created.text)?.[1];
+    const ownerId = /personId:\s*(\S+)/.exec(created.text)?.[1];
     const ownerKey = /ownerKey:\s*(\S+)/.exec(created.text)?.[1];
     const invited = await callSkill(host, 'group/invite', {
-      groupId, memberId: ownerId, memberKey: ownerKey, password: 'a long enough password',
+      groupId, personId: ownerId, personKey: ownerKey, password: 'a long enough password',
     });
     const token = /[?&]t=([A-Za-z0-9_-]+)/.exec(invited.text)?.[1];
     const joined = await guest.bridge.send(host.target, {
@@ -722,8 +722,8 @@ test('the inbox never re-delivers a post it already delivered', async () => {
     });
     guest.identities.upsert({
       sessionId: 's-guest',      groupId,
-      memberId: joined.data.memberId,
-      memberKey: joined.data.memberKey,
+      personId: joined.data.personId,
+      personKey: joined.data.personKey,
       local: false,
       baseUrl: host.url,
       groupName: 'dupe',
@@ -741,7 +741,7 @@ test('the inbox never re-delivers a post it already delivered', async () => {
     const baseline = guest.host.delivered.length;
 
     await callSkill(host, 'group/post', {
-      groupId, memberId: ownerId, memberKey: ownerKey, text: 'one post',
+      groupId, personId: ownerId, personKey: ownerKey, text: 'one post',
     }, 'one post');
     const deadline = Date.now() + 3000;
     while (guest.host.delivered.length === baseline && Date.now() < deadline) {
@@ -792,7 +792,7 @@ test('memberships survive a restart, so a group is not lost with the process', a
     const reopened = createMembershipLedger({ home: instance.home, logger: recordingLogger() });
     const record = reopened.get(groupId);
     assert.ok(record !== undefined, 'the membership must reload');
-    assert.equal(record.memberKey, ownerKey, 'the credential must reload, or the instance cannot speak for itself');
+    assert.equal(record.personKey, ownerKey, 'the credential must reload, or the instance cannot speak for itself');
     assert.equal(record.local, true);
   } finally {
     await instance.close();

@@ -39,21 +39,21 @@ function makeGroup(store, name = 'g') {
   const created = store.create({ name, password: 'pw-12345678', ownerDisplayName: 'me' });
   return {
     groupId: created.group.groupId,
-    owner: { memberId: created.group.owner.memberId, memberKey: created.ownerKey },
+    owner: { personId: created.group.owner.personId, personKey: created.ownerKey },
   };
 }
 
 /** Add one more member and return their credential. */
 function addMember(store, group, displayName) {
   // Minting is owner-only now, and the helper receives the group (which carries the
-  // owner credential under `owner.memberKey`), so it uses that.
-  const invited = store.invite({ groupId: group.groupId, ownerKey: group.owner.memberKey });
+  // owner credential under `owner.personKey`), so it uses that.
+  const invited = store.invite({ groupId: group.groupId, ownerKey: group.owner.personKey });
   const joined = store.join({
     groupId: group.groupId,
     token: invited.token,
     displayName,
   });
-  return { memberId: joined.member.memberId, memberKey: joined.memberKey };
+  return { personId: joined.member.personId, personKey: joined.personKey };
 }
 
 test('a member can declare and change their role in a group', (t) => {
@@ -89,7 +89,7 @@ test('the same person holds different roles in different groups', (t) => {
   const dev = makeGroup(store, '开发群');
   const proj = makeGroup(store, '项目群');
 
-  // Same human, two memberships (a different instance would have one memberId
+  // Same human, two memberships (a different instance would have one personId
   // per group, which is the ordinary case; here they are distinct memberships by
   // construction and must stay independent).
   store.setProfile({ groupId: dev.groupId, member: dev.owner, about: '研发', tags: ['研发'] });
@@ -111,8 +111,8 @@ test('a role never grants the permission bit', (t) => {
   store.setProfile({ groupId: group.groupId, member: guest, about: '我是产品经理', tags: ['产品'] });
 
   const rows = store.members({ groupId: group.groupId, member: group.owner });
-  const owner = rows.find((row) => row.memberId === group.owner.memberId);
-  const member = rows.find((row) => row.memberId === guest.memberId);
+  const owner = rows.find((row) => row.personId === group.owner.personId);
+  const member = rows.find((row) => row.personId === guest.personId);
   assert.equal(owner.role, 'owner');
   assert.equal(member.role, 'member', 'declaring a business role must not change permissions');
   assert.equal(member.roleAbout, '我是产品经理');
@@ -126,20 +126,20 @@ test('a member cannot write another member\'s role', (t) => {
 
   store.setProfile({ groupId: group.groupId, member: victim, about: '原来的角色' });
 
-  // Attacker presents the victim's memberId with its own credential. Identity is
+  // Attacker presents the victim's personId with its own credential. Identity is
   // keyed on the credential, so this must be refused rather than silently write
   // the victim's row.
   assert.throws(
     () => store.setProfile({
       groupId: group.groupId,
-      member: { memberId: victim.memberId, memberKey: attacker.memberKey },
+      member: { personId: victim.personId, personKey: attacker.personKey },
       about: '被篡改',
     }),
     (error) => error.code === 'not_member',
   );
 
   const after = store.members({ groupId: group.groupId, member: group.owner });
-  assert.equal(after.find((row) => row.memberId === victim.memberId).roleAbout, '原来的角色');
+  assert.equal(after.find((row) => row.personId === victim.personId).roleAbout, '原来的角色');
 });
 
 test('omitting a field leaves it unchanged; an empty value clears it', (t) => {

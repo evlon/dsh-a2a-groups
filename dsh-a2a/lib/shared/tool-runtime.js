@@ -353,7 +353,7 @@ function requireSession(sessionId, tool) {
     const target = hostedHere ? undefined : hostTarget(registry, config, args.agent);
 
     let groupId;
-    let memberId;
+    let personId;
     let ownerKey;
     let groupName;
     let remote;
@@ -366,7 +366,7 @@ function requireSession(sessionId, tool) {
         settings: { visibility },
       });
       groupId = created.group.groupId;
-      memberId = created.group.owner.memberId;
+      personId = created.group.owner.personId;
       ownerKey = created.ownerKey;
       groupName = created.group.name;
       remote = false;
@@ -385,7 +385,7 @@ function requireSession(sessionId, tool) {
       });
       const meta = result.data ?? {};
       groupId = meta.groupId;
-      memberId = meta.memberId;
+      personId = meta.personId;
       ownerKey = meta.ownerKey;
       groupName = meta.name ?? name;
       remote = true;
@@ -399,8 +399,8 @@ function requireSession(sessionId, tool) {
     identities.upsert({
       sessionId,
       groupId,
-      memberId,
-      memberKey: ownerKey,
+      personId,
+      personKey: ownerKey,
       local: remote === false,
       baseUrl: remote === true ? target.baseUrl : undefined,
       groupName,
@@ -414,7 +414,7 @@ function requireSession(sessionId, tool) {
     return {
       groupId,
       name: groupName,
-      memberId,
+      personId,
       ownerKey,
       agentName: gatewayName,
       remote,
@@ -435,7 +435,7 @@ function requireSession(sessionId, tool) {
       expiresInHours: args.expiresInHours ?? config.groups.inviteExpiresInHours,
       // The owner credential, not just the role: the store verifies it, so a
       // display-field role being wrong cannot mint an invite.
-      ownerKey: membership.memberKey,
+      ownerKey: membership.personKey,
       gatewayBase: config.groups.gatewayBase === '' ? undefined : config.groups.gatewayBase,
       agent: config.groups.agentName === '' ? undefined : config.groups.agentName,
     });
@@ -468,8 +468,8 @@ function requireSession(sessionId, tool) {
       identities.upsert({
         sessionId,
         groupId: parsed.groupId,
-        memberId: joined.member.memberId,
-        memberKey: joined.memberKey,
+        personId: joined.member.personId,
+        personKey: joined.personKey,
         local: true,
         groupName: joined.group.name,
         role: joined.member.role,
@@ -480,7 +480,7 @@ function requireSession(sessionId, tool) {
       return {
         groupId: parsed.groupId,
         groupName: joined.group.name,
-        memberId: joined.member.memberId,
+        personId: joined.member.personId,
         remote: false,
         recentMessages: joined.feedTail.length,
       };
@@ -516,8 +516,8 @@ function requireSession(sessionId, tool) {
     identities.upsert({
       sessionId,
       groupId: parsed.groupId,
-      memberId: meta.memberId,
-      memberKey: meta.memberKey,
+      personId: meta.personId,
+      personKey: meta.personKey,
       local: false,
       baseUrl,
       groupName: meta.groupName ?? parsed.groupName,
@@ -529,7 +529,7 @@ function requireSession(sessionId, tool) {
     return {
       groupId: parsed.groupId,
       groupName: meta.groupName ?? parsed.groupName ?? parsed.groupId,
-      memberId: meta.memberId,
+      personId: meta.personId,
       remote: true,
       recentMessages: Array.isArray(meta.feedTail) ? meta.feedTail.length : 0,
     };
@@ -542,7 +542,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const posted = store.post({
         groupId,
-        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        member: { personId: membership.personId, personKey: membership.personKey },
         text: message,
       });
       await store.flush();
@@ -553,8 +553,8 @@ function requireSession(sessionId, tool) {
       text: message,
       data: {
         groupId,
-        memberId: membership.memberId,
-        memberKey: membership.memberKey,
+        personId: membership.personId,
+        personKey: membership.personKey,
         text: message,
         mentions: args.mentions,
       },
@@ -567,12 +567,12 @@ function requireSession(sessionId, tool) {
     const groupId = requireText(args.groupId, 'groupId');
     const membership = requireMembership(store, identities, groupId, sessionId);
     // The member credential identifies the caller, so the store can only ever
-    // change this caller's own row. There is deliberately no `targetMemberId`:
+    // change this caller's own row. There is deliberately no `targetPersonId`:
     // a role is what you say about yourself.
     const data = {
       groupId,
-      memberId: membership.memberId,
-      memberKey: membership.memberKey,
+      personId: membership.personId,
+      personKey: membership.personKey,
       about: args.about,
       tags: args.tags,
     };
@@ -600,7 +600,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const snapshot = store.snapshot({
         groupId,
-        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        member: { personId: membership.personId, personKey: membership.personKey },
       });
       return {
         groupId,
@@ -609,7 +609,7 @@ function requireSession(sessionId, tool) {
         memberCount: snapshot.memberCount,
         onlineCount: snapshot.onlineCount,
         lastSeq: snapshot.lastSeq,
-        isOwner: snapshot.owner?.memberId === membership.memberId,
+        isOwner: snapshot.owner?.personId === membership.personId,
       };
     }
 
@@ -617,7 +617,7 @@ function requireSession(sessionId, tool) {
     const result = await bridge.send(target, {
       skill: 'group/info',
       text: `info for ${groupId}`,
-      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey },
+      data: { groupId, personId: membership.personId, personKey: membership.personKey },
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};
@@ -660,7 +660,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const page = store.read({
         groupId,
-        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        member: { personId: membership.personId, personKey: membership.personKey },
         sinceSeq,
         limit,
       });
@@ -677,7 +677,7 @@ function requireSession(sessionId, tool) {
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/read',
       text: `read ${groupId} after ${sinceSeq}`,
-      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, sinceSeq, limit },
+      data: { groupId, personId: membership.personId, personKey: membership.personKey, sinceSeq, limit },
     });
     const meta = result.data ?? {};
     return {
@@ -734,7 +734,7 @@ function requireSession(sessionId, tool) {
       rows.push({
         groupId: record.groupId,
         name: summary?.name ?? record.groupName ?? record.groupId,
-        role: summary?.owner?.memberId === record.memberId ? 'owner' : record.role,
+        role: summary?.owner?.personId === record.personId ? 'owner' : record.role,
         members: summary?.memberCount ?? 0,
         lastSeq: summary?.lastSeq ?? record.lastSeq ?? 0,
         lastMessage: lastMessageOf(summary, record),
@@ -787,7 +787,7 @@ function requireSession(sessionId, tool) {
     const membership = requireLocalMembership(identities, groupId, sessionId);
     const requests = store.listRequests({
       groupId,
-      member: { memberId: membership.memberId, memberKey: membership.memberKey },
+      member: { personId: membership.personId, personKey: membership.personKey },
       status: args.status ?? 'pending',
     });
     return {
@@ -807,7 +807,7 @@ function requireSession(sessionId, tool) {
     const membership = requireLocalMembership(identities, groupId, sessionId);
     const decided = store.decideRequest({
       groupId,
-      member: { memberId: membership.memberId, memberKey: membership.memberKey },
+      member: { personId: membership.personId, personKey: membership.personKey },
       requestId: requireText(args.requestId, 'requestId'),
       approve: args.approve !== false,
     });
@@ -820,27 +820,27 @@ function requireSession(sessionId, tool) {
   },
   'a2a_group_remove': async function a2a_group_remove(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
-    const targetMemberId = requireText(args.targetMemberId, 'targetMemberId');
+    const targetPersonId = requireText(args.targetPersonId, 'targetPersonId');
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_remove');
     const membership = requireMembership(store, identities, groupId, sessionId);
     if (membership.local === true) {
       const removed = store.removeMember({
         groupId,
-        member: { memberId: membership.memberId, memberKey: membership.memberKey },
-        targetMemberId,
+        member: { personId: membership.personId, personKey: membership.personKey },
+        targetPersonId,
         reason: args.reason,
       });
       await store.flush();
-      return { groupId, memberId: removed.memberId, displayName: removed.displayName };
+      return { groupId, personId: removed.personId, displayName: removed.displayName };
     }
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/remove',
-      text: `remove ${targetMemberId}`,
-      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, targetMemberId, reason: args.reason },
+      text: `remove ${targetPersonId}`,
+      data: { groupId, personId: membership.personId, personKey: membership.personKey, targetPersonId, reason: args.reason },
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};
-    return { groupId, memberId: meta.memberId ?? targetMemberId, displayName: meta.displayName ?? targetMemberId };
+    return { groupId, personId: meta.personId ?? targetPersonId, displayName: meta.displayName ?? targetPersonId };
   },
 
   'a2a_group_rename': async function a2a_group_rename(args, exec) {
@@ -850,7 +850,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const renamed = store.renameGroup({
         groupId,
-        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        member: { personId: membership.personId, personKey: membership.personKey },
         name: args.name,
         topic: args.topic,
       });
@@ -860,7 +860,7 @@ function requireSession(sessionId, tool) {
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/rename',
       text: 'rename',
-      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, name: args.name, topic: args.topic },
+      data: { groupId, personId: membership.personId, personKey: membership.personKey, name: args.name, topic: args.topic },
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};
@@ -874,7 +874,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const result = store.archiveGroup({
         groupId,
-        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        member: { personId: membership.personId, personKey: membership.personKey },
         archived: args.archived !== false,
       });
       await store.flush();
@@ -883,7 +883,7 @@ function requireSession(sessionId, tool) {
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/archive',
       text: 'archive',
-      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, archived: args.archived !== false },
+      data: { groupId, personId: membership.personId, personKey: membership.personKey, archived: args.archived !== false },
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};
@@ -901,8 +901,8 @@ function requireSession(sessionId, tool) {
       identities.upsert({
         sessionId,
         groupId,
-        memberId: claimed.member.memberId,
-        memberKey: claimed.memberKey,
+        personId: claimed.member.personId,
+        personKey: claimed.personKey,
         local: true,
         groupName: claimed.group.name,
         role: claimed.member.role,
@@ -913,7 +913,7 @@ function requireSession(sessionId, tool) {
       return {
         groupId,
         groupName: claimed.group.name,
-        memberId: claimed.member.memberId,
+        personId: claimed.member.personId,
         remote: false,
       };
     }
@@ -928,8 +928,8 @@ function requireSession(sessionId, tool) {
     identities.upsert({
       sessionId,
       groupId,
-      memberId: meta.memberId,
-      memberKey: meta.memberKey,
+      personId: meta.personId,
+      personKey: meta.personKey,
       local: false,
       baseUrl: target.baseUrl,
       groupName: meta.groupName ?? groupId,
@@ -941,7 +941,7 @@ function requireSession(sessionId, tool) {
     return {
       groupId,
       groupName: meta.groupName ?? groupId,
-      memberId: meta.memberId,
+      personId: meta.personId,
       remote: true,
     };
   },

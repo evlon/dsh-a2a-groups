@@ -89,11 +89,11 @@ const beforeCount = before?.['x-dsh-profiles']?.groups?.length ?? 0;
 
 const created = await call('group/create', { name: '名片验证群'});
 const groupId = /groupId\s*:\s*(\S+)/.exec(created.text)[1];
-const memberId = /memberId:\s*(\S+)/.exec(created.text)[1];
-const memberKey = /ownerKey:\s*(\S+)/.exec(created.text)[1];
+const personId = /personId:\s*(\S+)/.exec(created.text)[1];
+const personKey = /ownerKey:\s*(\S+)/.exec(created.text)[1];
 
 await call('group/role', {
-  groupId, memberId, memberKey,
+  groupId, personId, personKey,
   about: '在这个群负责名片验证',
   tags: ['验证', '名片'],
 });
@@ -112,7 +112,7 @@ check('the newly declared tag reached the card headline',
 
 // ---------------------------------------------------------------------------
 console.log('\n3. changing the role updates the card on the next read');
-await call('group/role', { groupId, memberId, memberKey, about: '角色已经改了', tags: ['改名'] });
+await call('group/role', { groupId, personId, personKey, about: '角色已经改了', tags: ['改名'] });
 const reread = await cardViaGateway();
 const updated = (reread?.['x-dsh-profiles']?.groups ?? []).find((group) => group.groupId === groupId);
 check('the card shows the new role', updated?.roleAbout === '角色已经改了', updated?.roleAbout);
@@ -122,7 +122,7 @@ check('the old tag is gone from that group', !(updated?.tags ?? []).includes('�
 // ---------------------------------------------------------------------------
 console.log('\n4. a hidden check: the card never leaks a credential');
 const serialized = JSON.stringify(reread ?? {});
-check('no memberKey in the card', !serialized.includes(memberKey), 'no key');
+check('no personKey in the card', !serialized.includes(personKey), 'no key');
 check('no password in the card', !serialized.includes('pw22223333'), 'no password');
 
 console.log(`\nprofile: ${failures === 0 ? 'OK' : `${failures} FAILED`}`);

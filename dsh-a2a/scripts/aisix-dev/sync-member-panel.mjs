@@ -9,12 +9,12 @@
 // cache the tool WOULD write, using values fetched from the host's own API. That keeps
 // the demo faithful: every number in the panel came from the host, not from this file.
 //
-//   node scripts/aisix-dev/sync-member-panel.mjs <port> <groupId> <memberId> <memberKey>
+//   node scripts/aisix-dev/sync-member-panel.mjs <port> <groupId> <personId> <personKey>
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const [port, groupId, memberId, memberKey] = process.argv.slice(2);
-if ([port, groupId, memberId, memberKey].some((value) => value === undefined)) {
-  throw new Error('usage: sync-member-panel.mjs <hostPort> <groupId> <memberId> <memberKey>');
+const [port, groupId, personId, personKey] = process.argv.slice(2);
+if ([port, groupId, personId, personKey].some((value) => value === undefined)) {
+  throw new Error('usage: sync-member-panel.mjs <hostPort> <groupId> <personId> <personKey>');
 }
 
 const HOST = `http://127.0.0.1:${port}/a2a`;
@@ -48,16 +48,16 @@ async function call(skill, data) {
   return body.result.task.metadata?.result;
 }
 
-const info = await call('group/info', { groupId, memberId, memberKey });
-const page = await call('group/read', { groupId, memberId, memberKey, sinceSeq: 0, limit: 20 });
+const info = await call('group/info', { groupId, personId, personKey });
+const page = await call('group/read', { groupId, personId, personKey, sinceSeq: 0, limit: 20 });
 process.stdout.write(`host says: ${info.name} / ${info.memberCount} 人 / ${page.entries.length} 条消息\n`);
 
 const file = 'C:/Users/niukl/.dsh-a2a-dev/a2a/memberships.json';
 const state = JSON.parse(readFileSync(file, 'utf8'));
 const record = (state.memberships ?? []).find(
-  (entry) => entry.groupId === groupId && entry.memberId === memberId,
+  (entry) => entry.groupId === groupId && entry.personId === personId,
 );
-if (record === undefined) throw new Error(`no membership for ${groupId}/${memberId} in ${file}`);
+if (record === undefined) throw new Error(`no membership for ${groupId}/${personId} in ${file}`);
 
 record.groupName = info.name;
 record.groupTopic = info.topic;

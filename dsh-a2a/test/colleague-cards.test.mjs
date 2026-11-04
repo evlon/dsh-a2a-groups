@@ -18,8 +18,8 @@ import { aggregateColleagueCards } from '../lib/core/colleague-cards.js';
 
 test('one person in two groups becomes one card with both groups', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: '发票重构', members: [{ memberId: 'm-1', displayName: '张工', tags: ['研发'] }] },
-    { groupId: 'g-2', groupName: '合同评审', members: [{ memberId: 'm-1', displayName: '张工', tags: ['产品'] }] },
+    { groupId: 'g-1', groupName: '发票重构', members: [{ personId: 'm-1', displayName: '张工', tags: ['研发'] }] },
+    { groupId: 'g-2', groupName: '合同评审', members: [{ personId: 'm-1', displayName: '张工', tags: ['产品'] }] },
   ]);
   assert.equal(cards.length, 1);
   assert.deepEqual(cards[0].groups.sort(), ['发票重构', '合同评审']);
@@ -28,14 +28,14 @@ test('one person in two groups becomes one card with both groups', () => {
 
 test('the headline is the first role they declared, not a placeholder', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [{ memberId: 'm-1', displayName: '张工', roleAbout: '兼产品' }] },
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工', roleAbout: '兼产品' }] },
   ]);
   assert.equal(cards[0].headline, '兼产品');
 });
 
 test('a person who declared no role gets no headline at all', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [{ memberId: 'm-1', displayName: '张工' }] },
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工' }] },
   ]);
   // Not "member", not "成员": an absent self-description must stay absent, or every card
   // would look like it knows something it does not.
@@ -45,8 +45,8 @@ test('a person who declared no role gets no headline at all', () => {
 
 test('the same tag in several groups is deduplicated', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [{ memberId: 'm-1', displayName: '张工', tags: ['研发'] }] },
-    { groupId: 'g-2', groupName: 'B', members: [{ memberId: 'm-1', displayName: '张工', tags: ['研发'] }] },
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工', tags: ['研发'] }] },
+    { groupId: 'g-2', groupName: 'B', members: [{ personId: 'm-1', displayName: '张工', tags: ['研发'] }] },
   ]);
   assert.deepEqual(cards[0].tags, ['研发']);
 });
@@ -57,19 +57,19 @@ test('people are ordered by how many of my groups they are in', () => {
       groupId: 'g-1',
       groupName: 'A',
       members: [
-        { memberId: 'm-1', displayName: '只在一个群' },
-        { memberId: 'm-2', displayName: '在两个群' },
+        { personId: 'm-1', displayName: '只在一个群' },
+        { personId: 'm-2', displayName: '在两个群' },
       ],
     },
-    { groupId: 'g-2', groupName: 'B', members: [{ memberId: 'm-2', displayName: '在两个群' }] },
+    { groupId: 'g-2', groupName: 'B', members: [{ personId: 'm-2', displayName: '在两个群' }] },
   ]);
   assert.equal(cards[0].name, '在两个群', 'the more connected person comes first');
 });
 
 test('online is true when any roster saw the person recently', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [{ memberId: 'm-1', displayName: '张工', online: false }] },
-    { groupId: 'g-2', groupName: 'B', members: [{ memberId: 'm-1', displayName: '张工', online: true }] },
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工', online: false }] },
+    { groupId: 'g-2', groupName: 'B', members: [{ personId: 'm-1', displayName: '张工', online: true }] },
   ]);
   assert.equal(cards[0].online, true);
 });
@@ -80,7 +80,7 @@ test('a roster without member ids falls back to the display name as the key', ()
     { groupId: 'g-2', groupName: 'B', members: [{ displayName: '张工' }] },
   ]);
   assert.equal(cards.length, 1, 'the same name must not become two cards');
-  assert.equal(cards[0].memberId, '');
+  assert.equal(cards[0].personId, '');
 });
 
 test('a record with no roster contributes no cards', () => {
@@ -90,7 +90,7 @@ test('a record with no roster contributes no cards', () => {
 
 test('a malformed roster row is skipped rather than becoming a nameless card', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [null, 42, { memberId: 'm-1' }, { displayName: '张工' }] },
+    { groupId: 'g-1', groupName: 'A', members: [null, 42, { personId: 'm-1' }, { displayName: '张工' }] },
   ]);
   assert.equal(cards.length, 1);
   assert.equal(cards[0].name, '张工');
@@ -98,7 +98,7 @@ test('a malformed roster row is skipped rather than becoming a nameless card', (
 
 test('a group with no name uses its id, so a card never claims a blank group', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', members: [{ memberId: 'm-1', displayName: '张工' }] },
+    { groupId: 'g-1', members: [{ personId: 'm-1', displayName: '张工' }] },
   ]);
   assert.deepEqual(cards[0].groups, ['g-1']);
 });
@@ -113,14 +113,14 @@ test('my card is first, even when somebody else is in more groups', () => {
     {
       groupId: 'g-1',
       groupName: 'A',
-      memberId: 'm-me',
+      personId: 'm-me',
       members: [
-        { memberId: 'm-other', displayName: '在三个群的人' },
-        { memberId: 'm-me', displayName: '我' },
+        { personId: 'm-other', displayName: '在三个群的人' },
+        { personId: 'm-me', displayName: '我' },
       ],
     },
-    { groupId: 'g-2', groupName: 'B', memberId: 'm-me', members: [{ memberId: 'm-other', displayName: '在三个群的人' }] },
-    { groupId: 'g-3', groupName: 'C', memberId: 'm-me', members: [{ memberId: 'm-other', displayName: '在三个群的人' }] },
+    { groupId: 'g-2', groupName: 'B', personId: 'm-me', members: [{ personId: 'm-other', displayName: '在三个群的人' }] },
+    { groupId: 'g-3', groupName: 'C', personId: 'm-me', members: [{ personId: 'm-other', displayName: '在三个群的人' }] },
   ]);
   assert.equal(cards[0].isSelf, true, 'my card must come first');
   assert.equal(cards[0].name, '我');
@@ -133,30 +133,30 @@ test('exactly one card is mine, identified by member id rather than name', () =>
     {
       groupId: 'g-1',
       groupName: 'A',
-      memberId: 'm-me',
+      personId: 'm-me',
       members: [
-        { memberId: 'm-me', displayName: '张工' },
-        { memberId: 'm-other', displayName: '张工' },
+        { personId: 'm-me', displayName: '张工' },
+        { personId: 'm-other', displayName: '张工' },
       ],
     },
   ]);
   assert.equal(cards.filter((card) => card.isSelf).length, 1);
-  assert.equal(cards.find((card) => card.isSelf).memberId, 'm-me');
+  assert.equal(cards.find((card) => card.isSelf).personId, 'm-me');
 });
 
 test('nobody is marked as me when the ledger names no member id', () => {
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [{ memberId: 'm-1', displayName: '张工' }] },
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工' }] },
   ]);
   assert.equal(cards.some((card) => card.isSelf), false, 'an unknown self must not be guessed');
 });
 
-test('a record without a memberId does not mark the first roster row as mine', () => {
+test('a record without a personId does not mark the first roster row as mine', () => {
   // The dangerous version of this feature: treating "the only row" or "the first row" as self
   // would put an edit affordance on a stranger's card.
   const cards = aggregateColleagueCards([
-    { groupId: 'g-1', groupName: 'A', members: [{ memberId: 'm-1', displayName: '张工' }] },
-    { groupId: 'g-2', groupName: 'B', members: [{ memberId: 'm-2', displayName: '李四' }] },
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工' }] },
+    { groupId: 'g-2', groupName: 'B', members: [{ personId: 'm-2', displayName: '李四' }] },
   ]);
   assert.equal(cards.every((card) => card.isSelf !== true), true);
 });

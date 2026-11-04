@@ -59,7 +59,7 @@ export function gradeOf(post, membership, muted) {
   const mentions = Array.isArray(post.mentions) ? post.mentions : [];
   if (mentions.length === 0) return 'notice';
   if (mentions.includes(MENTION_ALL_LITERAL)) return 'mention';
-  if (mentions.includes(membership.memberId)) return 'mention';
+  if (mentions.includes(membership.personId)) return 'mention';
   // The post addressed somebody, just not this member: deliberately ambient. Being
   // told "other people were mentioned" is noise, not signal.
   return 'ambient';
@@ -233,8 +233,8 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
         text: `subscribe ${groupId} from ${entry.lastSeq}`,
         data: {
           groupId,
-          memberId: membership.memberId,
-          memberKey: membership.memberKey,
+          personId: membership.personId,
+          personKey: membership.personKey,
           sinceSeq: entry.lastSeq,
         },
         signal: entry.controller.signal,
@@ -314,7 +314,7 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
 
     for (const membership of memberships) {
       // A Session does not receive its own post: its author already knows.
-      if (post.from?.memberId !== undefined && post.from.memberId === membership.memberId) continue;
+      if (post.from?.personId !== undefined && post.from.personId === membership.personId) continue;
       // Dedupe is keyed per (Session, message): one Session having seen a post must
       // not suppress delivery to another Session of the same instance.
       const dedupeKey = `${membership.sessionId}\u0000${post.msgId}`;
@@ -329,7 +329,7 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
       // Only a mention changes the rendering: the reader has to know the post is FOR
       // them, not merely in a group they belong to.
       const addressedMe = grade === 'mention'
-        && (!Array.isArray(post.mentions) || post.mentions.includes('@all') || post.mentions.includes(membership.memberId));
+        && (!Array.isArray(post.mentions) || post.mentions.includes('@all') || post.mentions.includes(membership.personId));
       try {
         await deliverer.deliver({
           sessionId,
@@ -459,7 +459,7 @@ function parsePost(event) {
  * will fix it and tell its human, and the group will never hear about it.
  */
 function renderPost(groupName, post, addressedMe = false) {
-  const sender = post.from?.displayName ?? post.from?.memberId ?? 'a member';
+  const sender = post.from?.displayName ?? post.from?.personId ?? 'a member';
   const when = typeof post.at === 'number' ? new Date(post.at).toISOString() : 'just now';
   const toEveryone = Array.isArray(post.mentions) && post.mentions.includes('@all');
   // The first line is what a reader sees in the collapsed card, so the addressing has

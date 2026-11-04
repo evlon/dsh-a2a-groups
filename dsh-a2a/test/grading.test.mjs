@@ -15,14 +15,14 @@ import { test } from 'node:test';
 
 import { gradeOf } from '../lib/dsh/inbox.js';
 
-const membership = { sessionId: 's-1', groupId: 'g-1', memberId: 'm-me' };
+const membership = { sessionId: 's-1', groupId: 'g-1', personId: 'm-me' };
 const other = 'm-other';
 
 /** Build a feed entry with the given mentions. */
 function post(mentions) {
   return mentions === undefined
-    ? { seq: 1, from: { memberId: other, displayName: '张工' }, text: 'hi' }
-    : { seq: 1, mentions, from: { memberId: other, displayName: '张工' }, text: 'hi' };
+    ? { seq: 1, from: { personId: other, displayName: '张工' }, text: 'hi' }
+    : { seq: 1, mentions, from: { personId: other, displayName: '张工' }, text: 'hi' };
 }
 
 test('an ordinary post is a notice: it wakes, but it is not "for you"', () => {
@@ -63,6 +63,6 @@ test('a malformed mentions field is treated as no mentions', () => {
 
 test('the grade does not depend on who authored the post', () => {
   // A member mentioning themselves is still a mention; the rule is about the addressee.
-  const selfPost = { seq: 1, mentions: ['m-me'], from: { memberId: 'm-me', displayName: 'me' } };
+  const selfPost = { seq: 1, mentions: ['m-me'], from: { personId: 'm-me', displayName: 'me' } };
   assert.equal(gradeOf(selfPost, membership, false), 'mention');
 });

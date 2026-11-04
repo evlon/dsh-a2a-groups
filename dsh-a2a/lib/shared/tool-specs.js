@@ -221,7 +221,7 @@ export const TOOL_SPECS = Object.freeze([
         properties: {
           groupId: { type: 'string' },
           name: { type: 'string' },
-          memberId: { type: 'string' },
+          personId: { type: 'string' },
           ownerKey: { type: 'string' },
           agentName: { type: 'string' },
           remote: { type: 'boolean' },
@@ -235,7 +235,7 @@ export const TOOL_SPECS = Object.freeze([
 `
           + `groupId  : ${value.groupId}
 `
-          + `memberId : ${value.memberId}
+          + `personId : ${value.personId}
 `
           + `ownerKey : ${value.ownerKey}
 
@@ -303,7 +303,7 @@ export const TOOL_SPECS = Object.freeze([
         properties: {
           groupId: { type: 'string' },
           groupName: { type: 'string' },
-          memberId: { type: 'string' },
+          personId: { type: 'string' },
           remote: { type: 'boolean' },
           recentMessages: { type: 'integer' },
         },
@@ -311,7 +311,7 @@ export const TOOL_SPECS = Object.freeze([
       render: (args, value) => [{
         type: 'text',
         text: `Joined "${value.groupName}" (${value.groupId})${value.remote ? ' over A2A' : ' locally'}.\n`
-          + `memberId: ${value.memberId}\n`
+          + `personId: ${value.personId}\n`
           + (value.recentMessages === 0
             ? 'The group has no messages yet.'
             : `${value.recentMessages} recent message(s) were fetched.`)
@@ -779,7 +779,7 @@ export const TOOL_SPECS = Object.freeze([
         properties: {
           groupId: { type: 'string' },
           groupName: { type: 'string' },
-          memberId: { type: 'string' },
+          personId: { type: 'string' },
           remote: { type: 'boolean' },
         },
       },
@@ -787,7 +787,7 @@ export const TOOL_SPECS = Object.freeze([
         type: 'text',
         text: `Joined「${value.groupName}」(${value.groupId})${value.remote ? ' over A2A' : ' locally'}.
 `
-          + `memberId: ${value.memberId}
+          + `personId: ${value.personId}
 
 `
           + 'This Session stored the credential; new posts will arrive as task messages.',
@@ -804,10 +804,10 @@ export const TOOL_SPECS = Object.freeze([
       additionalProperties: false,
       properties: {
         groupId: { type: 'string', description: 'Group id.' },
-        targetMemberId: { type: 'string', description: 'memberId of the person to remove.' },
+        targetPersonId: { type: 'string', description: 'personId of the person to remove.' },
         reason: { type: 'string', description: 'Optional one-liner for the system entry, e.g. "转岗".' },
       },
-      required: ['groupId', 'targetMemberId'],
+      required: ['groupId', 'targetPersonId'],
     },
     output: {
       schema: {
@@ -815,13 +815,13 @@ export const TOOL_SPECS = Object.freeze([
         additionalProperties: false,
         properties: {
           groupId: { type: 'string' },
-          memberId: { type: 'string' },
+          personId: { type: 'string' },
           displayName: { type: 'string' },
         },
       },
       render: (args, value) => [{
         type: 'text',
-        text: `Removed ${value.displayName} (${value.memberId}) from the group.
+        text: `Removed ${value.displayName} (${value.personId}) from the group.
 
 `
           + 'Their messages remain. They will get "not a member" on their next post, which is how their client '
