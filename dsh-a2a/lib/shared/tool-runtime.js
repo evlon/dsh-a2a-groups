@@ -18,6 +18,9 @@
  * @module dsh-a2a/tool-runtime
  */
 
+import { parseInviteLink } from '../dsh/tools.js';
+import { probeReachability } from '../core/probe.js';
+
 /**
  * Build the runtime over one set of dependencies.
  *
@@ -218,6 +221,53 @@ function lastMessageOf(summary, record) {
   }
   void record;
   return '';
+}
+
+
+/**
+ * The display name to record for the caller when they did not supply one.
+ *
+ * A display name is shown to every member in the group feed, so it has to read as a person.
+ * A Session id does not: `session-1f3a9c` in a member list looks like a bug, and it also
+ * leaks an internal identifier to everybody in the group.
+ *
+ * Order: an explicit name the adapter knows, then the store default. Returning `undefined`
+ * rather than throwing is deliberate — creating a group must not fail because nobody has
+ * named themselves yet, and the owner can rename themselves afterwards.
+ *
+ * @param {object} exec - the tool execution context from the host adapter.
+ * @returns {string|undefined} a name, or undefined to let the store default apply.
+ */
+function displayNameOf(exec) {
+  if (exec === null || typeof exec !== 'object') return undefined;
+  // Adapters differ in where they expose the signed-in person; take the first usable one.
+  const candidates = [
+    exec.displayName,
+    exec.agent?.displayName,
+    exec.agent?.name,
+    exec.user?.displayName,
+    exec.user?.name,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim() !== '') return candidate.trim();
+  }
+  // Undefined means "use the store default", keeping that decision in one place.
+  return undefined;
+}
+
+/**
+ * The gateway agent name this host is registered under, if configured.
+ *
+ * Used only to word the "next steps" hint after creating a group, whose point is that a new
+ * group needs no new gateway entry. An unconfigured host gets `undefined`, so the caller words
+ * the hint without a name instead of printing "undefined".
+ *
+ * @param {object} config - normalized config.
+ * @returns {string|undefined} the agent name.
+ */
+function settingsAgentName(config) {
+  const name = config?.groups?.agentName;
+  return typeof name === 'string' && name.trim() !== '' ? name.trim() : undefined;
 }
 
 /**
