@@ -1,33 +1,28 @@
-feat(ui): inviting happens in a dialog, not in the member list
+fix(ui): the dialog was dark-on-dark because the theme variables do not exist
 
-Listing colleagues inline fails in two ways that only appear at scale, and the second one is worse:
+`background: var(--dsh-color-bg-elevated, #1c2027)` — that variable is not defined in this theme, so the
+fallback applied while the text stayed inherited black. On a light background that is dark grey on
+near-black: exactly the unreadable result that got reported.
 
-  - a team of five gets a friendly little row; a directory of a thousand gets a wall that pushes the
-    roster off the pane
-  - the first twelve were shown with no indication that the rest existed, so a reader with a thousand
-    colleagues would reasonably conclude most of them were not invitable
+Checking the live page found something worse than one bad colour: **28 occurrences of five
+`--dsh-color-*` variables across this file, and none of them exist.** The real variables are
+per-widget (`--dsh-boot-bg`, `--dsh-frame-chrome-top`, `--dsh-scrollbar-thumb`…), with no general
+background/text/border set to plug into. So every one of those has been rendering its fallback hex all
+along. It looked fine only because the fallbacks happened to suit a dark theme; the dialog broke because
+it needed an actual SURFACE and its fallback was a dark one.
 
-A dialog separates the two questions. "Who is in this group" stays in the pane; "who could join it"
-happens in a surface sized for choosing. The pane keeps one quiet button.
+REPLACED WITH THINGS THAT FOLLOW THE THEME
 
-SEARCH IS THE PRIMARY CONTROL, NOT PAGINATION
+- Surfaces use `Canvas`, text uses `CanvasText` — CSS system colours that resolve to the current
+  theme's window colours without this file knowing which theme is active. Plus `colorScheme: "light
+  dark"` so form controls and scrollbars match.
+- Borders become `rgba(128,128,128,0.35)`: a neutral that darkens slightly on white and lightens
+  slightly on black, because it composites against the surface instead of asserting one.
+- Icons and secondary text inherit; the host panel already chose a legible colour for its surface.
+- Emphasis (accent) uses `currentColor` rather than a hue: a blue that reads on white vanishes on dark
+  and vice versa, so importance is carried by contrast against dimmed neighbours instead.
+- The presence dot keeps a fixed `#3fb950`, the one place a hue is right — success green is not
+  theme-dependent.
 
-Nobody pages through a thousand colleagues; they type two characters of a name. The list under the box
-is what an empty search shows — capped at six, with the count of what is not shown stated explicitly,
-because a silently truncated list is how somebody decides a person is not invitable.
-
-Matching covers name, headline and tags, so "the DBA" finds 赵六 even without recalling the name.
-
-TWO MISTAKES WORTH RECORDING
-
-1. The dialog was first wrapped in a `display: contents` div so it could sit outside the pane. Four
-   layout tests failed immediately — and correctly: `MembersPane()` returning an element whose
-   `props.style` IS the pane's style is the contract those tests describe. The fix was to notice that
-   `position: fixed` escapes the pane's clipping without any wrapper at all.
-
-2. Replacing `membersLayout` wholesale lost the original `root`/`header` definitions, which the same
-   tests caught. Inserting next to the anchor instead of over it is the rule.
-
-Verified: 422 tests, and a live run — open the pane, press 邀请同事入群, the dialog shows the search box
-and 赵六, and picking him closes the dialog and leaves a ready instruction in the composer naming both
-`personId` and `groupId`.
+Verified: 0 stale references left, 422 tests, and the live dialog measures
+`background rgb(255,255,255)` / `color rgb(0,0,0)` for the panel, its input, and its list items.

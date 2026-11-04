@@ -521,7 +521,7 @@ window.__ModuleLoader__.load({
 				justifyContent: "center",
 				marginBottom: "2px",
 				opacity: 0.3,
-				color: "var(--dsh-color-text-secondary, inherit)"
+				color: "currentColor"
 			},
 			emptyBody: {
 				fontSize: "12px",
@@ -960,7 +960,7 @@ window.__ModuleLoader__.load({
 					// the button's `title`, never on the glyph.
 					"aria-hidden": "true",
 					focusable: "false",
-					style: { flex: "0 0 auto", display: "block", color: "var(--dsh-color-icon, currentColor)" }
+					style: { flex: "0 0 auto", display: "block", color: "currentColor" }
 				},
 				shape.attrs
 			);
@@ -1389,7 +1389,7 @@ window.__ModuleLoader__.load({
 					style: {
 						display: "flex",
 						gap: "2px",
-						borderBottom: "1px solid var(--dsh-color-border, #2a2f3a)",
+						borderBottom: "1px solid rgba(128, 128, 128, 0.35)",
 						paddingBottom: "0"
 					}
 				},
@@ -1408,7 +1408,7 @@ window.__ModuleLoader__.load({
 								padding: "6px 8px",
 								border: "none",
 								borderBottom: active
-									? "2px solid var(--dsh-color-accent, #4c8dff)"
+									? "2px solid currentColor"
 									: "2px solid transparent",
 								background: "transparent",
 								color: "inherit",
@@ -1553,8 +1553,8 @@ window.__ModuleLoader__.load({
 						// Mine is outlined: the list is otherwise read-only, and the one card the
 						// reader owns should not look like the ones they cannot touch.
 						border: card.isSelf === true
-							? "1px solid var(--dsh-color-accent, #4c8dff)"
-							: "1px solid var(--dsh-color-border, #2a2f3a)",
+							? "1px solid currentColor"
+							: "1px solid rgba(128, 128, 128, 0.35)",
 						borderRadius: "6px"
 					}
 				},
@@ -1570,7 +1570,7 @@ window.__ModuleLoader__.load({
 										padding: "0 5px",
 										borderRadius: "3px",
 										fontSize: "10px",
-										background: "var(--dsh-color-accent, #4c8dff)",
+										background: "currentColor",
 										color: "#fff"
 									},
 									title: "这是你自己的名片，只有你能改"
@@ -1596,7 +1596,7 @@ window.__ModuleLoader__.load({
 										title: "只看标签「" + tag + "」的同事",
 										style: {
 											padding: "1px 7px",
-											border: "1px solid var(--dsh-color-border, #444)",
+											border: "1px solid rgba(128, 128, 128, 0.5)",
 											borderRadius: "999px",
 											background: "transparent",
 											color: "inherit",
@@ -1629,8 +1629,8 @@ window.__ModuleLoader__.load({
 							borderRadius: "50%",
 							flex: "0 0 auto",
 							background: card.online
-								? "var(--dsh-color-success, #3fb950)"
-								: "var(--dsh-color-border, #555)"
+								? "#3fb950"
+								: "rgba(128, 128, 128, 0.5)"
 						},
 						"aria-hidden": "true"
 					}),
@@ -1640,7 +1640,7 @@ window.__ModuleLoader__.load({
 							style: {
 								fontSize: "11px",
 								opacity: card.online ? 0.8 : 0.55,
-								color: card.online ? "var(--dsh-color-success, #3fb950)" : "inherit"
+								color: card.online ? "#3fb950" : "inherit"
 							},
 							title: card.online
 								? "对方正开着 DSH，发消息会立即送到"
@@ -1672,7 +1672,7 @@ window.__ModuleLoader__.load({
 									title: "把编辑指令填进输入框，改完发送即可",
 									style: {
 										padding: "2px 8px",
-										border: "1px solid var(--dsh-color-accent, #4c8dff)",
+										border: "1px solid currentColor",
 										borderRadius: "4px",
 										background: "transparent",
 										color: "inherit",
@@ -1719,9 +1719,9 @@ window.__ModuleLoader__.load({
 							type: "button",
 							style: {
 								padding: "2px 8px",
-								border: "1px solid var(--dsh-color-border, #444)",
+								border: "1px solid rgba(128, 128, 128, 0.5)",
 								borderRadius: "999px",
-								background: active ? "var(--dsh-color-accent, #4c8dff)" : "transparent",
+								background: active ? "currentColor" : "transparent",
 								color: active ? "#fff" : "inherit",
 								font: "inherit",
 								fontSize: "11px",
@@ -1806,7 +1806,8 @@ window.__ModuleLoader__.load({
 			dialogOverlay: {
 				position: "fixed",
 				inset: "0",
-				background: "rgba(0, 0, 0, 0.45)",
+				// Translucent black works on both themes: it darkens without asserting a palette.
+				background: "rgba(0, 0, 0, 0.35)",
 				display: "flex",
 				alignItems: "center",
 				justifyContent: "center",
@@ -1819,13 +1820,21 @@ window.__ModuleLoader__.load({
 				width: "min(420px, calc(100vw - 32px))",
 				maxHeight: "min(460px, calc(100vh - 64px))",
 				padding: "14px",
-				background: "var(--dsh-color-bg-elevated, #1c2027)",
-				color: "inherit",
-				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				// `Canvas` is the system colour for a window surface: it resolves to white on a light theme
+				// and near-black on a dark one without this file knowing which is active. The previous
+				// version guessed a dark hex behind a variable that does not exist, so on a light theme it
+				// drew dark grey on black.
+				background: "Canvas",
+				color: "CanvasText",
+				// Two borders: a hairline for shape, and a soft one for separation on themes where the panel
+				// colour and the page colour are nearly the same.
+				border: "1px solid rgba(128, 128, 128, 0.35)",
 				borderRadius: "8px",
-				boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
+				boxShadow: "0 12px 32px rgba(0, 0, 0, 0.28)",
 				boxSizing: "border-box",
-				overflow: "hidden"
+				overflow: "hidden",
+				// Tells the browser to render form controls and scrollbars for whichever theme is active.
+				colorScheme: "light dark"
 			},
 			dialogHeader: {
 				display: "flex",
@@ -1848,12 +1857,14 @@ window.__ModuleLoader__.load({
 				width: "100%",
 				boxSizing: "border-box",
 				padding: "6px 8px",
-				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				border: "1px solid rgba(128, 128, 128, 0.4)",
 				borderRadius: "5px",
 				background: "transparent",
 				color: "inherit",
 				font: "inherit",
-				fontSize: "12px"
+				fontSize: "12px",
+				// Without this the placeholder uses a browser default that ignores the theme.
+				colorScheme: "light dark"
 			},
 			// Scrolls on its own: the header and the search stay put while the list moves, which is what
 			// makes a long result set usable in a short dialog.
@@ -1885,7 +1896,7 @@ window.__ModuleLoader__.load({
 				gap: "5px",
 				alignSelf: "flex-start",
 				padding: "3px 10px",
-				border: "1px dashed var(--dsh-color-border, #444)",
+				border: "1px dashed rgba(128, 128, 128, 0.5)",
 				borderRadius: "5px",
 				background: "transparent",
 				color: "inherit",
@@ -1927,7 +1938,7 @@ window.__ModuleLoader__.load({
 				width: "100%",
 				boxSizing: "border-box",
 				padding: "5px 7px",
-				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				border: "1px solid rgba(128, 128, 128, 0.35)",
 				borderRadius: "4px",
 				background: "transparent",
 				color: "inherit",
@@ -1938,7 +1949,7 @@ window.__ModuleLoader__.load({
 			unboundButton: {
 				alignSelf: "flex-start",
 				padding: "3px 10px",
-				border: "1px solid var(--dsh-color-accent, #4c8dff)",
+				border: "1px solid currentColor",
 				borderRadius: "4px",
 				background: "transparent",
 				color: "inherit",
@@ -1951,12 +1962,12 @@ window.__ModuleLoader__.load({
 			unboundButtonOff: {
 				opacity: 0.4,
 				cursor: "default",
-				borderColor: "var(--dsh-color-border, #444)"
+				borderColor: "rgba(128, 128, 128, 0.5)"
 			},
 			unboundFootnote: {
 				marginTop: "6px",
 				paddingTop: "6px",
-				borderTop: "1px solid var(--dsh-color-border, #2a2f3a)",
+				borderTop: "1px solid rgba(128, 128, 128, 0.35)",
 				fontSize: "10px",
 				lineHeight: 1.6,
 				opacity: 0.5
@@ -1970,7 +1981,7 @@ window.__ModuleLoader__.load({
 				gap: "4px",
 				marginTop: "6px",
 				paddingTop: "6px",
-				borderTop: "1px solid var(--dsh-color-border, #2a2f3a)"
+				borderTop: "1px solid rgba(128, 128, 128, 0.35)"
 			},
 			inviteLabel: {
 				fontSize: "11px",
@@ -1980,7 +1991,7 @@ window.__ModuleLoader__.load({
 			// buttons would push the roster off the panel.
 			inviteChip: {
 				padding: "2px 8px",
-				border: "1px dashed var(--dsh-color-border, #444)",
+				border: "1px dashed rgba(128, 128, 128, 0.5)",
 				borderRadius: "999px",
 				background: "transparent",
 				color: "inherit",
@@ -2013,7 +2024,7 @@ window.__ModuleLoader__.load({
 				flex: "0 0 auto",
 				minWidth: "0",
 				paddingBottom: "6px",
-				borderBottom: "1px solid var(--dsh-color-border, #2a2f3a)"
+				borderBottom: "1px solid rgba(128, 128, 128, 0.35)"
 			},
 			headerTitle: {
 				display: "inline-flex",
@@ -2104,7 +2115,7 @@ window.__ModuleLoader__.load({
 			},
 			/* The row I can edit, marked as such before the pointer arrives. */
 			personRowSelf: {
-				border: "1px solid var(--dsh-color-accent, #4c8dff)",
+				border: "1px solid currentColor",
 				background: "rgba(76, 141, 255, 0.07)"
 			},
 			personBody: {
@@ -2136,7 +2147,7 @@ window.__ModuleLoader__.load({
 				padding: "0 4px",
 				borderRadius: "7px",
 				lineHeight: "14px",
-				background: "var(--dsh-color-accent, #4c8dff)",
+				background: "currentColor",
 				color: "#fff"
 			},
 			roleChip: {
@@ -2149,7 +2160,7 @@ window.__ModuleLoader__.load({
 				marginLeft: "auto",
 				fontSize: "10px",
 				padding: "0 4px",
-				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				border: "1px solid rgba(128, 128, 128, 0.35)",
 				borderRadius: "7px",
 				lineHeight: "14px",
 				opacity: 0.75
@@ -2655,8 +2666,8 @@ window.__ModuleLoader__.load({
 						? h("span", {
 							style: Object.assign({}, membersLayout.dot, {
 								background: member.online === true
-									? "var(--dsh-color-success, #3fb950)"
-									: "var(--dsh-color-border, #555)"
+									? "#3fb950"
+									: "rgba(128, 128, 128, 0.5)"
 							}),
 							title: member.online === true ? "在线" : "离线或未知"
 						})
@@ -2873,7 +2884,7 @@ window.__ModuleLoader__.load({
 						alignItems: "center",
 						gap: "4px",
 						padding: "2px 8px",
-						border: "1px solid var(--dsh-color-border, #444)",
+						border: "1px solid rgba(128, 128, 128, 0.5)",
 						borderRadius: "999px",
 						background: "transparent",
 						color: "inherit",
