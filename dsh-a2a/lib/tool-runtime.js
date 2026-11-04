@@ -242,6 +242,24 @@ function senderOf(exec) {
   return { id };
 }
 
+/**
+ * A tool call must name its caller.
+ *
+ * Every group operation is scoped to one conversation, and a membership belongs to one —
+ * so a host that cannot say who is calling cannot be served correctly. Failing loudly
+ * beats guessing: a wrong guess would act on somebody else's membership.
+ *
+ * @param {string|undefined} sessionId - the caller's identity.
+ * @param {string} tool - tool name, for the message.
+ * @returns {string} the id.
+ */
+function requireSession(sessionId, tool) {
+  if (typeof sessionId !== 'string' || sessionId === '') {
+    throw coded('no_session', `${tool} needs to know which conversation is calling, and the host did not provide one`);
+  }
+  return sessionId;
+}
+
   /**
    * The caller acting through this tool.
    *

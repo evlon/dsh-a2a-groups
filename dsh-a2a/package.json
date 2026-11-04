@@ -15,6 +15,10 @@
   "license": "MIT",
   "type": "module",
   "main": "lib/index.js",
+  "bin": {
+    "agent-groups": "./bin/agent-groups.js",
+    "agent-groups-mcp": "./lib/mcp-server.js"
+  },
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",
@@ -24,10 +28,15 @@
       "types": "./lib/types/client.d.ts",
       "default": "./client.js"
     },
+    "./mcp": "./lib/mcp-server.js",
+    "./host": "./bin/agent-groups.js",
+    "./specs": "./lib/tool-specs.js",
+    "./runtime": "./lib/tool-runtime.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
+    "bin",
     "lib",
     "client.js",
     "cordis.patch.yml",

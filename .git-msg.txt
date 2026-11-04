@@ -1,21 +1,33 @@
-refactor: split the tool surface into specs, runtime, and a thin DSH adapter
+feat: an MCP stdio server, so non-DSH agents can use the same tools
 
-`tools.js` was 1676 lines holding three concerns at once: the protocol description
-(models read it), the business logic, and the DSH registration call. Adding an MCP host
-would have meant either duplicating that logic or drifting from it.
+The DSH plugin covers people who use DSH. Everyone else — CodeBuddy, Claude Code,
+Cursor, any MCP client — could not reach these groups at all. MCP is the lingua
+franca for "an agent with tools", so the same nineteen tools are now offered over
+stdio as well.
 
-    tool-specs.js     name / description / parameters / output / render   pure data
-    tool-runtime.js   the 19 execute bodies, taking { sessionId }         pure logic
-    tools.js          specs + runtime -> ctx.tools.register               93 lines
+    lib/mcp-server.js   JSON-RPC 2.0 over stdin/stdout, newline framed
+    lib/mcp-deps.js     the group machinery wired for a process with no DSH
 
-The seam turned out to be one function. `senderOf(exec)` read `exec.agent.id` — a DSH
-detail buried in the middle of the bodies. It now reads `{ sessionId }`, which each
-adapter supplies its own way, so not one tool body knows which host it is running in.
+What the split bought: the MCP handler is ~200 lines and contains no group logic. It
+reads tool-specs.js, calls tool-runtime.js, and renders with each spec's own render
+function — so a model that learned `a2a_group_post` in DSH meets the identical
+description, schema and output text in an MCP client.
 
-That single mapping is why the split is worth doing rather than just tidy: a DSH Session
-id and an MCP connection id are the same fact to these tools, and the group mutators need
-exactly one such fact because a membership belongs to one conversation.
+No UI, by protocol: MCP has tools, resources and prompts, not panels. The member
+column, the tabs and the @ button exist only in the DSH plugin. An agent that can
+call a2a_group_post does not need a roster widget.
 
-Verified: 309 tests, unchanged behaviour. tools.js 1676 -> 93 lines. The three helpers
-other modules import (joinUrl, coded, parseInviteLink) are lifted verbatim rather than
-moved, so no call site churned.
+`mcp-deps.js` states what an MCP process actually has: a remote host address and a
+credential, no local store and no Sessions. Its store is deliberately a refusing
+stub rather than an empty one — `list()` returning [] would read as "you are in no
+groups", which is a lie about state this process cannot see.
+
+Two failures found while wiring it, both real:
+  - `requireSession` had never been written, so every group tool threw
+    "requireSession is not defined" on the MCP path. Caught by the error-shape test.
+  - `registry` is created by `createRegistry({home})`, not an agent-flavoured name;
+    the wrong call would have failed at startup, not at first use.
+
+Verification: 321 tests (12 new for the protocol surface); scripts/mcp-probe.mjs
+spawns the server and drives it over a real pipe — 19 tools listed, unknown tool
+reported as isError, stdout stays pure JSON.
