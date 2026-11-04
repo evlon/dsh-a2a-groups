@@ -1,0 +1,16 @@
+fix(ui): one roster, and a roster-width column
+
+The members list rendered twice — a one-line strip above the composer and the column
+beside it — so the same three names appeared on screen in two places. Two views of one
+fact is worse than one: it suggests more information than exists, and it doubles the
+surface a layout bug can appear in. The column stays, because it is the shape a chat app
+uses and the strip only bought "always visible", which the composer button already
+provides one click away.
+
+The pane also had the main panel's layout: 16px padding on each side inside a 280px
+column, and rows without minWidth:0, so a long name pushed the row wider than the column
+instead of truncating. It now has its own style block — tight padding, a 300px max
+width, truncating names — which is what made it read as too wide.
+
+Verified on the page: the strip is gone, and the column renders 3 人 / 张工 群主 / 李四 /
+王五 / @ 所有人 at 300px.

@@ -268,7 +268,7 @@ test("factory exports the plugin surface", () => {
 	assert.ok(exportsObject.GLOBAL_KEY.startsWith("__") && exportsObject.GLOBAL_KEY.endsWith("__"));
 });
 
-test("apply registers the panel, the members strip, and the right-column members page", () => {
+test("apply registers the panel and the right-column members page, with no duplicate roster", () => {
 	const exportsObject = loadBundle().materialize();
 	const slots = createFakeSlots();
 	const tabs = createFakeTabs();
@@ -277,12 +277,19 @@ test("apply registers the panel, the members strip, and the right-column members
 	assert.deepEqual(slots.injected, [
 		"sidebar.panellist",
 		"main",
-		"conversation.input.dock",
 		"sidebar.right.pane.tab",
 		"sidebar.right.pane.tab.title",
 		"conversation.input.left",
 	]);
-	assert.equal(slots.registered.length, 6);
+	assert.equal(slots.registered.length, 5);
+
+	// The roster renders in ONE place. An earlier version also drew a strip above the
+	// composer, so the same names appeared twice on screen.
+	assert.equal(
+		slots.injected.includes("conversation.input.dock"),
+		false,
+		"the roster must not also render as a composer strip",
+	);
 
 	const sidebar = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.panellist");
 	const main = slots.registered.find((entry) => entry.slotOptions.name === "main");
@@ -295,12 +302,6 @@ test("apply registers the panel, the members strip, and the right-column members
 	assert.equal(sidebar.slotOptions.label, "协作群");
 	assert.equal(typeof sidebar.component, "function");
 	assert.equal(typeof main.component, "function");
-
-	// A collapsed one-line strip in the composer dock: it renders with any open Session.
-	const dock = slots.registered.find((entry) => entry.slotOptions.name === "conversation.input.dock");
-	assert.ok(dock !== undefined, "the members strip must be registered");
-	assert.equal(dock.slotOptions.id, exportsObject.MEMBERS_DOCK_ID);
-	assert.equal(typeof dock.component, "function");
 
 	// The right column: a tab TYPE must be declared before `openTab(kind)` works, because
 	// the registry throws for a kind nothing registered. The body and chip are keyed by the

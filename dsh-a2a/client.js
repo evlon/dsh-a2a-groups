@@ -81,9 +81,6 @@ window.__ModuleLoader__.load({
 		 */
 		const services = { sidebarRight: undefined, sidebarRightTabs: undefined };
 
-		/** Id of the members strip above the composer. */
-		const MEMBERS_DOCK_ID = "a2a-members";
-
 		/** The panel's tabs, in the order a person scans them. */
 		const PANEL_TABS = [
 			{ id: "all", label: "全部" },
@@ -1085,163 +1082,83 @@ window.__ModuleLoader__.load({
 		}
 
 
+
+
 		/**
-		 * The members strip above the composer: collapsed to one line, expanding to a
-		 * clickable roster.
+		 * Layout for the right-column members pane.
 		 *
-		 * Sits in `conversation.input.dock` because that is where a person is when they are
-		 * about to address somebody — and because it renders without needing a tab opened by
-		 * the host, which the right-column slot does not.
+		 * Deliberately not `S.root`: that one belongs to the central panel, where 16px of
+		 * padding and full width are correct. In a 280px column the same numbers waste a
+		 * tenth of the width and let a name wrap onto two lines.
+		 *
+		 * `maxWidth` bounds it on a very wide screen: a roster 900px wide would be all
+		 * whitespace between a name and its role chip.
 		 */
-		function MembersDock(props) {
-			const snapshot = useSnapshot();
-			// Local collapse state: a per-Session preference would need to persist, and a
-			// strip that resets to collapsed on reload is the conservative default.
-			const local = useLocalState(false);
-			const collapsed = local.value !== true;
-			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
-
-			const candidates = snapshot.groups.filter(function (group) {
-				if (group.discovered === true) return false;
-				if (sessionId === "") return true;
-				return group.sessionId === "" || group.sessionId === sessionId;
-			});
-			candidates.sort(function (left, right) {
-				return (right.lastTime || 0) - (left.lastTime || 0);
-			});
-			const group = candidates[0];
-
-			// Nothing to say when this Session belongs to no group: the strip would be a
-			// permanent empty bar above every conversation.
-			if (group === undefined) return null;
-
-			/**
-			 * Insert `@name ` into the composer through the owner's API.
-			 *
-			 * Never sends: a click that posted a message would be an unexpected action from a
-			 * list you browse while thinking. The person still decides.
-			 */
-			function address(name) {
-				insertMention(props !== null && props !== undefined ? props.inputActions : undefined, name);
+		const membersLayout = {
+			root: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "2px",
+				padding: "10px 8px",
+				height: "100%",
+				minHeight: "0",
+				maxWidth: "300px",
+				overflowY: "auto",
+				boxSizing: "border-box",
+				fontSize: "12px"
+			},
+			header: {
+				display: "flex",
+				alignItems: "baseline",
+				justifyContent: "space-between",
+				gap: "6px",
+				paddingBottom: "6px",
+				marginBottom: "2px",
+				borderBottom: "1px solid var(--dsh-color-border, #2a2f3a)"
+			},
+			/* One row: dot, name, role. `minWidth: 0` lets the name truncate instead of
+			   forcing the row wider than the column. */
+			row: {
+				display: "flex",
+				alignItems: "center",
+				gap: "6px",
+				width: "100%",
+				minWidth: "0",
+				padding: "4px 6px",
+				border: "none",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "12px",
+				textAlign: "left",
+				cursor: "pointer"
+			},
+			/* The name is the only flexible cell, so it absorbs the shrinkage. */
+			name: {
+				flex: "1 1 auto",
+				minWidth: "0",
+				overflow: "hidden",
+				textOverflow: "ellipsis",
+				whiteSpace: "nowrap"
+			},
+			role: {
+				flex: "0 0 auto",
+				fontSize: "11px",
+				opacity: 0.6
+			},
+			dot: {
+				width: "6px",
+				height: "6px",
+				borderRadius: "50%",
+				flex: "0 0 auto"
+			},
+			footer: {
+				marginTop: "auto",
+				paddingTop: "8px",
+				borderTop: "1px solid var(--dsh-color-border, #2a2f3a)"
 			}
-
-			const names = group.members.map(function (member) {
-				return member.name;
-			});
-			const summary = names.length === 0
-				? String(group.memberCount || 0) + " 人（名单需在会话里查一次）"
-				: String(group.memberCount || names.length) + " 人 · " + names.slice(0, 4).join("、") + (names.length > 4 ? " 等" : "");
-
-			return h(
-				"div",
-				{
-					style: {
-						display: "flex",
-						flexDirection: "column",
-						gap: "4px",
-						padding: "4px 10px",
-						fontSize: "12px",
-						color: "var(--dsh-color-text-secondary, #9aa4b2)",
-						borderTop: "1px solid var(--dsh-color-border, #2a2f3a)"
-					}
-				},
-				h(
-					"button",
-					{
-						type: "button",
-						title: collapsed ? "展开群成员，点击即可 @ 对方" : "收起",
-						style: {
-							display: "flex",
-							alignItems: "center",
-							gap: "6px",
-							width: "100%",
-							padding: "2px 0",
-							border: "none",
-							background: "transparent",
-							color: "inherit",
-							font: "inherit",
-							fontSize: "12px",
-							cursor: "pointer",
-							textAlign: "left"
-						},
-						onClick: function () {
-							local.set(local.value === true ? false : true);
-						}
-					},
-					h("span", { style: { flex: "0 0 auto", opacity: 0.7 } }, collapsed ? "▸" : "▾"),
-					h("span", { style: { fontWeight: 500 } }, "群成员"),
-					h("span", { style: { opacity: 0.75, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, summary)
-				),
-				collapsed
-					? null
-					: h(
-							"div",
-							{ style: { display: "flex", flexWrap: "wrap", gap: "4px", paddingBottom: "4px" } },
-							group.members.map(function (member) {
-								return h(
-									"button",
-									{
-										key: member.id,
-										type: "button",
-										title: "点击在输入框里 @ " + member.name,
-										style: {
-											display: "inline-flex",
-											alignItems: "center",
-											gap: "4px",
-											padding: "2px 8px",
-											border: "1px solid var(--dsh-color-border, #444)",
-											borderRadius: "999px",
-											background: "transparent",
-											color: "inherit",
-											font: "inherit",
-											fontSize: "12px",
-											cursor: "pointer"
-										},
-										onClick: function () {
-											address(member.name);
-										}
-									},
-									h(
-										"span",
-										{
-											style: {
-												width: "6px",
-												height: "6px",
-												borderRadius: "50%",
-												background: member.online ? "var(--dsh-color-success, #3fb950)" : "var(--dsh-color-border, #555)"
-											}
-										}
-									),
-									member.name,
-									member.role === "owner" ? h("span", { style: { opacity: 0.6 } }, "·群主") : null
-								);
-							}),
-							h(
-								"button",
-								{
-									key: "__all__",
-									type: "button",
-									title: "点击 @ 所有人",
-									style: {
-										padding: "2px 8px",
-										border: "1px dashed var(--dsh-color-border, #444)",
-										borderRadius: "999px",
-										background: "transparent",
-										color: "inherit",
-										font: "inherit",
-										fontSize: "12px",
-										cursor: "pointer"
-									},
-									onClick: function () {
-										address("所有人");
-									}
-								},
-								"@ 所有人"
-							)
-						)
-			);
-		}
-
+		};
 		/**
 		 * Members of the group the current Session belongs to, as a right-hand panel.
 		 *
@@ -1255,9 +1172,8 @@ window.__ModuleLoader__.load({
 			const snapshot = useSnapshot();
 			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
 
-			// Which group this Session belongs to. A Session can in principle hold several;
-			// the panel shows the one with the most recent activity, because that is the one
-			// the person is working in.
+			// Which group this Session belongs to. A Session can hold several; the pane shows
+			// the one with the most recent activity, because that is the one being worked in.
 			const candidates = snapshot.groups.filter(function (group) {
 				if (group.discovered === true) return false;
 				if (sessionId === "") return true;
@@ -1268,13 +1184,7 @@ window.__ModuleLoader__.load({
 			});
 			const group = candidates[0];
 
-			/**
-			 * Insert `@name ` into the composer.
-			 *
-			 * `inputActions` is the owner's API for changing the draft. Falling back to doing
-			 * nothing is deliberate: a panel that silently fails to insert is better than one
-			 * that writes into the DOM behind the composer's back and desynchronises it.
-			 */
+			/** Insert `@name ` into the composer through the owner's two-step API. */
 			function address(member) {
 				insertMention(props !== null && props !== undefined ? props.inputActions : undefined, member.name);
 			}
@@ -1282,34 +1192,40 @@ window.__ModuleLoader__.load({
 			if (group === undefined) {
 				return h(
 					"div",
-					{ style: S.root },
-					h("h2", { style: S.title }, "群成员"),
-					h("p", { style: S.emptyBody }, "这个会话还没有加入协作群。加入后，成员会出现在这里，点击即可 @ 对方。")
+					{ style: membersLayout.root },
+					h(
+						"div",
+						{ style: membersLayout.header },
+						h("span", { style: S.sectionLabel }, "群成员")
+					),
+					h("p", { style: S.emptyBody }, "这个会话还没有加入协作群。")
 				);
 			}
 
 			const members = group.members;
+			const countLine = String(group.memberCount || members.length) + " 人"
+				+ (group.onlineCount > 0 ? " · " + String(group.onlineCount) + " 在线" : "")
+				+ (members.length === 0 ? "（名单需在会话里查一次）" : "");
+
 			return h(
 				"div",
-				{ style: S.root },
+				{ style: membersLayout.root },
 				h(
 					"div",
-					{ style: S.header },
-					h("h2", { style: S.title }, "群成员"),
-					h("span", { style: S.hint }, group.name)
+					{ style: membersLayout.header },
+					h("span", { style: S.sectionLabel }, "群成员"),
+					h("span", { style: membersLayout.role }, countLine)
 				),
 				h(
 					"p",
-					{ style: S.emptyBody },
-					String(group.memberCount || members.length) + " 人"
-						+ (group.onlineCount > 0 ? " · " + String(group.onlineCount) + " 人在线" : "")
-						+ (members.length === 0 ? "（名单需在会话里让助手查一次）" : "")
+					{ style: { margin: "0 0 4px", fontSize: "11px", opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
+					group.name
 				),
 				members.length === 0
 					? null
 					: h(
 							"div",
-							{ style: { display: "flex", flexDirection: "column", gap: "2px" } },
+							{ style: { display: "flex", flexDirection: "column" } },
 							members.map(function (member) {
 								return h(
 									"button",
@@ -1317,70 +1233,42 @@ window.__ModuleLoader__.load({
 										key: member.id,
 										type: "button",
 										title: "点击在输入框里 @ " + member.name,
-										style: {
-											display: "flex",
-											alignItems: "center",
-											gap: "6px",
-											width: "100%",
-											padding: "5px 6px",
-											border: "none",
-											borderRadius: "5px",
-											background: "transparent",
-											color: "inherit",
-											font: "inherit",
-											fontSize: "12px",
-											textAlign: "left",
-											cursor: "pointer"
-										},
+										style: membersLayout.row,
 										onClick: function () {
 											address(member);
 										}
 									},
-									h(
-										"span",
-										{
-											style: {
-												width: "6px",
-												height: "6px",
-												borderRadius: "50%",
-												flex: "0 0 auto",
-												background: member.online ? "var(--dsh-color-success, #3fb950)" : "var(--dsh-color-border, #555)"
-											}
-										}
-									),
-									h("span", { style: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } }, member.name),
-									member.role === "owner" ? h("span", { style: S.chip }, "群主") : null,
-									member.role !== "" && member.role !== "owner" && member.role !== "member"
-										? h("span", { style: S.chip }, member.role)
-										: null
+									h("span", {
+										style: Object.assign({}, membersLayout.dot, {
+											background: member.online
+												? "var(--dsh-color-success, #3fb950)"
+												: "var(--dsh-color-border, #555)"
+										})
+									}),
+									h("span", { style: membersLayout.name }, member.name),
+									member.role === "owner" ? h("span", { style: membersLayout.role }, "群主") : null
 								);
+							})
+						),
+				h(
+					"div",
+					{ style: membersLayout.footer },
+					h(
+						"button",
+						{
+							type: "button",
+							title: "点击 @ 所有人",
+							style: Object.assign({}, membersLayout.row, {
+								justifyContent: "center",
+								border: "1px dashed var(--dsh-color-border, #444)"
 							}),
-							// One row for the whole group: the common case in a status post.
-							h(
-								"button",
-								{
-									key: "__all__",
-									type: "button",
-									title: "点击 @ 所有人",
-									style: {
-										marginTop: "6px",
-										width: "100%",
-										padding: "5px 6px",
-										border: "1px solid var(--dsh-color-border, #444)",
-										borderRadius: "5px",
-										background: "transparent",
-										color: "inherit",
-										font: "inherit",
-										fontSize: "12px",
-										cursor: "pointer"
-									},
-									onClick: function () {
-										address({ name: "所有人" });
-									}
-								},
-								"@ 所有人"
-							)
-						)
+							onClick: function () {
+								address({ name: "所有人" });
+							}
+						},
+						"@ 所有人"
+					)
+				)
 			);
 		}
 
@@ -1742,22 +1630,6 @@ window.__ModuleLoader__.load({
 				}
 			};
 
-			/** Register the members strip above the composer. */
-			const membersDock = () => {
-				try {
-					return slots.register(
-						{
-							name: "conversation.input.dock",
-							id: MEMBERS_DOCK_ID,
-							order: 30
-						},
-						MembersDock
-					);
-				} catch (error) {
-					reportUnavailable("conversation.input.dock register", error);
-					return undefined;
-				}
-			};
 
 			/**
 			 * Declare the members page type.
@@ -1853,17 +1725,7 @@ window.__ModuleLoader__.load({
 			} catch (error) {
 				reportUnavailable("main inject", error);
 			}
-			// The members strip goes above the composer: it renders whenever a Session is
-			// open, and it is where the person is when they are about to type a name.
-			//
-			// Deliberately NOT `sidebar.right.pane.tab`: that slot is dispatched by tab kind,
-			// so a registration there stays inert unless something opens a tab of that kind —
-			// which is a host decision this plugin cannot make.
-			try {
-				slots.inject("conversation.input.dock", membersDock);
-			} catch (error) {
-				reportUnavailable("conversation.input.dock inject", error);
-			}
+			// Members render in the right column only; see MembersPane.
 
 			// The right-hand members column. All four pieces are needed for it to appear:
 			// the type so openTab has a kind, the body and chip so the seat can draw it, and
@@ -1906,8 +1768,6 @@ window.__ModuleLoader__.load({
 		exports.MembersPane = MembersPane;
 		exports.MembersButton = MembersButton;
 		exports.MEMBERS_TAB_KIND = MEMBERS_TAB_KIND;
-		exports.MembersDock = MembersDock;
-		exports.MEMBERS_DOCK_ID = MEMBERS_DOCK_ID;
 		exports.MEMBERS_TAB_KEY = MEMBERS_TAB_KEY;
 		exports.groupByRelationship = groupByRelationship;
 		return module.exports;
