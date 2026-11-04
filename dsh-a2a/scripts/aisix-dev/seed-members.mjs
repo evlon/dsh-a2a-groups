@@ -81,6 +81,11 @@ const record = {
     personId: member.personId,
     displayName: member.displayName,
     role: member.role,
+    // These two are the whole point of a colleague card: without them it can only say "in N
+    // groups", which the reader already knows. This script dropped them once and the cards came
+    // out blank — the same mistake `a2a_group_info` had before it was fixed.
+    roleAbout: member.roleAbout ?? '',
+    tags: Array.isArray(member.tags) ? member.tags : [],
     online: member.online === true,
   })),
   feed: page.entries.slice(-8).map((entry) => ({
