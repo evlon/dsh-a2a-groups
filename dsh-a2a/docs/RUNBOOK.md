@@ -191,16 +191,23 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 | `about`（群内介绍） | 我在**这个群**负责什么 | 否 |
 | `headline`（个人介绍） | 我是谁 | **是**，显示在所有名片上 |
 
-群内介绍用工具：
+两个都用同一个工具，一次可以只改一个：
 
 ```json
-{ "name": "a2a_group_role", "arguments": { "groupId": "g-xxx", "about": "负责对账与发票生成", "tags": ["研发", "后端"] } }
+{
+  "name": "a2a_group_role",
+  "arguments": {
+    "groupId": "g-xxx",
+    "about": "负责对账与发票生成",
+    "tags": ["研发", "后端"],
+    "headline": "后端工程师，专注对账系统"
+  }
+}
 ```
 
-**个人介绍目前只能在面板里改**：群成员面板 → 点自己那一行 → 展开两个输入框 → 保存。
+**只传 `about` 不会清掉 `headline`** —— 三个字段各自独立，不传的保持原值。传空字符串才是清空。
 
-> 工具面还没有设置 headline 的入口（`a2a_group_role` 只管 `about`/`tags`）。宿主侧的 `person/profile`
-> skill 是给远程调用方用的，不是给模型用的工具。
+面板里也能改：群成员面板 → 点自己那一行 → 展开两个输入框 → 保存。
 
 ### 4.6 群管理
 

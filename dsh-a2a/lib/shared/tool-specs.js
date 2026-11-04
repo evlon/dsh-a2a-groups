@@ -508,6 +508,7 @@ export const TOOL_SPECS = Object.freeze([
           description: 'Up to 5 short labels describing your role here, e.g. ["产品","验收"]. An empty array clears them.',
         },
         displayName: { type: 'string', description: 'Optional: how you appear in this group, if you want to change it too.' },
+        headline: { type: 'string', description: 'How you introduce yourself in ONE sentence, independent of any group - it appears on every colleague card. Different from about, which is what you do in THIS group. Empty string clears it. Omit to leave unchanged.' },
       },
       required: ['groupId'],
     },

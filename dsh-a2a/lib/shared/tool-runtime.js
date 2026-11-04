@@ -869,8 +869,22 @@ function requireSession(sessionId, tool) {
 
     if (membership.local === true) {
       const updated = store.setProfile({ groupId, member: data, about: data.about, tags: data.tags });
+      // The headline lives on the PERSON row, not the membership row, so it needs its own write. Done after
+      // the membership write because a caller who passes both expects both to land.
+      if (args.headline !== undefined) {
+        store.setPersonProfile({ groupId, member: data, headline: args.headline });
+      }
       await store.flush();
-      return { groupId, about: updated.roleAbout ?? '', tags: updated.tags ?? [] };
+      return {
+        groupId,
+        about: updated.roleAbout ?? '',
+        tags: updated.tags ?? [],
+        // Reported so a caller can tell "accepted" from "already that", and so an untouched headline is
+        // visibly unchanged rather than silently absent.
+        headline: args.headline === undefined
+          ? (store.personProfile(membership.personId).headline ?? '')
+          : args.headline,
+      };
     }
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/role',
@@ -879,7 +893,27 @@ function requireSession(sessionId, tool) {
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};
-    return { groupId, about: meta.about ?? '', tags: meta.tags ?? [] };
+    // `group/role` writes one membership. The headline is a person fact, so it travels as `person/profile` —
+    // a second send rather than a broader first one, because the host keeps two separate stores.
+    if (args.headline !== undefined) {
+      await bridge.send(targetOf(membership, config), {
+        skill: 'person/profile',
+        text: `headline for ${membership.personId}`,
+        data: {
+          groupId,
+          personId: membership.personId,
+          personKey: membership.personKey,
+          headline: args.headline,
+        },
+        timeoutMs: config.client.timeoutMs,
+      });
+    }
+    return {
+      groupId,
+      about: meta.about ?? '',
+      tags: meta.tags ?? [],
+      headline: args.headline ?? '',
+    };
   },
   'a2a_group_info': async function a2a_group_info(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
