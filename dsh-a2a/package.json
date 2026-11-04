@@ -45,7 +45,8 @@
     "cordis.patch.yml",
     "README.md",
     "README-ui.md",
-    "docs"
+    "docs",
+    "CHANGELOG.md"
   ],
   "engines": {
     "node": ">=22"

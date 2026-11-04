@@ -228,10 +228,11 @@ MCP 配置（stdio）：
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | **架构**：目录边界、核心模块、两条数据流 |
 | [DESIGN.md](docs/DESIGN.md) | 设计决策与依据 |
 | [CONTRACT.md](docs/CONTRACT.md) | 模块职责、协议、目录边界 |
-| [RUNBOOK.md](docs/RUNBOOK.md) | 落地实录、踩过的坑、复跑清单 |
+| [RUNBOOK.md](docs/RUNBOOK.md) | **运行手册**：新同事照着做就能跑起来 |
 | [DEPLOY.md](docs/DEPLOY.md) | 生产部署 |
 | [MCP.md](docs/MCP.md) | MCP 接入 |
 | [BACKLOG.md](docs/BACKLOG.md) | 需求池：想过但暂不做的事 |
+| [CHANGELOG.md](CHANGELOG.md) | 变更记录：修过什么、为什么、踩过哪些坑 |
 
 ## 验证
 
