@@ -1,26 +1,21 @@
-refactor: rename the host to agent-groups, decoupled from DSH
+refactor: split the tool surface into specs, runtime, and a thin DSH adapter
 
-The group host is an A2A collaboration service: plain Node, no model, no Session, and no
-dependency on DSH at all. Naming it `dsh-groups` implied the opposite, and the name had
-leaked into four namespaces where it would keep misleading readers:
+`tools.js` was 1676 lines holding three concerns at once: the protocol description
+(models read it), the business logic, and the DSH registration call. Adding an MCP host
+would have meant either duplicating that logic or drifting from it.
 
-    file      bin/dsh-groups.js    -> bin/agent-groups.js
-    env       DSH_GROUPS_*         -> AGENT_GROUPS_*
-    agent id  dsh-groups           -> agent-groups
-    link      dsh-a2a://group?...  -> agent-a2a://group?...
-    card ext  x-dsh-profiles       -> x-agent-profiles
+    tool-specs.js     name / description / parameters / output / render   pure data
+    tool-runtime.js   the 19 execute bodies, taking { sessionId }         pure logic
+    tools.js          specs + runtime -> ctx.tools.register               93 lines
 
-The member-side plugin keeps the name `dsh-a2a`, because it genuinely IS a DSH plugin;
-renaming it would make two accurate names wrong instead of one.
+The seam turned out to be one function. `senderOf(exec)` read `exec.agent.id` — a DSH
+detail buried in the middle of the bodies. It now reads `{ sessionId }`, which each
+adapter supplies its own way, so not one tool body knows which host it is running in.
 
-No compatibility aliases, by decision: the link scheme accepts ONLY the new form and the
-environment reads ONLY the new names. A half-renamed system is harder to reason about
-than a clean break, and nothing has been deployed yet.
+That single mapping is why the split is worth doing rather than just tidy: a DSH Session
+id and an MCP connection id are the same fact to these tools, and the group mutators need
+exactly one such fact because a membership belongs to one conversation.
 
-Two spots needed hand-fixing after the bulk pass, both because the old scheme sat next to
-an invisible U+200D that broke content matching: the `LINK_SCHEME` constant and the
-paste-scanner regex. A third — `url.protocol !== 'dsh-a2a:'` in the link parser — would
-have rejected every link the generator produced, and was found by grepping for the scheme
-after the tests went green.
-
-Verification: 309 tests; the renamed host starts and mints agent-a2a:// links.
+Verified: 309 tests, unchanged behaviour. tools.js 1676 -> 93 lines. The three helpers
+other modules import (joinUrl, coded, parseInviteLink) are lifted verbatim rather than
+moved, so no call site churned.
