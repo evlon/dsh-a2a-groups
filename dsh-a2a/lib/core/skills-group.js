@@ -595,8 +595,10 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
                 msgId: entry.msgId,
                 at: entry.at,
                 atIso: entry.atIso,
-                from: entry.from.displayName,
-                personId: entry.from.personId,
+                // `from` stays an OBJECT. It used to be flattened to the display name with `personId`
+                // hoisted alongside, which silently broke every consumer reading `from.displayName` —
+                // `publicEntry` documents a { personId, displayName } shape, and a flat string is not that.
+                from: { personId: entry.from.personId, displayName: entry.from.displayName },
                 kind: entry.kind,
                 text: entry.text,
               })),

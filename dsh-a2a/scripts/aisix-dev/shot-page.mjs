@@ -12,7 +12,14 @@ import { execFileSync } from 'node:child_process';
 const session = process.argv[2] ?? 'shot2';
 const port = process.argv[3] ?? '3091';
 const outPath = process.argv[4];
-const home = port === '3091' ? 'C:/Users/niukl/.dsh-a2a-dev' : 'C:/Users/niukl/.agent-groups';
+// One home per instance. Hardcoding "3091 or else the agent-groups home" meant every other instance read
+// the wrong log and reported "no token", which looks like a broken instance rather than a broken script.
+const HOMES = {
+  '3091': 'C:/Users/niukl/.dsh-a2a-dev',
+  '3093': 'C:/Users/niukl/.dsh-a2a-dev2',
+  '3096': 'C:/Users/niukl/.dsh-a2a-dev3',
+};
+const home = HOMES[port] ?? 'C:/Users/niukl/.agent-groups';
 
 const log = readFileSync(`${home}/out.log`, 'utf8');
 const token = /token=([A-Za-z0-9_-]+)/.exec(log)?.[1];

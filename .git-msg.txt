@@ -1,39 +1,39 @@
-feat(ui): inviting reports whether it actually went out
+fix: `group/read` returned the author as a bare string, losing the name
 
-The dialog's pick filled the composer and closed itself — so it looked successful whether or not an
-invitation was ever sent, and the sender had to remember to press Enter in a conversation afterwards. That is
-the "发成功还是未成功" requirement, unmet.
+A four-process walkthrough — three DSH instances and a standalone host, each on its own port and home —
+surfaced this on the first full read:
 
-NOW
+    [message] : 对账这块我梳理完了，李四你看下接口定义
+              ↑ the author's name is missing
 
-    sending               list disabled, "正在发送…"
-    sent, recipient up    「已邀请 李四，对方在线，会立即收到」
-    sent, recipient away  「已邀请 李四，对方当前离线，上线后会看到」
-    failed                「发送失败：<code>」
+THE CAUSE
 
-The three-way outcome is deliberate. "Sent" and "will be seen now" are different promises, and collapsing them
-into one tick is how a sender concludes the feature is broken when nobody replies immediately.
+The read serializer flattened `from` to its display name and hoisted `personId` alongside:
 
-WHY THE SEND LIVES IN THE DIALOG
+    from: entry.from.displayName,
+    personId: entry.from.personId,
 
-The alternative was forwarding an `onInvite` prop the parent exists only to pass along. Keeping it here lets
-the dialog own its own states, and the parent supplies facts rather than plumbing.
+but `publicEntry` documents `from: { personId, displayName }`. Every consumer reading `from.displayName`
+got `undefined`. It stayed hidden because the panel no longer renders message bodies (the security fix), so
+nothing in the UI was reading the field.
 
-WHY THE LIST DISABLES WHILE SENDING
+WHY THE WALKTHROUGH FOUND IT AND THE SUITE DID NOT
 
-Each invitation mints a single-use link. A double click would mint two live ones, and only one would ever be
-redeemed — with no way to tell which.
+The tests assert on `entry.from.personId` and on rendered panel text. Neither touches the author NAME on a
+read entry — so the suite was green while a documented field was empty. Running the real flow over four
+processes is what made it visible.
 
-THE HOST ENDPOINT REUSES `person/send` SEMANTICS
+ALSO IN THE REPORT
 
-Two code paths that mint invitations would eventually disagree about `maxUses` or expiry, and the disagreement
-would be visible only to whoever received the wrong link.
+The walkthrough produced `docs`-adjacent evidence: `TEST-REPORT.md` plus four screenshots covering the
+owner's and both members' views. Both remaining findings are recorded there; the other one (a hardcoded home
+path in the screenshot script) was a test-tool bug, now fixed.
 
-FALLBACK KEPT
+A LESSON WORTH KEEPING
 
-Without the channel, picking a person still fills the composer with the instruction. A host without Connection
-loses the feedback, not the ability to invite.
+While fixing this I replaced one line by index but wrote three comment lines into the same slot, pushing
+`kind` and `text` out of the object. `node --check` passed, because the result was still valid syntax. A
+syntax check is not a behaviour check, and that is why the fix was verified by reading a real feed afterwards
+rather than by the check alone.
 
-Verified: 427 tests, and on a live host the endpoint answers
-`{"ok":true,"value":{"dmId":"dm-67f0737867b1","online":false}}` with the invitee's inbox then holding one
-`group-invite` carrying a working link.
+Verified: 427 tests, and on the live host `from: {"displayName":"张三","personId":"m-dbf471ab"}`.
