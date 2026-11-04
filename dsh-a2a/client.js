@@ -1854,8 +1854,10 @@ window.__ModuleLoader__.load({
 										padding: "0 5px",
 										borderRadius: "3px",
 										fontSize: "10px",
-										background: "currentColor",
-										color: "#fff"
+										// Same inverted-chip pair as membersLayout.selfTag; currentColor here produced a
+										// near-white pill with white text in a dark theme. See the note there.
+										background: "light-dark(#1a1a1a, #f2f2f2)",
+										color: "light-dark(#f2f2f2, #1a1a1a)"
 									},
 									title: "这是你自己的名片，只有你能改"
 								},
@@ -2005,8 +2007,8 @@ window.__ModuleLoader__.load({
 								padding: "2px 8px",
 								border: "1px solid rgba(128, 128, 128, 0.5)",
 								borderRadius: "999px",
-								background: active ? "currentColor" : "transparent",
-								color: active ? "#fff" : "inherit",
+								background: active ? "light-dark(#1a1a1a, #f2f2f2)" : "transparent",
+								color: active ? "light-dark(#f2f2f2, #1a1a1a)" : "inherit",
 								font: "inherit",
 								fontSize: "11px",
 								cursor: "pointer"
@@ -2480,8 +2482,11 @@ window.__ModuleLoader__.load({
 				padding: "0 4px",
 				borderRadius: "7px",
 				lineHeight: "14px",
-				background: "currentColor",
-				color: "#fff"
+				// An INVERTED chip: dark on light themes, light on dark ones. `currentColor` was used before,
+				// which inverts only one element - a dark theme produced a near-white pill with white text,
+				// i.e. invisible. `light-dark()` picks both sides; every root here declares colorScheme.
+				background: "light-dark(#1a1a1a, #f2f2f2)",
+				color: "light-dark(#f2f2f2, #1a1a1a)"
 			},
 			roleChip: {
 				flex: "0 0 auto",
