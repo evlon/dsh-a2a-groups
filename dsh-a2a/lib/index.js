@@ -225,8 +225,11 @@ const PANEL_FEED_TAIL = 8;
       };
     }
     try {
+      // Declared here, not inside the local branch: the return below reads it on BOTH paths, and scoping it to
+      // one branch made the remote path throw "saved is not defined" — after the write had already succeeded.
+      let saved;
       if (record.local === true) {
-        const saved = groups.setProfile({
+        saved = groups.setProfile({
           groupId,
           member: { personId: record.personId, personKey: record.personKey },
           about: body.about,
