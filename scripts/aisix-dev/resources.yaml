@@ -25,7 +25,7 @@ api_keys:
   - display_name: "niukl-dev"
     allowed_models: ["*"]
     # Explicit per-agent grant: no `allowed_agents` means NO A2A access at all.
-    allowed_agents: ["mock-a2a", "dsh-groups", "dsh-group*", "group-*"]
+    allowed_agents: ["mock-a2a", "agent-groups", "agent-group*", "group-*"]
     key_hash: "c60c4fcb4f33322be5dcc08d7c09fc982b84f8755d41243104ab9d96d0b6a0d7"
 
 a2a_agents:
@@ -43,7 +43,7 @@ a2a_agents:
     timeout_ms: 120000
     enabled: true
 
-  - name: "dsh-groups"
+  - name: "agent-groups"
     # THE GROUP HOST: the instance that actually stores groups, members, invites
     # and the feed. This is the entry a colleague's invite link points at.
     #
@@ -57,13 +57,13 @@ a2a_agents:
     url: "http://127.0.0.1:3095/a2a"
     protocol_version: "1.0"
     auth_type: "api_key"
-    secret: "dsh-groups-host-token-2026"
+    secret: "agent-groups-host-token-2026"
     timeout_ms: 600000
     enabled: true
 
   - name: "dsh-group"
     # A second DSH instance, kept as the "colleague" side of a two-instance demo:
-    # it joins groups hosted by `dsh-groups`, so the invite path is exercised
+    # it joins groups hosted by `agent-groups`, so the invite path is exercised
     # across two real processes rather than against itself.
     #
     # `127.0.0.1` on purpose. DSH runs on Windows and WSL mirrors it onto its own

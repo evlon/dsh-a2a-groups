@@ -1,33 +1,20 @@
-feat: an MCP stdio server, so non-DSH agents can use the same tools
+fix: the directory renderer referenced a deleted variable, and point the gateway at the new name
 
-The DSH plugin covers people who use DSH. Everyone else — CodeBuddy, Claude Code,
-Cursor, any MCP client — could not reach these groups at all. MCP is the lingua
-franca for "an agent with tools", so the same nineteen tools are now offered over
-stdio as well.
+Two defects that only appear once MCP talks to a real host:
 
-    lib/mcp-server.js   JSON-RPC 2.0 over stdin/stdout, newline framed
-    lib/mcp-deps.js     the group machinery wired for a process with no DSH
+- `a2a_group_directory`'s renderer still interpolated `${policy}` after join policy was
+  removed from the directory row. Rendering threw "policy is not defined" — a code path
+  the DSH tests never hit because they assert on the tool's VALUE, not its rendered text.
+  The line also still promised a group password. Both fixed.
 
-What the split bought: the MCP handler is ~200 lines and contains no group logic. It
-reads tool-specs.js, calls tool-runtime.js, and renders with each spec's own render
-function — so a model that learned `a2a_group_post` in DSH meets the identical
-description, schema and output text in an MCP client.
+- `resources.yaml` registered `dsh-groups`, so a call for `agent-groups` came back
+  "unknown A2A agent". Renaming the code without the gateway leaves the two halves
+  disagreeing, which is the exact failure a half-done rename produces. Agent name, ACL
+  entry and secret are now consistent.
 
-No UI, by protocol: MCP has tools, resources and prompts, not panels. The member
-column, the tabs and the @ button exist only in the DSH plugin. An agent that can
-call a2a_group_post does not need a roster widget.
+Verified end to end: an MCP client over stdio → gateway → host → 29 real groups listed
+with names, topics and counts. That is the whole chain the MCP server exists for.
 
-`mcp-deps.js` states what an MCP process actually has: a remote host address and a
-credential, no local store and no Sessions. Its store is deliberately a refusing
-stub rather than an empty one — `list()` returning [] would read as "you are in no
-groups", which is a lie about state this process cannot see.
-
-Two failures found while wiring it, both real:
-  - `requireSession` had never been written, so every group tool threw
-    "requireSession is not defined" on the MCP path. Caught by the error-shape test.
-  - `registry` is created by `createRegistry({home})`, not an agent-flavoured name;
-    the wrong call would have failed at startup, not at first use.
-
-Verification: 321 tests (12 new for the protocol surface); scripts/mcp-probe.mjs
-spawns the server and drives it over a real pipe — 19 tools listed, unknown tool
-reported as isError, stdout stays pure JSON.
+docs/MCP.md documents the wiring for Claude Code, CodeBuddy and Cursor, states that
+MCP has no UI by protocol, and notes the one real behavioural difference: MCP cannot
+push, so a client reads with a2a_group_read instead of receiving.

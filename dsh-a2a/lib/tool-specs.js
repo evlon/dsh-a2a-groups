@@ -521,12 +521,14 @@ export const TOOL_SPECS = Object.freeze([
           ? 'That host lists no public groups.'
           : `${value.total} group(s)${value.hasMore === true ? ', showing the first page' : ''}:\n`
             + value.groups.map((group) => {
-                const online = group.onlineCount > 0 ? `，${group.onlineCount} 人在线` : '';
-              return `- ${group.name}（${group.memberCount} 人${online}，${policy}）`
+              const online = group.onlineCount > 0 ? `，${group.onlineCount} 人在线` : '';
+              // No join policy in this line: a group has no admission mode to advertise any
+              // more. Anyone may ASK to join, and an invite link needs the owner to mint one.
+              return `- ${group.name}（${group.memberCount} 人${online}）`
                 + (group.topic === '' ? '' : `\n  ${group.topic}`)
                 + `\n  id: ${group.groupId}`;
             }).join('\n')
-            + '\n\n要加入某个群，向群主要一个邀请链接（群密码会另外给你）。',
+            + '\n\n要加入某个群：用 a2a_group_request 申请（群主会看到），或向群主要一个邀请链接。',
       }],
     },
   runtime: 'a2a_group_directory',
