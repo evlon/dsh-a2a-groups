@@ -31,6 +31,15 @@ const DEFAULT_IDLE_MS = 120000;
 /** How long to wait before re-subscribing after the stream closes on its own. */
 const RESUBSCRIBE_BASE_MS = 1000;
 
+/**
+ * How often to check for one-to-one messages.
+ *
+ * A group feed streams; a direct message polls. Ten seconds is short enough that an invitation feels
+ * immediate when both sides are up, and long enough that an idle instance is not making a request
+ * every second to learn nothing — an invitation is a low-frequency event by nature.
+ */
+const DIRECT_POLL_MS = 10_000;
+
 /** Largest re-subscribe backoff, so a down host is retried forever at a slow rate. */
 const RESUBSCRIBE_MAX_MS = 60000;
 
@@ -78,6 +87,8 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
   const disabled = new Set();
   /** messageIds already delivered, so a replay is not a second wake. */
   const delivered = new Map();
+  /** Timer for the direct-message poll, or undefined when not running. */
+  let directTimer;
   let stopped = false;
 
   const enabled = () => config.groups.enabled === true && stopped === false;
@@ -99,7 +110,26 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
       disabled.delete(id);
       start(id);
     }
+    // Direct messages are pulled rather than streamed: this covers the case a subscription cannot —
+    // an invitation sent while this instance was asleep.
+    startDirectPoll();
   };
+
+  /** Poll for direct messages on behalf of any membership this instance holds. */
+  function startDirectPoll() {
+    if (directTimer !== undefined) return;
+    const tick = () => {
+      if (!enabled()) return;
+      const membership = identities.list()[0];
+      if (membership === undefined) return;
+      void pullDirect(membership);
+    };
+    // Once immediately, so an invitation sent while this DSH was closed is not delayed by a full
+    // interval before it appears.
+    tick();
+    directTimer = setInterval(tick, DIRECT_POLL_MS);
+    directTimer.unref?.();
+  }
 
   /**
    * Stop one subscription, or all of them.
@@ -143,6 +173,12 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
     if (groupId === undefined) {
       for (const id of [...subscriptions.keys()]) stop(id);
       stopped = true;
+      // The direct-message poll answers to the same on/off switch as the group subscriptions: turning
+      // the inbox off must stop everything that would insert text into a conversation.
+      if (directTimer !== undefined) {
+        clearInterval(directTimer);
+        directTimer = undefined;
+      }
       return;
     }
     const entry = subscriptions.get(groupId);
@@ -300,6 +336,133 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
    * post, an already-delivered post, and the case where this instance has no
    * bound Session to wake.
    */
+  /**
+   * Fetch and deliver any direct messages waiting for this Session, then confirm them.
+   *
+   * Renders the invitation as something actionable rather than as a notification: the link is right
+   * there, so joining does not require the recipient to find and paste it.
+   *
+   * Confirmation happens here, immediately after delivery, because the ack is what the SENDER's
+   * screen depends on. Leaving it to the reader would make every message look undelivered until
+   * somebody happened to interact with their own inbox.
+   *
+   * @param {object} membership - a membership record, used only for its credential and personId.
+   * @returns {Promise<number>} how many messages were delivered.
+   */
+  async function pullDirect(membership) {
+    if (membership === undefined) return 0;
+    let messages;
+    try {
+      if (membership.local === true) {
+        messages = groups.listPersonMessages({ personId: membership.personId });
+      } else {
+        const result = await bridge.send(
+          {
+            baseUrl: membership.baseUrl,
+            apiKey: membership.apiKey ?? config.client.apiKey,
+            forwardProto: config.client.forwardProto,
+            protocolVersion: config.client.protocolVersion,
+          },
+          {
+            skill: 'person/inbox',
+            text: 'inbox',
+            data: { personId: membership.personId },
+            timeoutMs: config.client.timeoutMs,
+          },
+        );
+        messages = Array.isArray(result?.data?.messages) ? result.data.messages : [];
+      }
+    } catch (error) {
+      // A host that is down must not throw from a poll: the next tick retries, and a thrown error
+      // here would surface as an unhandled rejection in the plugin's startup path.
+      logger?.warn?.(`a2a: could not read direct messages (${error?.message ?? error})`);
+      return 0;
+    }
+    if (!Array.isArray(messages) || messages.length === 0) return 0;
+
+    const deliveredIds = [];
+    for (const message of messages) {
+      if (message === null || typeof message !== 'object') continue;
+      const dmId = typeof message.dmId === 'string' ? message.dmId : '';
+      if (dmId === '') continue;
+      // Already handled in this process: a poll that overlaps with itself must not deliver twice.
+      if (delivered.has(dmId)) {
+        deliveredIds.push(dmId);
+        continue;
+      }
+      try {
+        await deliverer.deliver({
+          sessionId: membership.sessionId,
+          text: renderDirect(message),
+          // Reuse the message id as the delivery key, so the deliverer's own dedupe covers the case
+          // where a poll retries before the ack lands.
+          messageId: dmId,
+          kind: message.kind,
+        });
+        delivered.set(dmId, true);
+        deliveredIds.push(dmId);
+      } catch (error) {
+        // Leave it unacked on purpose: an undelivered message must stay in the queue, and claiming
+        // otherwise would lose it.
+        logger?.warn?.(`a2a: could not deliver direct message ${dmId} (${error?.message ?? error})`);
+      }
+    }
+
+    if (deliveredIds.length > 0) {
+      try {
+        if (membership.local === true) {
+          groups.ackPersonMessages({ personId: membership.personId, dmIds: deliveredIds });
+        } else {
+          await bridge.send(
+            {
+              baseUrl: membership.baseUrl,
+              apiKey: membership.apiKey ?? config.client.apiKey,
+              forwardProto: config.client.forwardProto,
+              protocolVersion: config.client.protocolVersion,
+            },
+            {
+              skill: 'person/ack',
+              text: 'ack',
+              data: { personId: membership.personId, dmIds: deliveredIds },
+              timeoutMs: config.client.timeoutMs,
+            },
+          );
+        }
+      } catch (error) {
+        // The message was delivered; failing to confirm only costs the sender an indicator. Retrying
+        // the ack is safe because it is idempotent.
+        logger?.warn?.(`a2a: could not confirm direct messages (${error?.message ?? error})`);
+      }
+    }
+    return deliveredIds.length;
+  }
+
+  /**
+   * How one direct message reads in a conversation.
+   *
+   * An invitation shows the link, because the point of pushing it is that the recipient does not have
+   * to hunt for one. A notice or welcome is already a sentence and is passed through.
+   *
+   * @param {object} message - the delivered message.
+   * @returns {string} the text to insert.
+   */
+  function renderDirect(message) {
+    const payload = message.payload ?? {};
+    if (message.kind === 'group-invite' && typeof payload.inviteLink === 'string') {
+      const name = typeof payload.groupName === 'string' && payload.groupName !== ''
+        ? payload.groupName
+        : payload.groupId;
+      const topic = typeof payload.topic === 'string' && payload.topic !== ''
+        ? `\n主题：${payload.topic}`
+        : '';
+      return `邀请你加入协作群「${name}」${topic}\n\n`
+        + `用 a2a_group_join 加入这个群：${payload.inviteLink}`;
+    }
+    return typeof message.text === 'string' && message.text !== ''
+      ? message.text
+      : '（收到一条消息）';
+  }
+
   async function deliverPost(groupId, openingMembership, post) {
     /**
      * Every Session of this instance that belongs to this group, each delivered to
@@ -427,7 +590,11 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
     }
   }
 
-  return { enable, disable, enabled, state, resume, stop };
+  return {
+    // Exposed so a caller can fetch pending invitations once at startup without waiting for the
+    // first poll tick.
+    pullDirect,
+    enable, disable, enabled, state, resume, stop };
 }
 
 /**

@@ -1,40 +1,34 @@
-feat: one-to-one invitations, and a truthful "online"
+feat(ui): an unbound conversation gets a real pane, and a button that always opens it
 
-An invitation to join a group can now be pushed to a person instead of handed to them as a link to
-paste. It is a doorbell, not a chat: three message kinds exist (group-invite, join-notice, welcome),
-and a fourth would mean the scope changed, so an unknown kind is refused loudly rather than stored
-quietly.
+THE DEAD END THIS FIXES
 
-DELIVERY IS CONFIRMED, NOT ASSUMED
+The button and the pane were gated on the same condition — "does this conversation have a group" — so
+hiding the button when nothing was bound left no way to reopen the pane after closing it. A control
+that opens a panel has to exist whenever the panel can be opened; what changes is the label.
 
-`sent` is not `delivered`. The send tool reports only that the message is stored and whether the
-recipient currently holds a connection; `deliveredAt` is written when the RECEIVER calls ack. The
-failure this prevents is the one that kills trust in a messenger: reporting success for a message
-nobody received.
+    bound    群成员 3
+    unbound  协作群        (no number — "群成员 0" would claim the group is empty)
 
-Acks are idempotent (a retried ack must not move a timestamp the sender displays) and scoped to the
-recipient (an ack by the wrong person would mark delivered a message its recipient never saw).
+THE PANE NOW ANSWERS THREE QUESTIONS
 
-EVERY INVITATION MINTS A FRESH TOKEN
+The old body was one sentence and no action, which is the kind of pane a reader learns to ignore. A
+new conversation actually has three questions, and the pane answers them in order:
 
-The store keeps only `tokenHash`, so an issued token cannot be read back. That looked like an
-obstacle and is the right design: one person, one link, one `maxUses`, one thing to revoke.
-Re-inviting mints another, which is truthful — the first may have leaked.
+  1. what is a collaboration group   — so the feature is nameable
+  2. how do I get into one           — a pasted link, or the left sidebar's list
+  3. here is the link I was given    — a paste box, then one press
 
-"ONLINE" NOW MEANS HOLDING A CONNECTION
+The paste box fills the composer rather than calling the tool: this component renders before any
+Session exists and holds no member credential, so the Session turn is the only writer. The button is
+dimmed rather than hidden while the box is empty, because a disappearing button teaches nothing.
 
-`lastSeenAt` was only written when a member authenticated, posted or read. A colleague who started
-their DSH, joined a group and then watched — the ordinary way to use a chat app — showed as offline
-after two minutes, because watching writes nothing.
+A FOOTNOTE FOR THE CONFUSING CASE
 
-The subscribe skill now refreshes presence on a timer while its stream is open. A live socket
-reported as offline is worse than no indicator at all, because it makes the reader stop believing
-the indicator permanently. `store.touch` exists for exactly this: refresh the timestamp and change
-nothing else, so a presence tick cannot put noise in the feed or move a sequence number.
+Somebody who HAS joined a group from another conversation will otherwise find this pane insisting they
+have not. It says so plainly: that group belongs to that conversation, join it here too and both see
+the same messages.
 
-Undelivered messages survive a restart; the message cap drops delivered ones before anything still
-waiting to be read.
+Also fixed while here: the button's tooltip read 展开「undefined」的群成员 when nothing was bound.
 
-Verified: 420 tests (12 new: no-premature-delivery, self-send, unknown-kind, isolation, idempotent
-ack, wrong-person ack, payload round-trip, presence window, and two restart cases), and end to end
-against a live host — send, inbox with a working invite link, and ack all succeed.
+Verified: 422 tests, `node --check` clean, and the live page shows the 协作群 button with no count plus
+a pane containing both routes and the paste box.

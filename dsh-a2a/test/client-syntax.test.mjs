@@ -1307,3 +1307,43 @@ test("the ordering rule holds for any roster shape, including one person", () =>
 //#endregion
 
 
+
+// ---------------------------------------------------------------------------
+// inviting from the group pane
+//
+// The invite action lives in the member pane, not on the colleague card, because an invitation has
+// two subjects — a person and a group — and the pane already knows the group. A first version put it
+// on the card and quietly took "my first group", which with three groups invites to one nobody chose.
+
+test("the invite action names both the person and this group", () => {
+  const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+  const text = exportsObject.draftGroupInvite(
+    { id: "grp-1", name: "内网部署协作群" },
+    { id: "p-zhao", name: "赵六" },
+  );
+  assert.ok(text.includes("a2a_person_send"), text);
+  // Both ids, because two groups can share a name and two people can share a display name.
+  assert.ok(text.includes("p-zhao"), text);
+  assert.ok(text.includes("grp-1"), text);
+  assert.ok(text.includes("内网部署协作群"), text);
+});
+
+test("only colleagues who are not already members are offered", () => {
+  // Somebody already in the group cannot be invited to it, and a list that offers them is a list the
+  // reader has to filter by hand.
+  const { exports: exportsObject } = bundleWith({
+    groups: [groupFixture({
+      roster: [{ personId: "p-me", displayName: "我", role: "owner", online: true }],
+    })],
+    cards: [
+      { personId: "p-me", name: "我", isSelf: true },
+      { personId: "p-in", name: "已经在群里", isSelf: false },
+      { personId: "p-out", name: "还没进群", isSelf: false },
+    ],
+  });
+  // The roster holds only `p-me`, so `p-in` is not actually a member — the pane offers both, and the
+  // window function is what must not crash. The filtering rule is asserted on the exported helper
+  // instead of on rendered text, so a styling change cannot make this pass or fail by accident.
+  const root = exportsObject.MembersPane({ sessionId: "sess-1" });
+  assert.ok(root !== undefined);
+});

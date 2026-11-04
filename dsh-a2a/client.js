@@ -1297,6 +1297,26 @@ window.__ModuleLoader__.load({
 		 * @returns {{owner: object|undefined, mine: object|undefined, others: Array}}
 		 *   `owner` carries `isSelf` when I run this group. Never returns the same person twice.
 		 */
+
+		/**
+		 * The instruction that invites one colleague into THIS group.
+		 *
+		 * Both facts are known here — the group from the pane, the person from the pick — so the
+		 * sentence needs no choice from the reader. That is the whole reason the action lives on the
+		 * group rather than on the card: an invitation whose subject is ambiguous must not be offered.
+		 *
+		 * Named by id, not by name: two members of one group can share a display name.
+		 *
+		 * @param {object} group - the group whose pane this is.
+		 * @param {object} person - the colleague to invite.
+		 * @returns {string} the text to insert.
+		 */
+		function draftGroupInvite(group, person) {
+			const who = (person.name ?? "") === "" ? person.id : person.name;
+			return "用 a2a_person_send 邀请 " + who + "（personId: " + person.id + "）加入「"
+				+ (group.name ?? group.id) + "」（groupId: " + group.id + "）。"
+				+ "\n（发送后会告诉你对方是否在线；此时在线则立刻送到。）";
+		}
 		function splitRoster(members, self) {
 			const list = Array.isArray(members) ? members : [];
 			const mineId = self !== undefined && self.hasSelf === true ? self.personId : "";
@@ -1597,30 +1617,46 @@ window.__ModuleLoader__.load({
 				// reader nothing: they are looking at the card from inside a group they already
 				// share, so the number restates the premise. Names answer the real question —
 				// which context to approach this person in.
-				card.groups.length === 0
-					? null
-					: h(
-							"div",
-							{ style: { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" } },
-							h("span", {
-								style: {
-									width: "5px",
-									height: "5px",
-									borderRadius: "50%",
-									flex: "0 0 auto",
-									background: card.online
-										? "var(--dsh-color-success, #3fb950)"
-										: "var(--dsh-color-border, #555)"
-								},
-								title: card.online ? "最近在群里活动过" : "最近没有活动"
-							}),
-							h(
+				// Status, then context. The dot alone is decoration — "在线" has to be legible at a
+				// glance, because its whole job is to answer "will they see this now".
+				h(
+					"div",
+					{ style: { display: "flex", alignItems: "center", gap: "4px", flexWrap: "wrap" } },
+					h("span", {
+						style: {
+							width: "6px",
+							height: "6px",
+							borderRadius: "50%",
+							flex: "0 0 auto",
+							background: card.online
+								? "var(--dsh-color-success, #3fb950)"
+								: "var(--dsh-color-border, #555)"
+						},
+						"aria-hidden": "true"
+					}),
+					h(
+						"span",
+						{
+							style: {
+								fontSize: "11px",
+								opacity: card.online ? 0.8 : 0.55,
+								color: card.online ? "var(--dsh-color-success, #3fb950)" : "inherit"
+							},
+							title: card.online
+								? "对方正开着 DSH，发消息会立即送到"
+								: "对方当前不在线，消息会存着等他上线"
+						},
+						card.online ? "在线" : "不在线"
+					),
+					card.groups.length === 0
+						? null
+						: h(
 								"span",
-								{ style: { fontSize: "11px", opacity: 0.65 } },
-								card.groups.slice(0, 3).join("、")
+								{ style: { fontSize: "11px", opacity: 0.6 } },
+								"· " + card.groups.slice(0, 3).join("、")
 									+ (card.groups.length > 3 ? " 等 " + String(card.groups.length) + " 个群" : "")
 							)
-						),
+				),
 				// The edit affordance. The panel cannot write a profile itself — it renders before
 				// any Session exists and holds no member credential — so it does the part it CAN
 				// do: put a prefilled instruction in the composer, so editing is "change the words
@@ -1765,6 +1801,105 @@ window.__ModuleLoader__.load({
 		 * chain, at the level that actually knows its height.
 		 */
 		const membersLayout = {
+			// The unbound pane: an explainer with one action, not a wall of text. Generous line-height
+			// because the copy is read once, carefully, by somebody who does not yet know what a
+			// collaboration group is.
+			unboundBody: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "6px",
+				paddingTop: "2px"
+			},
+			unboundLead: {
+				margin: 0,
+				fontSize: "12px",
+				lineHeight: 1.65,
+				opacity: 0.78
+			},
+			// Step headings are numbered in the text, so the style only has to make them stand out
+			// without implying a required order.
+			unboundStep: {
+				marginTop: "4px",
+				fontSize: "12px",
+				fontWeight: 600,
+				opacity: 0.9
+			},
+			unboundHint: {
+				margin: 0,
+				fontSize: "11px",
+				lineHeight: 1.6,
+				opacity: 0.62
+			},
+			unboundInput: {
+				width: "100%",
+				boxSizing: "border-box",
+				padding: "5px 7px",
+				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				resize: "vertical"
+			},
+			unboundButton: {
+				alignSelf: "flex-start",
+				padding: "3px 10px",
+				border: "1px solid var(--dsh-color-accent, #4c8dff)",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				cursor: "pointer"
+			},
+			// Dimmed rather than hidden while the box is empty: a button that disappears teaches the
+			// reader nothing about why.
+			unboundButtonOff: {
+				opacity: 0.4,
+				cursor: "default",
+				borderColor: "var(--dsh-color-border, #444)"
+			},
+			unboundFootnote: {
+				marginTop: "6px",
+				paddingTop: "6px",
+				borderTop: "1px solid var(--dsh-color-border, #2a2f3a)",
+				fontSize: "10px",
+				lineHeight: 1.6,
+				opacity: 0.5
+			},
+
+			// The invite area sits below the roster, separated by a rule so it does not read as another
+			// member row — an invitee is not in the group yet.
+			inviteBlock: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "4px",
+				marginTop: "6px",
+				paddingTop: "6px",
+				borderTop: "1px solid var(--dsh-color-border, #2a2f3a)"
+			},
+			inviteLabel: {
+				fontSize: "11px",
+				opacity: 0.6
+			},
+			// A chip rather than a button: several colleagues may be listed, and a row of full-width
+			// buttons would push the roster off the panel.
+			inviteChip: {
+				padding: "2px 8px",
+				border: "1px dashed var(--dsh-color-border, #444)",
+				borderRadius: "999px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				cursor: "pointer",
+				maxWidth: "100%",
+				overflow: "hidden",
+				textOverflow: "ellipsis",
+				whiteSpace: "nowrap"
+			},
+
 			root: {
 				display: "flex",
 				flexDirection: "column",
@@ -2033,6 +2168,99 @@ window.__ModuleLoader__.load({
 		 *
 		 * Props provided by the slot owner: `sessionId` and `inputActions`.
 		 */
+		/**
+		 * What the members pane shows in a conversation that has not joined a group.
+		 *
+		 * Three things, in the order a newcomer needs them: what the feature is, how to get in, and the
+		 * one-step path for somebody who already has a link. The paste box fills the composer because
+		 * this component has no credential — the Session turn performs the join.
+		 *
+		 * @param {object} props - `{ inputActions }`.
+		 * @returns {object} the pane element.
+		 */
+		function UnboundMembersPane(props) {
+			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
+			const [link, setLink] = react.useState("");
+
+			/** Hand the pasted link to the Session as a ready-to-send instruction. */
+			function joinWithLink() {
+				const trimmed = String(link ?? "").trim();
+				if (trimmed === "") return;
+				fillDraft(inputActions, "用 a2a_group_join 加入这个群：" + trimmed);
+				setLink("");
+			}
+
+			return h(
+				"div",
+				{ style: membersLayout.root },
+				h(
+					"div",
+					{ style: membersLayout.header },
+					h("span", { style: membersLayout.headerTitle }, icon("users", 12), "协作群"),
+					h("span", { style: membersLayout.headerMeta }, "未加入")
+				),
+				h(
+					"div",
+					{ style: membersLayout.unboundBody },
+					// 1. What it is. Without this the pane is a form for something the reader cannot name.
+					h(
+						"p",
+						{ style: membersLayout.unboundLead },
+						"这个会话还没有加入协作群。协作群是几个同事一起干活的地方：消息、分工和上下文都留在群里，谁进来都能看到前因后果。"
+					),
+					// 2a. The common case: somebody sent me a link.
+					h("div", { style: membersLayout.unboundStep }, "① 同事给了你邀请链接"),
+					h(
+						"p",
+						{ style: membersLayout.unboundHint },
+						"粘贴到下面，点「填入会话」，再按回车发送即可。"
+					),
+					h("textarea", {
+						value: link,
+						placeholder: "agent-a2a://group?v=1&…",
+						rows: 2,
+						spellcheck: false,
+						onChange: function (event) {
+							setLink(event !== null && event !== undefined && event.target !== undefined
+								? event.target.value
+								: "");
+						},
+						style: membersLayout.unboundInput
+					}),
+					h(
+						"button",
+						{
+							type: "button",
+							// Disabled while empty so the button cannot produce a half-sentence.
+							disabled: String(link ?? "").trim() === "",
+							title: "把加入指令填进输入框，按回车发送",
+							style: Object.assign(
+								{},
+								membersLayout.unboundButton,
+								String(link ?? "").trim() === "" ? membersLayout.unboundButtonOff : {}
+							),
+							onClick: joinWithLink
+						},
+						"填入会话"
+					),
+					// 2b. The other route, for somebody with no link.
+					h("div", { style: membersLayout.unboundStep }, "② 自己找群"),
+					h(
+						"p",
+						{ style: membersLayout.unboundHint },
+						"点左侧栏的「协作群」，从列表里挑一个申请加入；群主同意后你就会收到通知。"
+					),
+					// A thread somebody may already belong to. Saying so prevents the confusing case of
+					// "I know I joined a group" while this pane insists otherwise.
+					h(
+						"p",
+						{ style: membersLayout.unboundFootnote },
+						"已经有别的会话加入过群？那个群属于那个会话，不会自动跟过来——在这里加入同一个群即可，两边看到的是同一份消息。"
+					)
+				)
+			);
+		}
+
 		function MembersPane(props) {
 			const snapshot = useSnapshot();
 			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
@@ -2066,16 +2294,10 @@ window.__ModuleLoader__.load({
 			}
 
 			if (group === undefined) {
-				return h(
-					"div",
-					{ style: membersLayout.root },
-					h(
-						"div",
-						{ style: membersLayout.header },
-						h("span", { style: membersLayout.headerTitle }, icon("users", 12), "群成员")
-					),
-					h("p", { style: S.emptyBody }, "这个会话还没有加入协作群。")
-				);
+				// A real pane, not one sentence: the entry point exists, so it owes the reader the three
+				// answers a new conversation needs — what this is, how to join, and the one-step path
+				// for somebody who already has a link.
+				return h(UnboundMembersPane, { inputActions: inputActions });
 			}
 
 			const members = group.members;
@@ -2275,6 +2497,46 @@ window.__ModuleLoader__.load({
 			}
 			for (const member of split.others) rosterRows.push(personRow(member, {}));
 
+			// Inviting lives HERE, not on the colleague card: the group is the subject of the action, so
+			// the group is what the pane knows. Cards show the group the instruction guessed would have
+			// come from — a first group the reader never picked.
+			const invitable = (Array.isArray(snapshot.cards) ? snapshot.cards : [])
+				.filter(function (card) {
+					return card.isSelf !== true;
+				})
+				.filter(function (card) {
+					// Somebody already in this group cannot be invited to it again.
+					return !members.some(function (member) { return member.id === card.id; });
+				});
+
+			function inviteRow() {
+				if (invitable.length === 0) return null;
+				return h(
+					"div",
+					{ style: membersLayout.inviteBlock },
+					h("span", { style: membersLayout.inviteLabel }, "邀请同事"),
+					h(
+						"div",
+						{ style: { display: "flex", flexWrap: "wrap", gap: "4px" } },
+						invitable.slice(0, 12).map(function (person) {
+							return h(
+								"button",
+								{
+									key: person.id,
+									type: "button",
+									title: "邀请 " + person.name + " 加入这个群",
+									style: membersLayout.inviteChip,
+									onClick: function () {
+										fillDraft(inputActions, draftGroupInvite(group, person));
+									}
+								},
+								person.name
+							);
+						})
+					)
+				);
+			}
+
 			return h(
 				"div",
 				{ style: membersLayout.root },
@@ -2292,7 +2554,8 @@ window.__ModuleLoader__.load({
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
 				members.length === 0
 					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
-					: h("div", { style: membersLayout.roster }, rosterRows)
+					: h("div", { style: membersLayout.roster }, rosterRows),
+				inviteRow()
 			);
 		}
 
@@ -2304,14 +2567,27 @@ window.__ModuleLoader__.load({
 		 * the global sidebar: the column shows THIS conversation's group, so a global
 		 * destination for it would be a lie about its scope.
 		 */
-		function MembersButton() {
+		function MembersButton(props) {
 			const snapshot = useSnapshot();
-			// Which group this conversation is in decides the count on the button, and
-			// whether the button is worth showing at all.
+			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
+
+			// Which group THIS conversation is in decides the count, and whether the button is worth
+			// showing at all. Without the session filter this took the most recently active group in
+			// the whole instance, so a new conversation showed the member count of a group it had
+			// never joined. The pane has always filtered this way; the button has to agree with it,
+			// because two answers to one question show up as a visible contradiction.
 			const joined = snapshot.groups.filter(function (group) {
-				return group.discovered !== true;
+				if (group.discovered === true) return false;
+				if (sessionId === "") return true;
+				// An older record with no session stamp belongs to whoever asks: turning a missing
+				// field into a hidden feature is worse than showing it to the wrong conversation
+				// once.
+				return group.sessionId === "" || group.sessionId === sessionId;
 			});
-			if (joined.length === 0) return null;
+			// The button ALWAYS renders. Hiding it when nothing is bound made the entry point and the pane
+			// depend on the same condition, so closing the pane left no way back. What changes is the
+			// label: a count when bound, the feature's name when not — "群成员 0" would claim the group is
+			// empty, which is a different and false statement.
 			joined.sort(function (left, right) {
 				return (right.lastTime || 0) - (left.lastTime || 0);
 			});
@@ -2345,7 +2621,9 @@ window.__ModuleLoader__.load({
 				"button",
 				{
 					type: "button",
-					title: "展开「" + group.name + "」的群成员，点人即可 @ 对方",
+					title: group === undefined
+						? "打开协作群面板：加入一个群，或查看当前群的成员"
+						: "展开「" + group.name + "」的群成员，点人即可 @ 对方",
 					style: {
 						display: "inline-flex",
 						alignItems: "center",
@@ -2361,8 +2639,10 @@ window.__ModuleLoader__.load({
 					},
 					onClick: openColumn
 				},
-				"群成员",
-				group.memberCount > 0 ? h("span", { style: { opacity: 0.7 } }, String(group.memberCount)) : null
+				group === undefined ? "协作群" : "群成员",
+				group !== undefined && group.memberCount > 0
+					? h("span", { style: { opacity: 0.7 } }, String(group.memberCount))
+					: null
 			);
 		}
 
@@ -2806,6 +3086,7 @@ window.__ModuleLoader__.load({
 		exports.pickSelf = pickSelf;
 		exports.splitRoster = splitRoster;
 		exports.draftGroupRoleEdit = draftGroupRoleEdit;
+		exports.draftGroupInvite = draftGroupInvite;
 		exports.draftGroupRoleClear = draftGroupRoleClear;
 		exports.MEMBERS_TAB_KIND = MEMBERS_TAB_KIND;
 		exports.MEMBERS_TAB_KEY = MEMBERS_TAB_KEY;
