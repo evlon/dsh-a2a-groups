@@ -14,4 +14,4 @@
 # this row rather than failing at the first request.
 - insert:
     - id: a2a
-      name: 'dsh-a2a'
+      name: 'dsh-a2a-groups'

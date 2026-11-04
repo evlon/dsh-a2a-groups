@@ -2,7 +2,7 @@
  * dsh-a2a — browser half (DSH Web client plugin).
  *
  * HOW THIS FILE IS LOADED (mirrors every shipped plugin bundle):
- *   window.__ModuleLoader__.load({ id: "dsh-a2a", factory: (require) => exports })
+ *   window.__ModuleLoader__.load({ id: "dsh-a2a-groups", factory: (require) => exports })
  * The shell only *registers* the factory; the factory body runs later, on first
  * materialization, and the `require` handed to it is the shell's synchronous
  * lazy CJS table (react / react/jsx-runtime / react-dom / @deepseek-ai/cordis /
@@ -25,7 +25,7 @@
  * See README-ui.md for the full data contract and integration steps.
  */
 window.__ModuleLoader__.load({
-	id: "dsh-a2a",
+	id: "dsh-a2a-groups",
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;

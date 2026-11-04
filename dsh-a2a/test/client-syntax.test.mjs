@@ -268,12 +268,27 @@ function groupFixture(overrides = {}) {
 }
 //#endregion
 
-test("bundle registers itself under the id the contract requires", () => {
+test("bundle registers under the package name, and the patch row agrees", () => {
 	const harness = loadBundle();
 	assert.equal(harness.loadCalls.length, 1, "exactly one __ModuleLoader__.load call");
 	const registration = harness.loadCalls[0];
-	assert.equal(registration.id, "dsh-a2a");
-	assert.equal(typeof registration.factory, "function");
+
+	// Derived, not hardcoded. A literal here only proves the test and the bundle agree with each other; the
+	// thing that actually breaks a plugin is the package name disagreeing with one of them.
+	const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+	assert.equal(
+		registration.id,
+		pkg.name,
+		"the bundle must register under the package name, or the loader reports it loaded without registering",
+	);
+
+	// The patch row is what the Host mounts; it must name the same package.
+	const patch = readFileSync(new URL("../cordis.patch.yml", import.meta.url), "utf8");
+	assert.ok(
+		patch.includes(`name: '${pkg.name}'`),
+		"cordis.patch.yml must insert a row named after the package",
+	);
+
 	// The literal must be plain ASCII (U+200D and friends silently break module ids).
 	assert.equal(INVISIBLE.test(registration.id), false, "id must not contain invisible characters");
 	assert.ok(/^[\x20-\x7e]+$/.test(registration.id), "id must be pure ASCII");

@@ -16,8 +16,8 @@
 | 你想做什么 | 怎么用 | 需要 DSH |
 |---|---|---|
 | 在自己的 DSH 会话里加入协作群 | 装这个插件 | 是 |
-| 在服务器上跑群宿主 | `npx @evlon/dsh-a2a agent-groups` | **否**（只要 Node 20+） |
-| 在 CodeBuddy / Claude Code 里用群工具 | `npx @evlon/dsh-a2a agent-groups-mcp`（MCP stdio） | **否** |
+| 在服务器上跑群宿主 | `npx dsh-a2a-groups agent-groups` | **否**（只要 Node 20+） |
+| 在 CodeBuddy / Claude Code 里用群工具 | `npx dsh-a2a-groups agent-groups-mcp`（MCP stdio） | **否** |
 
 三者共用同一份群逻辑（`lib/core/`）和同一份工具契约（`lib/shared/tool-specs.js`），
 所以一个工具在任何宿主里的行为和描述都一致。
@@ -69,7 +69,7 @@ grep -rn '\bctx\b' lib/ --include='*.js' | grep -v '^lib/dsh/' | grep -v '^lib/i
 ```bash
 AGENT_GROUPS_TOKEN=<随机串> \
 AGENT_GROUPS_GATEWAY=http://gw:3000/a2a \
-npx @evlon/dsh-a2a agent-groups --port 3095 --data /var/lib/agent-groups
+npx dsh-a2a-groups agent-groups --port 3095 --data /var/lib/agent-groups
 ```
 
 零依赖，不需要数据库、不需要模型。[部署文档](docs/DEPLOY.md)
