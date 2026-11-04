@@ -1,39 +1,35 @@
-feat(ui): edit my group role in place, without opening a conversation
+fix: a role save that changes nothing no longer announces itself
 
-The panel is the interface for a collaboration group. Asking somebody to press 「编辑介绍」, watch an
-instruction appear in a composer, and then press Enter — in order to change a label on a roster — was the
-wrong shape: they are looking at people, not talking to an assistant.
+A member reported six 「张工 更新了本群角色」 lines in a feed where the description had changed twice, with
+the interval shrinking from two hours to a hundred seconds. That is worse than noise: it makes the change
+notification useless, because a member can no longer tell an update from a repeat — and the reporter
+reasonably concluded "something is calling the write endpoint in a loop" and stopped replying to the
+broadcasts.
 
-My row now expands into two fields and a save button. The write goes straight to the Host over the
-Connection channel and the value changes for every member.
+Nothing was looping. `setProfile` wrote the system entry unconditionally, so every save announced itself
+whether or not the value differed. A dialog opened and saved three times produced three announcements.
 
-Verified from the UI, read back from the Host's own file:
+NOW
 
-    before  张工: '整体进度与验收' [产品]
-    after   张工: 'UI真实保存测试' [前端,测试]
+    real change    feed 18 -> 19   (+1, recorded)
+    same again     feed 19 -> 19   (+0, silent)
 
-TWO BUGS FOUND ON THE WAY, BOTH PREVIOUSLY INVISIBLE
+Two details that make the comparison correct rather than approximately correct:
 
-1. **Membership base URLs were missing the agent name.** The invite link carries `gw` (gateway root) and
-   `agent` (the entry under it) as separate facts, correctly — but only `gw` was stored, so every later
-   call posted to `/a2a`, which the gateway answers 404 for. Measured:
+- **tags are normalised on both sides.** Comparing a raw array against a normalised one would report a
+  change on every save — the same bug wearing a different hat.
+- **`profileUpdatedAt` is not stamped on a no-op.** That field means "when this last changed", so bumping it
+  would make the stored value lie in exactly the way the feed line did.
 
-       POST /a2a                    -> 404
-       POST /a2a/agent-group-host   -> 200
+The write path also returns `changed`, so the panel can distinguish "saved" from "already that value"
+instead of saying 已保存 for both.
 
-   This went unnoticed because a locally hosted group takes the `local` branch and never touches the
-   network, and because `group/join` resolves the card first and so succeeded while every subsequent call
-   did not. That is the most confusing shape a networking bug takes.
+WHY THIS TOOK A DETOUR
 
-2. **`parsed.baseUrl` is the direct endpoint, not the gateway base.** `parseInviteLink` returns
-   `gatewayBase` and `agent` separately; the compose step has to read those.
+The store-level fix passed its own test immediately while the live feed kept growing, because the member
+instance reaches the host over A2A and the HOST process is what runs `setProfile`. The plugin in 3091 looked
+fixed and was irrelevant; the host needed the restart. Worth recording because the symptom — "the fix did
+not work" — pointed at the wrong process.
 
-FALLBACK KEPT
-
-If the write channel is unavailable the button still fills the composer. A host without Connection should
-lose convenience, not the ability to edit — and the panel says which path it took rather than silently
-doing the other thing.
-
-Also recorded: `opencli browser fill` is what works for driving a controlled React input. `dispatchEvent`
-with a native setter throws `Illegal invocation` across realms, and `type` errored — worth knowing before the
-next UI verification spends ten minutes on it.
+Verified: 422 tests, store-level (`changed: true / false / true`, two system entries not three), and
+end-to-end through the gateway with feed counts before and after.

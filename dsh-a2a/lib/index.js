@@ -226,7 +226,7 @@ const PANEL_FEED_TAIL = 8;
     }
     try {
       if (record.local === true) {
-        groups.setProfile({
+        const saved = groups.setProfile({
           groupId,
           member: { personId: record.personId, personKey: record.personKey },
           about: body.about,
@@ -264,7 +264,9 @@ const PANEL_FEED_TAIL = 8;
           },
         );
       }
-      return { ok: true, value: { saved: true, groupId, at: clock() } };
+      // `changed: false` means the value was already that — worth telling the reader, because the feed
+      // no longer announces no-op saves and "已保存" for an unchanged value would be misleading.
+      return { ok: true, value: { saved: true, changed: saved?.changed !== false, groupId, at: clock() } };
     } catch (error) {
       return { ok: false, error: { code: 'write_failed', message: describe(error), details: { groupId } } };
     }

@@ -1278,18 +1278,43 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const member = resolveMember(group, input.member);
     const at = now();
 
+    // Compare against the stored values so a save that changes nothing is not announced. A feed where
+    // every open-and-save adds a line makes the notification useless, because a member can no longer
+    // tell an update from a repeat — and the report that started this was exactly that.
+    const beforeAbout = member.roleAbout ?? '';
+    const beforeTags = JSON.stringify([...(member.tags ?? [])].sort());
+
     if (input.about !== undefined) {
       member.roleAbout = input.about === null || input.about === ''
         ? undefined
         : requireText(input.about, 'about', MAX_ROLE_ABOUT_CHARS, '角色说明');
     }
     if (input.tags !== undefined) member.tags = normalizeTags(input.tags);
+
+    // Normalised on both sides: comparing a raw array against a normalised one would report a change on
+    // every save, which is the same bug wearing a different hat.
+    const afterAbout = member.roleAbout ?? '';
+    const afterTags = JSON.stringify([...(member.tags ?? [])].sort());
+    const profileChanged = beforeAbout !== afterAbout || beforeTags !== afterTags;
+
+    if (profileChanged === false) {
+      // A no-op save: return the current state and touch nothing. `profileUpdatedAt` in particular stays,
+      // because it means "when this last changed" and bumping it would make the value lie.
+      return {
+        personId: member.personId,
+        roleAbout: member.roleAbout,
+        tags: [...member.tags],
+        updatedAt: member.profileUpdatedAt ?? at,
+        changed: false,
+      };
+    }
+
     member.profileUpdatedAt = at;
     dirty = true;
     persist();
 
-    // A system line so other members can notice a role change without re-reading
-    // the member list. It carries no identity detail, only the fact of the change.
+    // A system line so other members can notice a role change without re-reading the member list. It
+    // carries no identity detail, only the fact of the change — and now only when there IS one.
     appendSystem(group, `${member.displayName} 更新了本群角色`);
     log.info('member profile updated', {
       groupId: group.groupId,
@@ -1301,6 +1326,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       roleAbout: member.roleAbout,
       tags: [...member.tags],
       updatedAt: at,
+      changed: true,
     };
   }
 
