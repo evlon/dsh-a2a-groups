@@ -194,6 +194,107 @@ export const TOOL_SPECS = Object.freeze([
     },
   runtime: 'a2a_stream',
   },
+
+    {
+      name: 'a2a_person_send',
+      description:
+        'Send ONE message to ONE person — a group invitation, a join notice, or a welcome. This is a doorbell, not a chat: sustained private conversation belongs in a group, and there is no message kind for it. Use it when a colleague should be pulled into a group rather than handed a link to paste. The result says whether they are online and gives the message id; delivery is confirmed separately, because an HTTP call returning is not evidence that anybody received it.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          to: { type: 'string', description: 'personId of the recipient. Get it from a2a_group_info\'s roster or a colleague card.' },
+          kind: {
+            type: 'string',
+            enum: ['group-invite', 'join-notice', 'welcome'],
+            description: 'group-invite mints a fresh single-use link for this one person. join-notice tells an owner somebody joined. welcome greets a new member.',
+          },
+          groupId: { type: 'string', description: 'The group the message is about. Required for group-invite.' },
+          text: { type: 'string', description: 'Optional line shown to the recipient. A group-invite ignores it and shows the group instead.' },
+        },
+        required: ['to', 'kind'],
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            dmId: { type: 'string' },
+            online: { type: 'boolean' },
+            kind: { type: 'string' },
+          },
+        },
+        render: (args, value) => [{
+          type: 'text',
+          text: value.online === true
+            ? `Queued and the recipient is online (dmId ${value.dmId}). Delivery is confirmed when their Session acknowledges it.`
+            : `Queued (dmId ${value.dmId}); the recipient is offline and will see it when they reconnect.`,
+        }],
+      },
+      runtime: 'a2a_person_send',
+    },
+    {
+      name: 'a2a_person_inbox',
+      description:
+        'Messages waiting for me — invitations to groups, notices, welcomes. Read this on startup and when asked "anything waiting?". Each message carries what to act on: a group invitation includes a ready invite link, so joining does not require pasting anything.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          since: { type: 'number', description: 'Only messages created after this epoch-ms. Omit for everything current.' },
+        },
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            messages: { type: 'array', items: { type: 'object' } },
+          },
+        },
+        render: (args, value) => {
+          const list = Array.isArray(value.messages) ? value.messages : [];
+          return [{
+            type: 'text',
+            text: list.length === 0
+              ? 'Nothing waiting.'
+              : list.map((entry) => `- [${entry.kind}] ${entry.text}`).join('\n'),
+          }];
+        },
+      },
+      runtime: 'a2a_person_inbox',
+    },
+    {
+      name: 'a2a_person_ack',
+      description:
+        'Confirm that messages actually arrived. Called automatically after reading the inbox; without it the sender never learns whether the message was delivered, and a messenger that reports success for undelivered messages loses trust immediately.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          dmIds: { type: 'array', items: { type: 'string' }, description: 'Message ids to confirm.' },
+        },
+        required: ['dmIds'],
+      },
+      output: {
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            acked: { type: 'number' },
+            unknown: { type: 'array', items: { type: 'string' } },
+          },
+        },
+        render: (args, value) => [{
+          type: 'text',
+          text: `Confirmed ${value.acked} message(s)`
+            + (Array.isArray(value.unknown) && value.unknown.length > 0
+              ? `; ${value.unknown.length} were not mine and were ignored.`
+              : '.'),
+        }],
+      },
+      runtime: 'a2a_person_ack',
+    },
   {
   
     name: 'a2a_group_create',

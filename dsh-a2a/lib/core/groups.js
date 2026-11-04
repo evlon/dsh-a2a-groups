@@ -192,6 +192,29 @@ export const MAX_PAYLOAD_BYTES = 64 * 1024;
 /** A member is shown as online if it authenticated this recently. */
 export const ONLINE_WINDOW_MS = 120_000;
 
+/** The only message kinds the MVP sends. A fourth kind means the scope changed. */
+export const DM_KIND_INVITE = 'group-invite';
+export const DM_KIND_JOIN_NOTICE = 'join-notice';
+export const DM_KIND_WELCOME = 'welcome';
+
+/** Message kinds the store will accept. */
+const DM_KINDS = new Set([DM_KIND_INVITE, DM_KIND_JOIN_NOTICE, DM_KIND_WELCOME]);
+
+/**
+ * How long an undelivered message is kept.
+ *
+ * Seven days, matching the default invite lifetime: a link that has expired cannot be redeemed, so
+ * keeping the envelope longer would only deliver a dead invitation and teach the recipient to
+ * distrust the next one.
+ */
+export const DM_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Cap on stored messages, oldest undelivered dropped first. */
+export const MAX_DIRECT_MESSAGES = 2000;
+
+/** Most messages one read returns. */
+export const MAX_DM_PAGE = 50;
+
 
 /** Hard structural caps, so a hostile or buggy caller cannot grow one file forever. */
 export const MAX_GROUPS = 200;
@@ -464,8 +487,20 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    */
   const persons = new Map();
 
+  /**
+   * Undelivered and recently delivered one-to-one messages, oldest first.
+   *
+   * An array rather than a per-person map because the two questions asked of it are "what is waiting
+   * for this person" and "did this one get delivered", and both scan. The cap keeps a runaway
+   * sender from growing the file without bound.
+   */
+  let directMessages = [];
+
   let state = loadState();
   // Populated once at startup: a profile read is far more common than a profile write.
+  // Undelivered messages survive a restart: the whole point of a queue is that a message is not
+  // lost because the host bounced.
+  directMessages = Array.isArray(state.directMessages) ? state.directMessages : [];
   for (const entry of state.persons ?? []) {
     persons.set(entry.personId, {
       personId: entry.personId,
@@ -1061,7 +1096,159 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     return group.members.map((member) => publicMember(member, at));
   }
 
+    /**
+   * Post one message to one person.
+   *
+   * @param {object} input
+   * @param {string} input.fromPersonId who is sending.
+   * @param {string} input.toPersonId who should receive it.
+   * @param {string} input.kind one of the `DM_KIND_*` values.
+   * @param {string} input.text one line, shown as-is.
+   * @param {object} [input.payload] structured data the client acts on, e.g. `{ inviteLink, groupId }`.
+   * @returns {object} the stored message.
+   */
+  function sendPersonMessage(input = {}) {
+    const fromPersonId = requireText(input.fromPersonId, 'fromPersonId');
+    const toPersonId = requireText(input.toPersonId, 'toPersonId');
+    const kind = requireText(input.kind, 'kind');
+    if (!DM_KINDS.has(kind)) {
+      throw new GroupError('bad_argument', `不支持的一对一消息类型：${kind}。`);
+    }
+    if (fromPersonId === toPersonId) {
+      // Not an error worth failing on, but not something to store either: a note to yourself
+      // arrives with no sender, and the UI would have to special-case it.
+      throw new GroupError('bad_argument', '不能给自己发消息。');
+    }
+    const text = requireText(input.text, 'text');
+    const at = now();
+
+    const message = {
+      dmId: `dm-${randomBytes(6).toString('hex')}`,
+      fromPersonId,
+      toPersonId,
+      kind,
+      text,
+      ...(input.payload === undefined ? {} : { payload: input.payload }),
+      createdAt: at,
+      // Absent until the receiver confirms. The sender's HTTP call returning is NOT delivery:
+      // reporting "sent" for a message nobody received is how a messenger loses trust.
+      deliveredAt: undefined,
+      readAt: undefined,
+      expiresAt: at + DM_TTL_MS,
+    };
+
+    directMessages.push(message);
+    // Drop the oldest delivered messages first, then the oldest overall, so an overflowing queue
+    // loses history rather than anything still waiting to be read.
+    if (directMessages.length > MAX_DIRECT_MESSAGES) {
+      const delivered = directMessages.filter((entry) => entry.deliveredAt !== undefined);
+      const dropCount = directMessages.length - MAX_DIRECT_MESSAGES;
+      const doomed = new Set(
+        [...delivered, ...directMessages].slice(0, dropCount).map((entry) => entry.dmId),
+      );
+      directMessages = directMessages.filter((entry) => !doomed.has(entry.dmId));
+    }
+    persist();
+    log.info('direct message stored', { dmId: message.dmId, kind });
+    return publicDirectMessage(message);
+  }
+
   /**
+   * Messages waiting for one person, including any already delivered but unread.
+   *
+   * @param {object} input - `{ personId, since }`.
+   * @returns {object[]} messages, oldest first.
+   */
+  function listPersonMessages(input = {}) {
+    const personId = requireText(input.personId, 'personId');
+    const since = Number.isFinite(input.since) ? input.since : 0;
+    const at = now();
+    return directMessages
+      .filter((entry) => entry.toPersonId === personId)
+      .filter((entry) => entry.expiresAt > at)
+      .filter((entry) => entry.createdAt > since)
+      .slice(-MAX_DM_PAGE)
+      .map(publicDirectMessage);
+  }
+
+  /**
+   * Confirm receipt, which is what turns "sent" into "delivered".
+   *
+   * Idempotent: a retried ack must not move the timestamp, because `deliveredAt` is what the sender
+   * shows and a shifting value would look like repeated deliveries.
+   *
+   * @param {object} input - `{ personId, dmIds }`.
+   * @returns {{acked: number, unknown: string[]}} how many were confirmed, and which were not found.
+   */
+  function ackPersonMessages(input = {}) {
+    const personId = requireText(input.personId, 'personId');
+    const ids = Array.isArray(input.dmIds) ? input.dmIds.filter((id) => typeof id === 'string') : [];
+    if (ids.length === 0) throw new GroupError('bad_argument', '缺少要确认的 dmIds。');
+    const at = now();
+    let acked = 0;
+    const unknown = [];
+    for (const dmId of ids) {
+      const message = directMessages.find((entry) => entry.dmId === dmId);
+      // A message addressed to somebody else is reported as unknown rather than acknowledged: an ack
+      // by the wrong person would mark a message delivered that its recipient never saw.
+      if (message === undefined || message.toPersonId !== personId) {
+        unknown.push(dmId);
+        continue;
+      }
+      if (message.deliveredAt === undefined) {
+        message.deliveredAt = at;
+        acked += 1;
+      }
+    }
+    if (acked > 0) persist();
+    return { acked, unknown };
+  }
+
+  /**
+   * Whether a person is currently holding a connection this host can push into.
+   *
+   * The same rule the roster uses for presence: a subscription refreshes `lastSeenAt`, so a recent
+   * timestamp means a live socket. Kept as a question rather than a flag because a flag would need
+   * clearing on every disconnect path, and one missed path leaves someone "online" forever.
+   *
+   * @param {string} personId - the person.
+   * @returns {boolean} whether they are reachable now.
+   */
+  function isPersonOnline(personId) {
+    const at = now();
+    for (const group of state.groups) {
+      for (const member of group.members) {
+        if (member.personId !== personId) continue;
+        if (at - member.lastSeenAt <= ONLINE_WINDOW_MS) return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Refresh a member's presence timestamp, and nothing else.
+   *
+   * Called on a timer by an open subscription, which is the real evidence that somebody is
+   * reachable. Every other writer of `lastSeenAt` also does something visible (authenticate, post,
+   * read), so reusing one of those for a presence tick would put noise in the feed or move a
+   * sequence number just to say "still here".
+   *
+   * Silent on failure by design: the caller suppresses errors too, because a presence refresh must
+   * never be able to kill a working subscription.
+   *
+   * @param {object} input - `{ groupId, member }`.
+   * @returns {number} the timestamp written.
+   */
+  function touch(input = {}) {
+    const group = requireGroup(input.groupId);
+    const member = resolveMember(group, input.member);
+    const at = now();
+    member.lastSeenAt = at;
+    dirty = true;
+    return at;
+  }
+
+/**
    * Change what this member is IN THIS GROUP.
    *
    * Layer A of identity: a colleague may be a developer all year and take on the
@@ -1805,6 +1992,14 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     members,
     // Layer A: re-declare what I am in this group. Only ever applies to the
     // caller's own membership — never another member's.
+    // Presence refresh for an open subscription. Separate from the mutators above because it
+    // changes only a timestamp.
+    touch,
+    // One-to-one invitations. A doorbell, not a chat: see the module note above.
+    sendPersonMessage,
+    listPersonMessages,
+    ackPersonMessages,
+    isPersonOnline,
     setProfile,
     // The person layer: one profile per person, independent of any group. Kept beside the
     // group API because it lives in the same file, not because it is the same concept.
@@ -2066,7 +2261,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       const loadedPersons = Array.isArray(parsed?.persons)
         ? parsed.persons.filter((entry) => isPlainObject(entry) && typeof entry.personId === 'string')
         : [];
-      return { version: 1, groups: loadedGroups, persons: loadedPersons };
+      const loadedMessages = Array.isArray(parsed?.directMessages)
+        ? parsed.directMessages.filter((entry) => isPlainObject(entry) && typeof entry.dmId === 'string')
+        : [];
+      return { version: 1, groups: loadedGroups, persons: loadedPersons, directMessages: loadedMessages };
     } catch (error) {
       // Corrupt JSON: keep the bytes for a human, start clean, and make noise. The
       // alternative (refusing to mount) turns a single bad byte into "the plugin
@@ -2118,7 +2316,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // One file for everything the host owns. A second file would be a second write that can
       // half-succeed, and the two halves would drift after a crash.
       payload = JSON.stringify(
-        { version: 1, groups: state.groups, persons: [...persons.values()] },
+        { version: 1, groups: state.groups, persons: [...persons.values()], directMessages },
         null,
         2,
       );
@@ -2306,6 +2504,30 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   }
 
   // -------------------------------------------------------------------------
+  /**
+   * The public shape of one message.
+   *
+   * `payload` is passed through untouched: it is what the receiving client acts on (a link to redeem,
+   * a group to open), and reshaping it here would mean the client's parser and the sender's builder
+   * could disagree.
+   *
+   * @param {object} message - the stored record.
+   * @returns {object} the public copy.
+   */
+  function publicDirectMessage(message) {
+    return {
+      dmId: message.dmId,
+      fromPersonId: message.fromPersonId,
+      toPersonId: message.toPersonId,
+      kind: message.kind,
+      text: message.text,
+      ...(message.payload === undefined ? {} : { payload: message.payload }),
+      createdAt: message.createdAt,
+      deliveredAt: message.deliveredAt,
+      expiresAt: message.expiresAt,
+    };
+  }
+
   // Serializers: the only place a record becomes something a caller sees
   // -------------------------------------------------------------------------
 

@@ -38,6 +38,16 @@ import { randomFillSync } from 'node:crypto';
 // there.
 import { ownEndpointFromConfig } from './endpoint.js';
 import { HOST_SESSION_ID } from './memberships.js';
+// The three message kinds the MVP sends. A fourth would mean the scope changed.
+import { DM_KIND_INVITE } from './groups.js';
+
+/**
+ * How often an open subscription refreshes its member's presence.
+ *
+ * Must be comfortably below `ONLINE_WINDOW_MS` (120s) or a live connection would flicker offline
+ * between ticks. Half the window leaves room for one missed tick without the indicator lying.
+ */
+const PRESENCE_TICK_MS = 50_000;
 
 /** How many feed entries a join hands back so a new member has context. */
 const JOIN_FEED_TAIL = 20;
@@ -99,6 +109,118 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
   };
 
   return [
+    {
+      id: 'person/send',
+      name: "Send a person a one-to-one message",
+      description:
+        'Send ONE message to ONE person: a group invitation, a join notice, or a welcome. This is a doorbell, not a chat — sustained private conversation belongs in a group, and there is deliberately no message kind for it. For kind "group-invite" a fresh single-use invite is minted at send time, because a token cannot be read back after issue. The reply says whether they are online and gives the message id; it does NOT claim delivery, which only their ack confirms.',
+      examples: [
+        'Invite person m-1234 to this group',
+        'Tell the owner that someone joined',
+      ],
+      async run(input) {
+        const data = payload(input);
+        const fromPersonId = required(data.fromPersonId, 'fromPersonId');
+        const toPersonId = required(data.toPersonId, 'toPersonId');
+        const kind = required(data.kind, 'kind');
+        try {
+          // A group invitation is built here rather than handed in, so the sender cannot share a
+          // link that was already issued to somebody else. Each invitation is one token, one use.
+          let text = typeof data.text === 'string' ? data.text : '';
+          let extra;
+          if (kind === DM_KIND_INVITE) {
+            const groupId = required(data.groupId, 'groupId');
+            const caller = requireMember(input);
+            const group = store.snapshot({ groupId, member: caller.member });
+            const issued = store.invite({
+              groupId,
+              // The caller's own key. Minting is an act of whoever can also revoke, so it has to
+              // be the owner's credential — and the store verifies that, which is why a non-owner
+              // gets "只有群主可以生成邀请" rather than a link they cannot attribute.
+              ownerKey: data.personKey,
+              // One person, one redemption: a link that can be used twice cannot be traced to
+              // whoever leaked it.
+              maxUses: 1,
+              expiresInHours: data.expiresInHours,
+              label: `invite ${toPersonId}`,
+            });
+            const link = issued.link;
+            text = `${group.name}`;
+            extra = {
+              groupId,
+              groupName: group.name,
+              topic: group.topic ?? '',
+              inviteLink: link,
+              members: group.memberCount,
+            };
+          }
+          const message = store.sendPersonMessage({
+            fromPersonId,
+            toPersonId,
+            kind,
+            text,
+            payload: extra,
+          });
+          const online = store.isPersonOnline(toPersonId);
+          return {
+            text: online
+              ? `已发送（对方在线，等待确认）。\ndmId: ${message.dmId}`
+              : `已存入对方的收件箱：对方当前不在线，上线后会收到。\ndmId: ${message.dmId}`,
+            meta: { dmId: message.dmId, online, kind, createdAt: message.createdAt },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'person/inbox',
+      name: "Read one person's waiting messages",
+      description:
+        'Everything waiting for one person, oldest first. Used by a member instance when it starts up or reconnects, so a message sent while it was offline is not lost.',
+      examples: ['What is waiting for person m-1234?'],
+      async run(input) {
+        const data = payload(input);
+        const personId = required(data.personId, 'personId');
+        try {
+          const messages = store.listPersonMessages({
+            personId,
+            since: Number.isFinite(data.since) ? data.since : 0,
+          });
+          return {
+            text: messages.length === 0
+              ? '没有待收消息。'
+              : messages.map((entry) => `- [${entry.kind}] ${entry.text}`).join('\n'),
+            meta: { personId, messages },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'person/ack',
+      name: 'Confirm receipt of one-to-one messages',
+      description:
+        'Called by the RECEIVER once a message has actually arrived in a Session. This is what turns a send into a delivery: an HTTP call returning proves nothing, and reporting success for a message nobody received is how a messenger loses trust.',
+      examples: ['Acknowledge dm-1 and dm-2'],
+      async run(input) {
+        const data = payload(input);
+        const personId = required(data.personId, 'personId');
+        try {
+          const result = store.ackPersonMessages({ personId, dmIds: data.dmIds });
+          return {
+            text: result.acked === 0
+              ? '没有新的确认（可能已经确认过了）。'
+              : `已确认 ${result.acked} 条。`
+                + (result.unknown.length > 0 ? `\n${result.unknown.length} 条不属于你，已忽略。` : ''),
+            meta: result,
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
     {
       id: 'group/create',
       name: 'Create a group',
@@ -400,11 +522,30 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
         for (const entry of backlog.entries) emit('post', entry);
 
         const dispose = store.subscribe({ groupId, fn: (entry) => emit('post', entry) });
+
+        // An open subscription IS presence. Without this, a member who joins and watches — the
+        // ordinary way to use a chat app — shows as offline after two minutes, because watching
+        // writes nothing. A live socket reported as offline is worse than no indicator at all.
+        //
+        // Deliberately a timer rather than a single touch: `lastSeenAt` is a window, and a
+        // connection that stays up for an hour must keep refreshing it.
+        const presence = typeof store.touch === 'function'
+          ? setInterval(() => {
+            try {
+              store.touch({ groupId, member });
+            } catch {
+              // A presence refresh must never be able to kill a working subscription.
+            }
+          }, PRESENCE_TICK_MS)
+          : undefined;
+        presence?.unref?.();
+
         try {
           // Hold the stream open until the caller goes away. The server owns the
           // heartbeat and the timeouts; this skill only has to not return.
           await context.untilCancelled();
         } finally {
+          if (presence !== undefined) clearInterval(presence);
           dispose();
         }
         return { text: 'subscription closed' };

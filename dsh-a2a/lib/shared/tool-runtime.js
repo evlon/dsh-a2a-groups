@@ -393,6 +393,97 @@ function requireSession(sessionId, tool) {
       events: events.length,
     };
   },
+  'a2a_person_send': async function a2a_person_send(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_person_send');
+    const to = requireText(args.to, 'to');
+    const kind = requireText(args.kind, 'kind');
+    // The sender is whoever this Session is in the group the message is about. For an invitation that
+    // group is required, because the credential comes from it and the link is scoped to it.
+    const groupId = typeof args.groupId === 'string' && args.groupId !== ''
+      ? args.groupId
+      : requireText(args.groupId, 'groupId for a group invitation');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    if (membership.local === true) {
+      const sent = store.sendPersonMessage({
+        fromPersonId: membership.personId,
+        toPersonId: to,
+        kind,
+        text: args.text ?? '',
+        payload: undefined,
+      });
+      await store.flush();
+      return { dmId: sent.dmId, online: store.isPersonOnline(to), kind };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'person/send',
+      text: `send ${kind} to ${to}`,
+      data: {
+        groupId,
+        personId: membership.personId,
+        personKey: membership.personKey,
+        fromPersonId: membership.personId,
+        toPersonId: to,
+        kind,
+        text: args.text,
+      },
+      timeoutMs: config.client.timeoutMs,
+    });
+    const meta = result.data ?? {};
+    return {
+      dmId: typeof meta.dmId === 'string' ? meta.dmId : '',
+      online: meta.online === true,
+      kind,
+    };
+  },
+
+  'a2a_person_inbox': async function a2a_person_inbox(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_person_inbox');
+    // Any membership works for reaching the host: it is the credential, and the inbox is keyed by
+    // person, not by group.
+    const membership = identities.list({ sessionId })[0];
+    if (membership === undefined) {
+      throw coded('not_member', '这个会话还没有加入任何协作群，因此没有收件箱。');
+    }
+    if (membership.local === true) {
+      const messages = store.listPersonMessages({ personId: membership.personId, since: args.since });
+      return { messages };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'person/inbox',
+      text: 'inbox',
+      data: { personId: membership.personId, since: args.since },
+      timeoutMs: config.client.timeoutMs,
+    });
+    const meta = result.data ?? {};
+    return { messages: Array.isArray(meta.messages) ? meta.messages : [] };
+  },
+
+  'a2a_person_ack': async function a2a_person_ack(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_person_ack');
+    const dmIds = Array.isArray(args.dmIds) ? args.dmIds.filter((id) => typeof id === 'string') : [];
+    if (dmIds.length === 0) throw coded('bad_argument', 'Nothing to confirm: dmIds is empty.');
+    const membership = identities.list({ sessionId })[0];
+    if (membership === undefined) {
+      throw coded('not_member', '这个会话还没有加入任何协作群，因此没有收件箱。');
+    }
+    if (membership.local === true) {
+      const acked = store.ackPersonMessages({ personId: membership.personId, dmIds });
+      await store.flush();
+      return acked;
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'person/ack',
+      text: 'ack',
+      data: { personId: membership.personId, dmIds },
+      timeoutMs: config.client.timeoutMs,
+    });
+    const meta = result.data ?? {};
+    return {
+      acked: Number.isFinite(meta.acked) ? meta.acked : 0,
+      unknown: Array.isArray(meta.unknown) ? meta.unknown : [],
+    };
+  },
+
   'a2a_group_create': async function a2a_group_create(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_create');
     const name = requireText(args.name, 'name');

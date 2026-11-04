@@ -1,28 +1,40 @@
-fix: an invite link that looks like an address, not like machine noise
+feat: one-to-one invitations, and a truthful "online"
 
-A colleague receives this unsolicited, in WeChat or Feishu, and has to decide whether to paste it
-into their terminal:
+An invitation to join a group can now be pushed to a person instead of handed to them as a link to
+paste. It is a doorbell, not a chat: three message kinds exist (group-invite, join-notice, welcome),
+and a fourth would mean the scope changed, so an unknown kind is refused loudly rather than stored
+quietly.
 
-    before  agent-a2a://group?v=1&gw=http%3A%2F%2F127.0.0.1%3A3000%2Fa2a&agent=...
-    after   agent-a2a://group?v=1&gw=http://127.0.0.1:3000/a2a&agent=...
+DELIVERY IS CONFIRMED, NOT ASSUMED
 
-`%3A%2F%2F` is `://`. `URLSearchParams` escapes every reserved character it knows, including ones
-that are perfectly legal unescaped inside a query value. The result looks like an exploit, arriving
-from a colleague, asking to be trusted — and a reasonable person hesitating over it is the bug,
-because the link is legitimate.
+`sent` is not `delivered`. The send tool reports only that the message is stored and whether the
+recipient currently holds a connection; `deliveredAt` is written when the RECEIVER calls ack. The
+failure this prevents is the one that kills trust in a messenger: reporting success for a message
+nobody received.
 
-Only the escaping changed. The link format, the field order and the parser are untouched: `:` `/`
-`@` are legal in a query value per RFC 3986, and `URLSearchParams.get` decodes both spellings to the
-same string, so the readable form parses back to identical fields.
+Acks are idempotent (a retried ack must not move a timestamp the sender displays) and scoped to the
+recipient (an ack by the wrong person would mark delivered a message its recipient never saw).
 
-Non-ASCII stays escaped. That is the line: a Chinese group name cannot appear raw in a URI, and
-unescaping it would produce a link some clients silently truncate. The reduction stops where
-correctness starts.
+EVERY INVITATION MINTS A FRESH TOKEN
 
-I considered dropping `gw` from the link entirely, since the receiver usually has its own gateway
-configured. Rejected: the link is the only thing a new colleague has, and making it depend on prior
-configuration defeats the one step it exists to remove.
+The store keeps only `tokenHash`, so an issued token cannot be read back. That looked like an
+obstacle and is the right design: one person, one link, one `maxUses`, one thing to revoke.
+Re-inviting mints another, which is truthful — the first may have leaked.
 
-Verified: 408 tests (5 new, covering the readable form, the @ case, the escaped-Chinese boundary,
-exact round-trip, and unchanged field order), and the live invite message now reads
-`gw=http://127.0.0.1:3000/a2a`.
+"ONLINE" NOW MEANS HOLDING A CONNECTION
+
+`lastSeenAt` was only written when a member authenticated, posted or read. A colleague who started
+their DSH, joined a group and then watched — the ordinary way to use a chat app — showed as offline
+after two minutes, because watching writes nothing.
+
+The subscribe skill now refreshes presence on a timer while its stream is open. A live socket
+reported as offline is worse than no indicator at all, because it makes the reader stop believing
+the indicator permanently. `store.touch` exists for exactly this: refresh the timestamp and change
+nothing else, so a presence tick cannot put noise in the feed or move a sequence number.
+
+Undelivered messages survive a restart; the message cap drops delivered ones before anything still
+waiting to be read.
+
+Verified: 420 tests (12 new: no-premature-delivery, self-send, unknown-kind, isolation, idempotent
+ack, wrong-person ack, payload round-trip, presence window, and two restart cases), and end to end
+against a live host — send, inbox with a working invite link, and ack all succeed.
