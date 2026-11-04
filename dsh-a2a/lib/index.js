@@ -295,6 +295,84 @@ const PANEL_FEED_TAIL = 8;
     }
   };
 
+  /**
+   * Invite one person to one group, on behalf of the panel.
+   *
+   * Reuses `person/send` semantics rather than minting an invitation here: two paths that mint invites would
+   * eventually disagree about `maxUses` or expiry, and the disagreement would be visible only to whoever got
+   * the wrong link.
+   *
+   * @param {object} payload - `{ groupId, sessionId?, toPersonId }`.
+   * @returns {Promise<object>} a Connection result with `{ dmId, online }`.
+   */
+  const setPanelInvite = async (payload) => {
+    const body = payload !== null && typeof payload === 'object' ? payload : {};
+    const groupId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
+    const toPersonId = typeof body.toPersonId === 'string' ? body.toPersonId.trim() : '';
+    if (groupId === '') {
+      return { ok: false, error: { code: 'bad_argument', message: 'groupId is required', details: {} } };
+    }
+    if (toPersonId === '') {
+      return { ok: false, error: { code: 'bad_argument', message: 'toPersonId is required', details: {} } };
+    }
+    const records = identities.list({ groupId });
+    const record = body.sessionId === undefined
+      ? records[0]
+      : records.find((entry) => entry.sessionId === body.sessionId) ?? records[0];
+    if (record === undefined) {
+      return {
+        ok: false,
+        error: { code: 'not_member', message: 'this instance is not in that group', details: { groupId } },
+      };
+    }
+    try {
+      if (record.local === true) {
+        const sent = store.sendPersonMessage({
+          fromPersonId: record.personId,
+          toPersonId,
+          kind: 'group-invite',
+          text: '',
+          payload: undefined,
+        });
+        await store.flush();
+        return { ok: true, value: { dmId: sent.dmId, online: store.isPersonOnline(toPersonId) } };
+      }
+      const result = await bridge.send(
+        {
+          baseUrl: record.baseUrl,
+          apiKey: record.apiKey ?? config.client.apiKey,
+          forwardProto: config.client.forwardProto,
+          protocolVersion: config.client.protocolVersion,
+        },
+        {
+          skill: 'person/send',
+          text: 'send group-invite to ' + toPersonId,
+          data: {
+            groupId,
+            personId: record.personId,
+            personKey: record.personKey,
+            fromPersonId: record.personId,
+            toPersonId,
+            kind: 'group-invite',
+          },
+          timeoutMs: config.client.timeoutMs,
+        },
+      );
+      const meta = result.data ?? {};
+      return {
+        ok: true,
+        value: {
+          dmId: typeof meta.dmId === 'string' ? meta.dmId : '',
+          online: meta.online === true,
+        },
+      };
+    } catch (error) {
+      // Reported as a failed SEND, distinct from a failed invite: the person is told the invitation did not go
+      // out rather than being left to assume it did.
+      return { ok: false, error: { code: 'send_failed', message: describe(error), details: { groupId, toPersonId } } };
+    }
+  };
+
   const publishGroups = () => {
     try {
       const rows = [];
@@ -476,6 +554,9 @@ const PANEL_FEED_TAIL = 8;
             }
             if (name === 'profile') {
               return await setPanelProfile(payload);
+            }
+            if (name === 'invite') {
+              return await setPanelInvite(payload);
             }
             // `details` is mandatory in ConnectionRpcFailure; omitting it yields a malformed response
             // rather than a clean refusal.

@@ -1,35 +1,39 @@
-feat: edit my personal headline, distinct from my role in one group
+feat(ui): inviting reports whether it actually went out
 
-Two facts, two places, and until now only one had a form:
+The dialog's pick filled the composer and closed itself — so it looked successful whether or not an
+invitation was ever sent, and the sender had to remember to press Enter in a conversation afterwards. That is
+the "发成功还是未成功" requirement, unmet.
 
-    「我在这个群负责什么」  member.roleAbout, changes per group
-    「我是谁」              person.headline, follows me into every group and onto every card
+NOW
 
-Somebody who is 负责对账 in one project and 兼产品 in another needs both; one field would force a choice.
+    sending               list disabled, "正在发送…"
+    sent, recipient up    「已邀请 李四，对方在线，会立即收到」
+    sent, recipient away  「已邀请 李四，对方当前离线，上线后会看到」
+    failed                「发送失败：<code>」
 
-The editor now shows them as two labelled fields rather than one field with a hint, because a user who edits
-the wrong one gets a change that does not appear where they expected — and the difference is invisible in a
-screenshot. The label states the scope: 「个人介绍（所有群共用，显示在同事名片上）」 vs 「群内介绍（只在这个群生效）」.
+The three-way outcome is deliberate. "Sent" and "will be seen now" are different promises, and collapsing them
+into one tick is how a sender concludes the feature is broken when nobody replies immediately.
 
-WHY A NEW SKILL WAS NEEDED
+WHY THE SEND LIVES IN THE DIALOG
 
-`group/role` writes `about` and `tags` — facts about ONE membership. The headline lives on the person row, so
-a member of a remotely hosted group had no way to set it: the skill for it did not exist. `person/profile` now
-does, and takes a group id only because a credential belongs to a membership — the store then writes the
-person that credential identifies. There is no path that names somebody else.
+The alternative was forwarding an `onInvite` prop the parent exists only to pass along. Keeping it here lets
+the dialog own its own states, and the parent supplies facts rather than plumbing.
 
-TWO DETAILS THAT KEEP IT HONEST
+WHY THE LIST DISABLES WHILE SENDING
 
-- an untouched headline is omitted from the payload rather than sent empty, because an absent field means
-  "leave it alone" and a cleared one would wipe the value on every role edit
-- the editor reads the current headline from the person table, not the roster row: the headline is a person
-  fact, and a roster cached before it existed would not carry it
+Each invitation mints a single-use link. A double click would mint two live ones, and only one would ever be
+redeemed — with no way to tell which.
 
-OBSERVED, NOT INTRODUCED
+THE HOST ENDPOINT REUSES `person/send` SEMANTICS
 
-`text` comes back empty for BOTH `group/role` and `person/profile` when called through the gateway; `meta`
-carries the values. Pre-existing, unrelated to this change, and recorded here so the next person does not
-spend a turn on it.
+Two code paths that mint invitations would eventually disagree about `maxUses` or expiry, and the disagreement
+would be visible only to whoever received the wrong link.
 
-Verified: 427 tests, and on a live host `persons` gains
-`张工 headline='后端工程师，专注对账系统'` while `groups` keeps `roleAbout='这个群的负责人'`.
+FALLBACK KEPT
+
+Without the channel, picking a person still fills the composer with the instruction. A host without Connection
+loses the feedback, not the ability to invite.
+
+Verified: 427 tests, and on a live host the endpoint answers
+`{"ok":true,"value":{"dmId":"dm-67f0737867b1","online":false}}` with the invitee's inbox then holding one
+`group-invite` carrying a working link.

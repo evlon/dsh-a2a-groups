@@ -2748,6 +2748,43 @@ window.__ModuleLoader__.load({
 		 */
 		function InviteDialog(props) {
 			const [query, setQuery] = react.useState("");
+			// Sending / sent-online / sent-offline / failed. `sending` also disables the list: each invitation
+			// mints a single-use link, and a second click would mint a second live one.
+			const [inviteState, setInviteState] = react.useState("idle");
+			const [inviteNote, setInviteNote] = react.useState("");
+
+			/** Send one invitation and record what happened. */
+			function handleInvitePick(person) {
+				if (panelRpcCaller === undefined) {
+					// No channel: fall back to the instruction, so a host without Connection loses the
+					// feedback rather than the ability to invite.
+					fillDraft(props.inputActions, draftGroupInvite(props.group, person));
+					props.onClose();
+					return;
+				}
+				setInviteState("sending");
+				setInviteNote("正在发送…");
+				panelRpcCaller("/a2a-panel", "invite", {
+					groupId: props.groupId,
+					sessionId: props.sessionId,
+					toPersonId: person.id,
+				}).then(function (result) {
+					if (result !== null && result !== undefined && result.ok === true) {
+						const online = result.value !== undefined && result.value !== null && result.value.online === true;
+						setInviteState("sent");
+						setInviteNote(online
+							? `已邀请 ${person.name}，对方在线，会立即收到`
+							: `已邀请 ${person.name}，对方当前离线，上线后会看到`);
+						return;
+					}
+					const code = result && result.error ? result.error.code : "unknown";
+					setInviteState("failed");
+					setInviteNote(`发送失败：${code}`);
+				}).catch(function (error) {
+					setInviteState("failed");
+					setInviteNote("发送失败：" + String((error && error.message) || error));
+				});
+			}
 			const candidates = Array.isArray(props.candidates) ? props.candidates : [];
 
 			// Local, case-insensitive, and matched against the description too: a person looking for
@@ -2816,7 +2853,10 @@ window.__ModuleLoader__.load({
 											type: "button",
 											style: membersLayout.dialogItem,
 											title: "邀请 " + person.name + " 加入",
-											onClick: function () { props.onPick(person); }
+											// Disabled while a send is in flight: each invitation is single-use, and a
+									// second click would mint a second live link.
+									disabled: inviteState === "sending",
+									onClick: function () { handleInvitePick(person); }
 										},
 										h("span", { style: { fontSize: "12px" } }, person.name),
 										(person.headline ?? "") === ""
@@ -2832,7 +2872,20 @@ window.__ModuleLoader__.load({
 								{ style: membersLayout.unboundHint },
 								"还有 " + String(hidden) + " 位同事未显示，输入名字缩小范围。"
 							)
-						: null
+						: null,
+					inviteNote === ""
+						? null
+						: h(
+								"p",
+								{
+									style: Object.assign(
+										{},
+										membersLayout.unboundHint,
+										inviteState === "failed" ? { color: "#c0392b" } : {}
+									)
+								},
+								inviteNote
+							)
 				)
 			);
 		}
@@ -3166,11 +3219,13 @@ window.__ModuleLoader__.load({
 					? h(InviteDialog, {
 							candidates: invitable,
 							groupName: group.name,
-							onClose: function () { setInviteOpen(false); },
-							onPick: function (person) {
-								fillDraft(inputActions, draftGroupInvite(group, person));
-								setInviteOpen(false);
-							}
+							// The facts the dialog needs to send for itself: which group, which Session's credential,
+							// and the composer for the no-channel fallback.
+							groupId: group.id,
+							sessionId: sessionId,
+							group: group,
+							inputActions: inputActions,
+							onClose: function () { setInviteOpen(false); }
 						})
 					: null,
 			);
