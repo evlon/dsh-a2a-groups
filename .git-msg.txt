@@ -1,44 +1,39 @@
-feat: the panel can write to the Host, over DSH's own Connection RPC
+feat(ui): edit my group role in place, without opening a conversation
 
-The panel needed a write path that does not drag the user into a Session. It has one: a channel on DSH's
-Connection transport, called from the browser through `ctx.connection.rpc`.
+The panel is the interface for a collaboration group. Asking somebody to press 「编辑介绍」, watch an
+instruction appear in a composer, and then press Enter — in order to change a label on a roster — was the
+wrong shape: they are looking at people, not talking to an assistant.
 
-Verified end to end over HTTP with the documented envelope:
+My row now expands into two fields and a save button. The write goes straight to the Host over the
+Connection channel and the value changes for every member.
 
-    POST /a2a-panel/ping
-    { "type": "client-request", "rpcId": "...", "method": "ping", "payload": { ... } }
+Verified from the UI, read back from the Host's own file:
 
-    -> {"ok":true,"value":{"pong":true,"at":1793776928558}}
-    -> {"ok":false,"error":{"code":"not_found",...}}      for an unknown endpoint
+    before  张工: '整体进度与验收' [产品]
+    after   张工: 'UI真实保存测试' [前端,测试]
 
-FOUR THINGS I HAD WRONG
+TWO BUGS FOUND ON THE WAY, BOTH PREVIOUSLY INVISIBLE
 
-1. `ctx.connection.rpc.handle()` was the right call, but from the plugin's own fiber it hits the known
-   upstream bug (#8414): registration runs an effect on a fiber that lacks the declaration and throws
-   `cannot get property "webServer" without inject`. The discussion notes the ROOT context is unaffected;
-   registering through `ctx.root` works, and that is what this does.
+1. **Membership base URLs were missing the agent name.** The invite link carries `gw` (gateway root) and
+   `agent` (the entry under it) as separate facts, correctly — but only `gw` was stored, so every later
+   call posted to `/a2a`, which the gateway answers 404 for. Measured:
 
-2. The browser half is NOT `createWebConnectionRpc` — that name is internal. The module's real exports are
-   `{ RpcId, apply, inject, installConnection, transportError }`: it is a plugin, and what it publishes is
-   the `connection` service. The call is `ctx.connection.rpc.call(channel, endpoint, payload)`, the exact
-   mirror of the Host's `handle`.
+       POST /a2a                    -> 404
+       POST /a2a/agent-group-host   -> 200
 
-3. `dsh.client.inject` is the module table, not a service list — a package can only `require` what it
-   declares there. Ours listed only `slots`, which is why the first attempt reported "module 未能加载".
+   This went unnoticed because a locally hosted group takes the `local` branch and never touches the
+   network, and because `group/join` resolves the card first and so succeeded while every subsequent call
+   did not. That is the most confusing shape a networking bug takes.
 
-4. A raw POST is 405 because the transport carries a `ClientRequest` envelope, not a bare body.
+2. **`parsed.baseUrl` is the direct endpoint, not the gateway base.** `parseInviteLink` returns
+   `gatewayBase` and `agent` separately; the compose step has to read those.
 
-WHY THIS PATH RATHER THAN A CREDENTIAL IN THE PAGE
+FALLBACK KEPT
 
-The write happens in the Host process, where the ledger holding the member credential lives. The credential
-never leaves, there is no second authentication scheme, and Connection already authenticates the request. A
-panel carrying a member key would hand every group's credential to anything that can read the DOM.
+If the write channel is unavailable the button still fills the composer. A host without Connection should
+lose convenience, not the ability to edit — and the panel says which path it took rather than silently
+doing the other thing.
 
-STILL TO DO
-
-The `profile` endpoint's handler is in place (it calls `groups.setProfile`, `groups.setPersonProfile`, or
-the remote `group/role`), and `saveProfile()` on the client posts to it. What is left is the form that uses
-it. The transport is no longer the blocker.
-
-The temporary self-check button has been removed now that it has done its job — it was a probe, and a probe
-that stays in the UI is clutter. Verified: 422 tests, and the HTTP probe above.
+Also recorded: `opencli browser fill` is what works for driving a controlled React input. `dispatchEvent`
+with a native setter throws `Illegal invocation` across realms, and `type` errored — worth knowing before the
+next UI verification spends ten minutes on it.

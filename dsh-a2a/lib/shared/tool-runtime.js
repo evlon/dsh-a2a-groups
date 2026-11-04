@@ -100,6 +100,29 @@ function resolveTarget(registry, config, reference) {
 }
 
 /** The bridge target for a joined (remote) membership. */
+/**
+ * The full address of a group host, from the two facts an invite link carries.
+ *
+ * `gw` is the gateway root and `agent` is the entry under it; the callable address is both. Keeping only
+ * `gw` produces a path the gateway answers 404 for, because routing happens on `/a2a/<agent>`.
+ *
+ * An absent agent is left alone rather than guessed: a link that names no agent may be pointing straight
+ * at a host (local development), where `gw` alone IS the address.
+ *
+ * @param {string} [base] the gateway base, e.g. `http://gw:3000/a2a`.
+ * @param {string} [agent] the agent name, e.g. `agent-group-host`.
+ * @returns {string|undefined} the address to call.
+ */
+function composeMemberBase(base, agent) {
+  const trimmed = typeof base === 'string' ? base.replace(/\/+$/u, '') : '';
+  if (trimmed === '') return undefined;
+  const name = typeof agent === 'string' ? agent.trim() : '';
+  if (name === '') return trimmed;
+  // Already carries its agent (a hand-written `url` link, or a re-join of an older record).
+  if (trimmed.endsWith('/' + name)) return trimmed;
+  return trimmed + '/' + name;
+}
+
 function targetOf(membership, config) {
   return {
     baseUrl: membership.baseUrl ?? config.groups.gatewayBase,
@@ -636,9 +659,13 @@ function requireSession(sessionId, tool) {
     // colleague needs nothing configured on their side: paste the link, say the
     // password. The configured gatewayBase is only a fallback for a hand-written
     // link that omitted it.
+    // The link splits the address in two (`gw` + `agent`) because they are two facts; the ledger needs
+    // one callable string, so they are joined here rather than at every use site.
     const baseUrl = parsed.endpoint
-      ?? parsed.baseUrl
-      ?? (config.groups.gatewayBase === '' ? undefined : config.groups.gatewayBase);
+      ?? composeMemberBase(
+        parsed.gatewayBase ?? (config.groups.gatewayBase === '' ? undefined : config.groups.gatewayBase),
+        parsed.agent,
+      );
     if (baseUrl === undefined || baseUrl === '') {
       throw coded(
         'missing_endpoint',

@@ -1670,6 +1670,99 @@ window.__ModuleLoader__.load({
 			}
 		}
 
+		/**
+		 * Inline editor for my group role: a description and tags, saved in place.
+		 *
+		 * Two fields rather than one, because they answer different questions — "what do I do here" and
+		 * "what should people search for to find me" — and the Host stores them separately.
+		 *
+		 * @param {object} props - `{ groupId, sessionId, about, tags, onDone, onCancel }`.
+		 * @returns {object} the editor.
+		 */
+		function RoleEditor(props) {
+			const [about, setAbout] = react.useState(props.about ?? "");
+			const [tags, setTags] = react.useState((props.tags ?? []).join("、"));
+			const [state, setState] = react.useState("idle");
+			const [message, setMessage] = react.useState("");
+
+			/** Save both fields; report the outcome inline rather than in an alert. */
+			function save() {
+				setState("saving");
+				setMessage("");
+				// Tags are typed as a separated list because that is how a person thinks of them; the Host
+				// stores an array.
+				const parsed = String(tags ?? "")
+					.split(/[、,，\s]+/u)
+					.map((tag) => tag.trim())
+					.filter((tag) => tag !== "");
+				saveProfile({
+					groupId: props.groupId,
+					sessionId: props.sessionId,
+					about: String(about ?? "").trim(),
+					tags: parsed,
+				}).then(function (result) {
+					setState(result.ok ? "done" : "failed");
+					setMessage(result.message);
+					if (result.ok && typeof props.onSaved === "function") props.onSaved();
+				});
+			}
+
+			return h(
+				"div",
+				{ style: membersLayout.editorBox },
+				h("input", {
+					type: "text",
+					value: about,
+					placeholder: "我在这个群负责什么，例如：负责对账与发票生成",
+					onChange: function (event) {
+						setAbout(event !== null && event !== undefined && event.target !== undefined ? event.target.value : "");
+					},
+					style: membersLayout.editorInput
+				}),
+				h("input", {
+					type: "text",
+					value: tags,
+					placeholder: "标签，用顿号或逗号分隔，例如：研发、后端",
+					onChange: function (event) {
+						setTags(event !== null && event !== undefined && event.target !== undefined ? event.target.value : "");
+					},
+					style: membersLayout.editorInput
+				}),
+				h(
+					"div",
+					{ style: { display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" } },
+					h(
+						"button",
+						{
+							type: "button",
+							disabled: state === "saving",
+							title: "保存到群宿主，立即对所有成员生效",
+							style: Object.assign({}, membersLayout.editorSave, state === "saving" ? { opacity: 0.5 } : {}),
+							onClick: save
+						},
+						state === "saving" ? "保存中…" : "保存"
+					),
+					h(
+						"button",
+						{
+							type: "button",
+							title: "放弃修改",
+							style: membersLayout.editorCancel,
+							onClick: function () { if (typeof props.onCancel === "function") props.onCancel(); }
+						},
+						"取消"
+					),
+					message === ""
+						? null
+						: h(
+								"span",
+								{ style: { fontSize: "10px", opacity: 0.75, color: state === "failed" ? "#c0392b" : "inherit" } },
+								message
+							)
+				)
+			);
+		}
+
 		function draftGroupRoleEdit(input) {
 			const given = input === null || input === undefined ? {} : input;
 			const groupName = pickString(given.groupName);
@@ -1970,6 +2063,55 @@ window.__ModuleLoader__.load({
 		 * chain, at the level that actually knows its height.
 		 */
 		const membersLayout = {
+			// The inline role editor: a box that appears under my row, in the roster's own visual language so
+			// it reads as part of that row rather than as a separate screen.
+			editorBox: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "5px",
+				margin: "4px 0 6px",
+				padding: "8px",
+				border: "1px solid rgba(128, 128, 128, 0.4)",
+				borderRadius: "6px",
+				background: "transparent"
+			},
+			editorInput: {
+				width: "100%",
+				boxSizing: "border-box",
+				padding: "4px 7px",
+				border: "1px solid rgba(128, 128, 128, 0.35)",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				colorScheme: "light dark"
+			},
+			// Solid border and full-strength text: the one action that commits, distinguished by contrast
+			// rather than by a colour that would only work on one theme.
+			editorSave: {
+				padding: "3px 12px",
+				border: "1px solid currentColor",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				fontWeight: 600,
+				cursor: "pointer"
+			},
+			editorCancel: {
+				padding: "3px 10px",
+				border: "1px solid rgba(128, 128, 128, 0.4)",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				opacity: 0.75,
+				cursor: "pointer"
+			},
+
 			// A fixed overlay: the pane clips its own overflow, so a dialog parented inside it would be cut
 			// off at the pane's edge and the search box would appear to be missing.
 			dialogOverlay: {
@@ -2680,6 +2822,9 @@ window.__ModuleLoader__.load({
 			// Whether the invite chooser is open. Kept here rather than in the dialog so one Escape or
 			// one pick closes it from the outside too.
 			const [inviteOpen, setInviteOpen] = react.useState(false);
+			// Whether my own row is being edited in place. Separate from `inviteOpen` because the two open
+			// different surfaces and only one of them writes.
+			const [editingRole, setEditingRole] = react.useState(false);
 
 			// Which group this Session belongs to. A Session can hold several; the pane shows
 			// the one with the most recent activity, because that is the one being worked in.
@@ -2827,7 +2972,16 @@ window.__ModuleLoader__.load({
 							? Object.assign({}, membersLayout.personRow, membersLayout.personRowSelf)
 							: membersLayout.personRow,
 						onClick: function () {
-							if (isSelf) editOwnRole(self);
+							if (isSelf) {
+				// Prefer the inline editor: it writes straight to the Host. Fall back to the composer
+				// instruction only when the write channel is missing, and say which happened rather than
+				// silently doing the other thing.
+				if (panelRpcCaller !== undefined) {
+					setEditingRole(true);
+				} else {
+					editOwnRole(self);
+				}
+			}
 							else address(member.name);
 						}
 					},
@@ -2963,6 +3117,20 @@ window.__ModuleLoader__.load({
 				members.length === 0
 					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
 					: h("div", { style: membersLayout.roster }, rosterRows),
+				editingRole && group !== undefined
+					? h(RoleEditor, {
+						groupId: group.id,
+						sessionId: sessionId,
+						about: self.about,
+						tags: self.tags,
+						onCancel: function () { setEditingRole(false); },
+						onSaved: function () {
+							// Close on success; the panel refreshes from the Host's next snapshot, so the new
+							// value appears without a reload.
+							setEditingRole(false);
+						}
+					})
+					: null,
 				inviteRow(),
 				inviteOpen
 					? h(InviteDialog, {
