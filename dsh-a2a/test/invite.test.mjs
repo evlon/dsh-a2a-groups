@@ -344,3 +344,79 @@ test('randomPassword clamps a nonsense length instead of returning a short passw
   assert.equal(randomPassword('abc').length, 12);
   assert.equal(randomPassword(2).length, 4, 'a 4-character floor even if asked for less');
 });
+
+// ---------------------------------------------------------------------------
+// readability
+//
+// A colleague pastes this into WeChat and somebody on the other end decides whether to trust it.
+// `%3A%2F%2F` is `://`, and a link that looks like machine noise arriving unsolicited is a link a
+// reasonable person hesitates over. The escaping is reduced, not the format: every field and the
+// parser stay the same.
+
+test('the gateway address is written as an address, not as percent-escapes', () => {
+  const link = buildLink({
+    groupId: 'g-1',
+    token: 'inv_x',
+    gatewayBase: 'http://gw:3000/a2a',
+    agent: 'agent-group-host',
+  });
+  assert.ok(link.includes('gw=http://gw:3000/a2a'), link);
+  assert.ok(!link.includes('%3A%2F%2F'), `no escaped scheme: ${link}`);
+});
+
+test('an @ in the gateway address is left literal too', () => {
+  // A gateway behind basic auth would carry one, and `%40` reads as noise for the same reason.
+  const link = buildLink({
+    groupId: 'g-1',
+    token: 'inv_x',
+    gatewayBase: 'http://user@host:3000/a2a',
+    agent: 'agent-group-host',
+  });
+  assert.ok(link.includes('user@host'), link);
+  assert.ok(!link.includes('%40'), link);
+});
+
+test('non-ASCII stays escaped, because a URI cannot carry it raw', () => {
+  const link = buildLink({
+    groupId: 'g-1',
+    token: 'inv_x',
+    gatewayBase: 'http://gw/a2a',
+    agent: 'agent-group-host',
+    name: '发票服务重构',
+  });
+  // The point is that the reduction did not go TOO far: an unescaped Chinese name would be an
+  // invalid URI that some clients silently truncate.
+  assert.ok(!link.includes('发票'), `must stay escaped: ${link}`);
+  assert.equal(parseLink(link).name, '发票服务重构');
+});
+
+test('the readable form parses back to exactly the same fields', () => {
+  // The whole change is only safe because `URLSearchParams.get` decodes both spellings.
+  const input = {
+    groupId: 'g-abc',
+    token: 'inv_tok',
+    gatewayBase: 'http://127.0.0.1:3000/a2a',
+    agent: 'agent-group-host',
+    name: '发票服务重构',
+    expiresAt: '2026-11-11T04:13:26.358Z',
+  };
+  const back = parseLink(buildLink(input));
+  assert.equal(back.groupId, input.groupId);
+  assert.equal(back.token, input.token);
+  assert.equal(back.gatewayBase, input.gatewayBase);
+  assert.equal(back.agent, input.agent);
+  assert.equal(back.name, input.name);
+  assert.equal(new Date(back.expiresAt).toISOString(), input.expiresAt);
+});
+
+test('field order is unchanged, so two links for one group are diffable', () => {
+  const link = buildLink({
+    groupId: 'g-1',
+    token: 'inv_x',
+    gatewayBase: 'http://gw/a2a',
+    agent: 'agent-group-host',
+    name: 'A',
+  });
+  const order = [...link.matchAll(/(?:^|[?&])([a-z]+)=/gu)].map((match) => match[1]);
+  assert.deepEqual(order, ['v', 'gw', 'agent', 'g', 't', 'n']);
+});

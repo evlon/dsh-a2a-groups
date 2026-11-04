@@ -73,6 +73,45 @@ export class InviteLinkError extends Error {
 }
 
 /**
+ * Escape one query value, keeping the characters a human needs to recognise a URL.
+ *
+ * `URLSearchParams` is correct but unreadable: it escapes `:` and `/`, so a gateway address turns
+ * into `http%3A%2F%2F...`. Those three characters are legal unescaped inside a query value
+ * (RFC 3986), and `URLSearchParams.get` decodes both forms to the same string, so leaving them
+ * literal costs nothing and buys a link that looks like an address instead of like noise.
+ *
+ * Everything else is escaped exactly as before, including non-ASCII: Chinese cannot appear raw in
+ * a URI, and `&` `=` `#` `?` would change where the value ends.
+ *
+ * @param {string} value - the raw value.
+ * @returns {string} the escaped value.
+ */
+function encodeValue(value) {
+  return encodeURIComponent(value)
+    .replace(/%3A/giu, ':')
+    .replace(/%2F/giu, '/')
+    .replace(/%40/giu, '@');
+}
+
+/**
+ * Build the query string in the fixed field order the prompt relies on.
+ *
+ * @param {Array<[string, string|undefined]>} pairs - field/value pairs, in emit order.
+ * @returns {string} the query string, without a leading `?`.
+ */
+function buildQuery(pairs) {
+  const parts = [];
+  for (const [key, value] of pairs) {
+    // A field is omitted entirely rather than emitted empty: the parser treats a present-but-empty
+    // value differently from an absent one (an empty `n` is a group with no name, an absent one
+    // means "not carried").
+    if (value === undefined) continue;
+    parts.push(`${encodeURIComponent(key)}=${encodeValue(value)}`);
+  }
+  return parts.join('&');
+}
+
+/**
  * Build the canonical invite link.
  *
  * Field order is fixed (`v,gw,agent,g,t,n,e`) because the prompt and the UI both
@@ -96,15 +135,18 @@ export function buildLink(input) {
   const name = optionalText(input?.name);
   const expiresAt = input?.expiresAt === undefined ? undefined : toIso(input.expiresAt);
 
-  const params = new URLSearchParams();
-  params.set('v', LINK_VERSION);
-  params.set('gw', gatewayBase);
-  params.set('agent', agent);
-  params.set('g', groupId);
-  params.set('t', token);
-  if (name !== undefined) params.set('n', name);
-  if (expiresAt !== undefined) params.set('e', expiresAt);
-  return `${LINK_PREFIX}?${params.toString()}`;
+  // Field order is fixed (`v,gw,agent,g,t,n,e`) and documented: the prompt and the tests both
+  // rely on it, and a stable order makes two links for the same group diffable.
+  const query = buildQuery([
+    ['v', LINK_VERSION],
+    ['gw', gatewayBase],
+    ['agent', agent],
+    ['g', groupId],
+    ['t', token],
+    ['n', name],
+    ['e', expiresAt],
+  ]);
+  return `${LINK_PREFIX}?${query}`;
 }
 
 /**

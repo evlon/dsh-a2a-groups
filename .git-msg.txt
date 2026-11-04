@@ -1,39 +1,28 @@
-fix: the host was writing its own address onto every member
+fix: an invite link that looks like an address, not like machine noise
 
-Found by running the real flow with two instances rather than by reading the code.
+A colleague receives this unsolicited, in WeChat or Feishu, and has to decide whether to paste it
+into their terminal:
 
-`group/join` executes INSIDE the host process, so `ownEndpointFromConfig(config)` there names the
-host. Every member who joined was therefore recorded at the host's own address:
+    before  agent-a2a://group?v=1&gw=http%3A%2F%2F127.0.0.1%3A3000%2Fa2a&agent=...
+    after   agent-a2a://group?v=1&gw=http://127.0.0.1:3000/a2a&agent=...
 
-    张工  http://gw/a2a/agent-group-host     (should be agent-person-dev1)
-    李四  http://gw/a2a/agent-group-host     (should be agent-person-dev2)
+`%3A%2F%2F` is `://`. `URLSearchParams` escapes every reserved character it knows, including ones
+that are perfectly legal unescaped inside a query value. The result looks like an exploit, arriving
+from a colleague, asking to be trusted — and a reasonable person hesitating over it is the bug,
+because the link is legitimate.
 
-Two different people, one address, and it pointed at the wrong process even for the owner — a card
-would have said "reach them directly here" and dialled the group host.
+Only the escaping changed. The link format, the field order and the parser are untouched: `:` `/`
+`@` are legal in a query value per RFC 3986, and `URLSearchParams.get` decodes both spellings to the
+same string, so the readable form parses back to identical fields.
 
-WHY THE PREVIOUS COMMIT GOT IT WRONG
+Non-ASCII stays escaped. That is the line: a Chinese group name cannot appear raw in a URI, and
+unescaping it would produce a link some clients silently truncate. The reduction stops where
+correctness starts.
 
-It assumed `join` ran on the member's machine. It does not: `group/join` is a host skill, and the
-member-side work happens in the `a2a_group_join` TOOL, which runs on the member's machine and does
-know its own configuration. The two are different processes with different configs, and the field
-was filled from the wrong one.
+I considered dropping `gw` from the link entirely, since the receiver usually has its own gateway
+configured. Rejected: the link is the only thing a new colleague has, and making it depend on prior
+configuration defeats the one step it exists to remove.
 
-WHAT CHANGED
-
-- the host no longer composes a joiner's address at all; it takes only what the caller supplies
-- the member-side tool sends its own, composed from ITS config, because that process knows
-- `create` still composes one, because there the caller IS the host — same field, two processes,
-  and the asymmetry is the point
-
-A member with no gateway name sends nothing and stays empty. Empty now means "no address known"
-instead of "here is a plausible lie".
-
-Verified on two live instances: 张工 gets the host address, 李四 gets agent-person-dev2, and 王五 —
-who sent none — stays empty. 403 tests unchanged.
-
-ALSO FOUND (not fixed, recorded for the MVP decision)
-
-A raw A2A call to a member instance returns an empty result: its tools need a Session, and only a
-Session turn has one. That is correct behaviour, not a bug — but it means a colleague cannot be
-driven by an outside HTTP caller, only through their own conversation. Worth knowing before anyone
-plans on a gateway-level "just call that person" feature.
+Verified: 408 tests (5 new, covering the readable form, the @ case, the escaped-Chinese boundary,
+exact round-trip, and unchanged field order), and the live invite message now reads
+`gw=http://127.0.0.1:3000/a2a`.
