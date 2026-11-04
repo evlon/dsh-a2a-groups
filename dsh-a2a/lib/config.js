@@ -76,7 +76,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     publicUrl: '',
     agentName: '',
     gatewayBase: '',
-    // Whether THIS instance hosts groups itself, instead of a standalone dsh-groups
+    // Whether THIS instance hosts groups itself, instead of a standalone agent-groups
     // server. Off by default: the normal shape is one shared host behind the gateway
     // and every DSH instance as a member. Turning it on makes this instance accept
     // group/create locally, which is only useful for a single-machine setup.

@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process';
 const session = process.argv[2] ?? 'shot2';
 const port = process.argv[3] ?? '3091';
 const outPath = process.argv[4];
-const home = port === '3091' ? 'C:/Users/niukl/.dsh-a2a-dev' : 'C:/Users/niukl/.dsh-groups';
+const home = port === '3091' ? 'C:/Users/niukl/.dsh-a2a-dev' : 'C:/Users/niukl/.agent-groups';
 
 const log = readFileSync(`${home}/out.log`, 'utf8');
 const token = /token=([A-Za-z0-9_-]+)/.exec(log)?.[1];

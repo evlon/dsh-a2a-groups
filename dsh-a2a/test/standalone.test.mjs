@@ -16,7 +16,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createServer as createHttpServer } from 'node:http';
 
-import { createHttpRegistrar, parseFlags } from '../bin/dsh-groups.js';
+import { createHttpRegistrar, parseFlags } from '../bin/agent-groups.js';
 
 /** Start a real server over a registrar, and return its base URL plus a stop fn. */
 async function startHost(logger = { debug() {}, info() {}, warn() {} }) {
@@ -149,7 +149,7 @@ test('parseFlags: reads separated values, equals values and bare booleans', () =
 });
 
 test('parseFlags: rejects a positional argument instead of ignoring it', () => {
-  // Silently ignoring `dsh-groups 3095` would start on the default port and look fine,
+  // Silently ignoring `agent-groups 3095` would start on the default port and look fine,
   // which is a far worse failure than a usage error.
   assert.throws(() => parseFlags(['3095']), /unexpected argument/);
 });

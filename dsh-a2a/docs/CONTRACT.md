@@ -246,7 +246,7 @@ export function createGroupStore({ home, logger, clock, config });
 邀请链接格式（固定，UI 与提示词都依赖）：
 
 ```
-dsh-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupId>&t=<token>&n=<群名>&e=<expiresAt ISO>
+agent-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupId>&t=<token>&n=<群名>&e=<expiresAt ISO>
 ```
 
 `e=` 在永不过期的邀请里省略。
@@ -342,7 +342,7 @@ createMembershipLedger({ home, logger, clock })
 水位（`sinceSeq`）取该群所有 membership 里**最小**的 `lastSeq`：
 读得多的那个重读几条（去重会丢掉），读得少的不会漏。反过来会静默跳过。
 
-### 2.7d `bin/dsh-groups.js`（独立群宿主）
+### 2.7d `bin/agent-groups.js`（独立群宿主）
 
 群宿主**不是** DSH 实例：不加载模型、没有会话、不投递。它是一个零依赖 Node 程序。
 
@@ -389,16 +389,16 @@ createServer({ registrar, where, logger, config, deliverer, tasks, skills, onFlu
 
 | 标志 | 环境变量 | 默认 |
 |---|---|---|
-| `--port` | `DSH_GROUPS_PORT` | 3095 |
-| `--host` | `DSH_GROUPS_HOST` | 127.0.0.1 |
-| `--data` | `DSH_GROUPS_DATA` | `./data` |
-| `--token` | `DSH_GROUPS_TOKEN` | 无（仅回环可信） |
-| `--agent` | `DSH_GROUPS_AGENT` | dsh-groups |
-| `--gateway` | `DSH_GROUPS_GATEWAY` | 无（则无法生成邀请） |
-| `--forward-proto` | `DSH_GROUPS_FORWARD_PROTO` | 无 |
-| `--public-url` | `DSH_GROUPS_PUBLIC_URL` | 无 |
+| `--port` | `AGENT_GROUPS_PORT` | 3095 |
+| `--host` | `AGENT_GROUPS_HOST` | 127.0.0.1 |
+| `--data` | `AGENT_GROUPS_DATA` | `./data` |
+| `--token` | `AGENT_GROUPS_TOKEN` | 无（仅回环可信） |
+| `--agent` | `AGENT_GROUPS_AGENT` | agent-groups |
+| `--gateway` | `AGENT_GROUPS_GATEWAY` | 无（则无法生成邀请） |
+| `--forward-proto` | `AGENT_GROUPS_FORWARD_PROTO` | 无 |
+| `--public-url` | `AGENT_GROUPS_PUBLIC_URL` | 无 |
 
-位置参数一律**报错退出**：静默忽略 `dsh-groups 3095` 会在默认端口启动并看起来正常，
+位置参数一律**报错退出**：静默忽略 `agent-groups 3095` 会在默认端口启动并看起来正常，
 那比一个用法错误糟得多。
 
 宿主持有 `groups.json`，**不持有 `memberships.json`**（成员才有 membership）。

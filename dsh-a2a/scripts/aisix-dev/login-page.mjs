@@ -20,7 +20,7 @@ function tokenOf(logPath) {
   return match[1];
 }
 
-const home = port === '3091' ? 'C:\\Users\\niukl\\.dsh-a2a-dev' : 'C:\\Users\\niukl\\.dsh-groups';
+const home = port === '3091' ? 'C:\\Users\\niukl\\.dsh-a2a-dev' : 'C:\\Users\\niukl\\.agent-groups';
 const token = tokenOf(`${home}\\out.log`);
 
 // Fetch the Set-Cookie header without following the redirect: the cookie is issued on

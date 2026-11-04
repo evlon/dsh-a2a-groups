@@ -394,7 +394,7 @@ export function registerTools(ctx, deps) {
         groupName = meta.name ?? name;
         remote = true;
         if (typeof groupId !== 'string' || groupId === '') {
-          throw coded('bad_response', 'the group host did not return a groupId; check that the host runs a compatible dsh-groups version');
+          throw coded('bad_response', 'the group host did not return a groupId; check that the host runs a compatible agent-groups version');
         }
       }
 
@@ -496,7 +496,7 @@ export function registerTools(ctx, deps) {
       type: 'object',
       additionalProperties: false,
       properties: {
-        link: { type: 'string', description: 'The dsh-a2a://group?... invite link.' },
+        link: { type: 'string', description: 'The agent-a2a://group?... invite link.' },
         groupId: { type: 'string', description: 'Group id, when joining without a link.' },
         token: { type: 'string', description: 'Invite token, when joining without a link.' },
         displayName: { type: 'string', description: 'How this member appears to the others.' },
@@ -1688,7 +1688,7 @@ function truncate(text, limit) {
 }
 
 /**
- * Parse a `dsh-a2a://group?v=1&...` invite link.
+ * Parse a `agent-a2a://group?v=1&...` invite link.
  *
  * Kept here rather than imported from `invite.js` so a tool call cannot fail on a
  * module cycle, and deliberately strict: a hand-edited link with a missing field
@@ -1699,10 +1699,10 @@ export function parseInviteLink(link) {
   try {
     url = new URL(link);
   } catch {
-    throw coded('invalid_link', 'that does not look like an invite link (expected dsh-a2a://group?...).');
+    throw coded('invalid_link', 'that does not look like an invite link (expected agent-a2a://group?...).');
   }
-  if (url.protocol !== 'dsh-a2a:' || url.hostname !== 'group') {
-    throw coded('invalid_link', 'that is not a dsh-a2a group invite link.');
+  if (url.protocol !== 'agent-a2a:' || url.hostname !== 'group') {
+    throw coded('invalid_link', 'that is not an agent-a2a group invite link.');
   }
   const params = url.searchParams;
   const groupId = params.get('g') ?? '';

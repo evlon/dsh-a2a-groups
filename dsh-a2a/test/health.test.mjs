@@ -84,7 +84,7 @@ test('health: a GET without a token is 401', async () => {
   const server = createServer({
     ctx: { webServer },
     logger: { info() {}, warn() {}, debug() {} },
-    config: { server: { token: 'sekret' }, agent: { name: 'dsh-groups' } },
+    config: { server: { token: 'sekret' }, agent: { name: 'agent-groups' } },
     deliverer: { deliver: async () => {} },
     tasks: new TaskStore(),
     skills: fakeSkills(),
@@ -104,7 +104,7 @@ test('health: a GET with the token reports liveness and does not flush', async (
   const server = createServer({
     ctx: { webServer },
     logger: { info() {}, warn() {}, debug() {} },
-    config: { server: { token: 'sekret' }, agent: { name: 'dsh-groups' } },
+    config: { server: { token: 'sekret' }, agent: { name: 'agent-groups' } },
     deliverer: { deliver: async () => {} },
     tasks: new TaskStore(),
     skills: fakeSkills(),
@@ -117,7 +117,7 @@ test('health: a GET with the token reports liveness and does not flush', async (
     const { status, body } = await callHealth(webServer, { method: 'GET', token: 'sekret' });
     assert.equal(status, 200);
     assert.equal(body.ok, true);
-    assert.equal(body.agent, 'dsh-groups');
+    assert.equal(body.agent, 'agent-groups');
     assert.equal(body.version, '1.0');
     assert.equal(typeof body.uptimeSeconds, 'number');
     assert.equal(body.skills, 1);

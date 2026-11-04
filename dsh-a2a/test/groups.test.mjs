@@ -205,7 +205,7 @@ test('invite() returns the token once and persists only its sha256', () => {
 
   assert.match(invite.token, /^inv_[A-Za-z0-9_-]{32}$/u);
   assert.equal(invite.expiresAt, START + 168 * HOUR);
-  assert.ok(invite.link.startsWith('dsh-a2a://group?v=1&'));
+  assert.ok(invite.link.startsWith('agent-a2a://group?v=1&'));
   assert.ok(invite.prompt.includes(invite.link));
 
   const raw = readFileSync(env.file, 'utf8');

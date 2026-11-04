@@ -29,7 +29,7 @@ const BEFORE_EXPIRY = Date.parse('2026-11-03T09:00:00.000Z');
 
 /** The canonical link, built by hand from the contract's field order. */
 const CANONICAL =
-  'dsh-a2a://group?v=1&gw=https%3A%2F%2Fgw.ict.cmcc&agent=group-7f3a1c&g=g-7f3a1c&t=tok_abc&n=%E5%8F%91%E7%A5%A8%E9%87%8D%E6%9E%84&e=2026-11-10T09%3A00%3A00.000Z';
+  'agent-a2a://group?v=1&gw=https%3A%2F%2Fgw.ict.cmcc&agent=group-7f3a1c&g=g-7f3a1c&t=tok_abc&n=%E5%8F%91%E7%A5%A8%E9%87%8D%E6%9E%84&e=2026-11-10T09%3A00%3A00.000Z';
 
 // ---------------------------------------------------------------------------
 // buildLink
@@ -47,7 +47,7 @@ test('buildLink emits the contract field order and nothing else', () => {
 
   assert.equal(link.startsWith(`${LINK_PREFIX}?`), true);
   const url = new URL(link);
-  assert.equal(url.protocol, 'dsh-a2a:');
+  assert.equal(url.protocol, 'agent-a2a:');
   assert.equal(url.host, 'group');
   // Field order is what a human reads in the prompt and what the UI shows.
   assert.deepEqual(
@@ -136,7 +136,7 @@ test('parseLink round-trips what buildLink produced', () => {
 
 test('parseLink accepts unescaped UTF-8 in the group name', () => {
   const raw =
-    'dsh-a2a://group?v=1&gw=https://gw.ict.cmcc&agent=g-1&g=g-1&t=tok&n=发票重构攻坚&e=2026-11-10T09:00:00.000Z';
+    'agent-a2a://group?v=1&gw=https://gw.ict.cmcc&agent=g-1&g=g-1&t=tok&n=发票重构攻坚&e=2026-11-10T09:00:00.000Z';
   assert.equal(parseLink(raw).name, '发票重构攻坚');
 });
 
@@ -160,7 +160,7 @@ test('parseLink reports an expiry as expired without refusing to parse it', () =
 });
 
 test('parseLink accepts the direct-url form from PLAN §5.2', () => {
-  const parsed = parseLink('dsh-a2a://group?v=1&url=http%3A%2F%2F127.0.0.1%3A3091%2Fa2a&g=g-1&t=tok');
+  const parsed = parseLink('agent-a2a://group?v=1&url=http%3A%2F%2F127.0.0.1%3A3091%2Fa2a&g=g-1&t=tok');
   assert.equal(parsed.url, 'http://127.0.0.1:3091/a2a');
   assert.equal(parsed.gatewayBase, undefined);
 });
@@ -175,7 +175,7 @@ test('parseLink rejects a non-link with a message that says what a link looks li
     (error) =>
       error instanceof InviteLinkError &&
       error.code === 'bad_link' &&
-      error.message.includes('dsh-a2a://group'),
+      error.message.includes('agent-a2a://group'),
   );
 });
 
@@ -185,40 +185,40 @@ test('parseLink rejects the wrong scheme and the wrong host', () => {
     (error) => error.code === 'bad_link' && error.message.includes('不是群邀请链接'),
   );
   assert.throws(
-    () => parseLink('dsh-a2a://channel?v=1&g=g-1&t=tok&gw=http://gw&agent=a'),
+    () => parseLink('agent-a2a://channel?v=1&g=g-1&t=tok&gw=http://gw&agent=a'),
     (error) => error.code === 'bad_link',
   );
 });
 
 test('parseLink rejects a missing or wrong version, naming the version it saw', () => {
   assert.throws(
-    () => parseLink('dsh-a2a://group?gw=http://gw&agent=a&g=g-1&t=tok'),
+    () => parseLink('agent-a2a://group?gw=http://gw&agent=a&g=g-1&t=tok'),
     (error) => error.code === 'unsupported_version' && error.message.includes('v=1'),
   );
   assert.throws(
-    () => parseLink('dsh-a2a://group?v=2&gw=http://gw&agent=a&g=g-1&t=tok'),
+    () => parseLink('agent-a2a://group?v=2&gw=http://gw&agent=a&g=g-1&t=tok'),
     (error) => error.code === 'unsupported_version' && error.message.includes('v=2'),
   );
 });
 
 test('parseLink names the field that is missing', () => {
   assert.throws(
-    () => parseLink('dsh-a2a://group?v=1&gw=http://gw&agent=a&t=tok'),
+    () => parseLink('agent-a2a://group?v=1&gw=http://gw&agent=a&t=tok'),
     (error) => error.code === 'incomplete_link' && error.message.includes('群 id'),
   );
   assert.throws(
-    () => parseLink('dsh-a2a://group?v=1&gw=http://gw&agent=a&g=g-1'),
+    () => parseLink('agent-a2a://group?v=1&gw=http://gw&agent=a&g=g-1'),
     (error) => error.code === 'incomplete_link' && error.message.includes('邀请令牌'),
   );
   assert.throws(
-    () => parseLink('dsh-a2a://group?v=1&g=g-1&t=tok&agent=a'),
+    () => parseLink('agent-a2a://group?v=1&g=g-1&t=tok&agent=a'),
     (error) => error.code === 'incomplete_link' && error.message.includes('网关'),
   );
 });
 
 test('parseLink rejects an unparseable expiry instead of silently ignoring it', () => {
   assert.throws(
-    () => parseLink('dsh-a2a://group?v=1&gw=http://gw&agent=a&g=g-1&t=tok&e=not-a-date'),
+    () => parseLink('agent-a2a://group?v=1&gw=http://gw&agent=a&g=g-1&t=tok&e=not-a-date'),
     (error) => error.code === 'bad_expiry',
   );
 });
@@ -234,7 +234,7 @@ test('parseLink rejects non-string input and absurdly long input', () => {
 test('an InviteLinkError never carries a token in its details', () => {
   let caught;
   try {
-    parseLink('dsh-a2a://group?v=1&gw=http://gw&agent=a&t=tok_secret_value');
+    parseLink('agent-a2a://group?v=1&gw=http://gw&agent=a&t=tok_secret_value');
   } catch (error) {
     caught = error;
   }
@@ -282,20 +282,20 @@ test('buildPrompt reproduces the contract prompt, including the /a2a-join line',
 });
 
 test('buildPrompt says a permanent invite never expires, instead of printing a date', () => {
-  const prompt = buildPrompt({ name: 'x', link: 'dsh-a2a://group?v=1&g=g&t=t' });
+  const prompt = buildPrompt({ name: 'x', link: 'agent-a2a://group?v=1&g=g&t=t' });
   assert.equal(prompt.includes('长期有效'), true);
   assert.equal(prompt.includes('群密码'), false);
 });
 
 test('buildPrompt omits the password clause instead of printing an empty one', () => {
-  const link = 'dsh-a2a://group?v=1&gw=http://gw&agent=a&g=g-1&t=tok';
+  const link = 'agent-a2a://group?v=1&gw=http://gw&agent=a&g=g-1&t=tok';
   const prompt = buildPrompt({ name: 'x', link, maxUses: 1 });
   assert.equal(prompt.includes('群密码'), false);
   assert.equal(prompt.includes('用 a2a_group_join 加入这个群：' + link), true);
 });
 
 test('buildPrompt treats a group name containing ${} as literal text', () => {
-  const prompt = buildPrompt({ name: '群${process.env.HOME}', link: 'dsh-a2a://group?x', maxUses: 1 });
+  const prompt = buildPrompt({ name: '群${process.env.HOME}', link: 'agent-a2a://group?x', maxUses: 1 });
   assert.equal(prompt.includes('群${process.env.HOME}'), true);
 });
 

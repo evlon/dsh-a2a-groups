@@ -10,17 +10,17 @@
 
 | 角色 | 形态 | 端口 | 模型 | 干什么 |
 |---|---|---|---|---|
-| **群宿主** | `bin/dsh-groups.js`（独立 Node 进程） | 3095 | **不需要** | 存群/成员/邀请/feed，纯信息交换 |
+| **群宿主** | `bin/agent-groups.js`（独立 Node 进程） | 3095 | **不需要** | 存群/成员/邀请/feed，纯信息交换 |
 | **成员（演示）** | DSH 实例，`C:\Users\niukl\.dsh-a2a-dev` | 3091 | 需要 | 当"同事"，用链接入群 |
 
 ```powershell
 # 群宿主：独立进程，不是 DSH
 cd E:\dsh-a2a-bus\dsh-a2a
-$env:DSH_GROUPS_TOKEN="dsh-groups-host-token-2026"
-node bin\dsh-groups.js --port 3095 `
-  --data "C:\Users\niukl\.dsh-groups\a2a" `
+$env:AGENT_GROUPS_TOKEN="agent-groups-host-token-2026"
+node bin\agent-groups.js --port 3095 `
+  --data "C:\Users\niukl\.agent-groups\a2a" `
   --gateway "http://127.0.0.1:3000/a2a" `
-  --agent "dsh-groups"
+  --agent "agent-groups"
 
 # 成员侧：正常 DSH 实例
 $env:DSH_HOME="C:\Users\niukl\.dsh-a2a-dev"
@@ -36,11 +36,11 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 ## 1. 独立宿主已验证（不需要 DSH）
 
 ```powershell
-node scripts\standalone-probe.mjs --port 3095 --token dsh-groups-host-token-2026
+node scripts\standalone-probe.mjs --port 3095 --token agent-groups-host-token-2026
 # → standalone: OK   （24 条断言）
 ```
 
-这条命令**全程没有 DSH 参与**：它用 `fetch` 直接对 `bin/dsh-groups.js` 讲 A2A。
+这条命令**全程没有 DSH 参与**：它用 `fetch` 直接对 `bin/agent-groups.js` 讲 A2A。
 它证明的核心命题是——**群宿主真的不需要 DSH**。
 
 卡片里有 15 个技能，**没有 `session/ask`**：
@@ -58,7 +58,7 @@ group/role, group/leave
 ## 2. 六个端到端验证（全部通过）
 
 ```sh
-# 0) 独立宿主：全程无 DSH，直接对 bin/dsh-groups.js 讲 A2A（24 条断言）
+# 0) 独立宿主：全程无 DSH，直接对 bin/agent-groups.js 讲 A2A（24 条断言）
 node scripts/standalone-probe.mjs --port 3095 --token <token>   → standalone: OK
 
 # 1) 整链：外部 → 网关 → DSH → 技能（14 条断言）
@@ -80,7 +80,7 @@ node scripts/aisix-dev/probe-directory.mjs      → directory: OK
 ### 2.0 独立宿主证明了什么
 
 `standalone-probe.mjs` 是这次重构的验收标准：它只用一个 `fetch` 客户端，
-对一个 `node bin/dsh-groups.js` 进程讲话，**没有任何 DSH 参与**。
+对一个 `node bin/agent-groups.js` 进程讲话，**没有任何 DSH 参与**。
 
 ```
 PASS  card is A2A 1.0  (1.0)
@@ -158,7 +158,7 @@ PASS  the permission role is unchanged (still owner)
 ```
 card name        : 张工
 card description : 在 9 个协作群里，主要角色：测试、产品、研发
-x-dsh-profiles   : 9 个群，每组一条 roleAbout + tags
+x-agent-profiles   : 9 个群，每组一条 roleAbout + tags
 ```
 
 ```
@@ -263,7 +263,7 @@ cookie，所以 `opencli browser open "http://…/?token=…"` 会落在鉴权�
 4. **或走审批**：`a2a_group_request` 申请 → 群主 `a2a_group_decide` 批准 → 申请人 `a2a_group_claim` 领取
 5. **声明角色**：`a2a_group_role {groupId, about, tags}` → "我在这个群负责 X"
 6. **日常**：`a2a_group_post` 发言、`a2a_group_read` 增量读、`a2a_groups` 看本会话的群
-7. **名片自动生成**：任何人 `a2a_discover` 这个 agent，看到的 `x-dsh-profiles` 就是他所有群的角色
+7. **名片自动生成**：任何人 `a2a_discover` 这个 agent，看到的 `x-agent-profiles` 就是他所有群的角色
 
 ## 7. 安全边界
 
@@ -292,12 +292,12 @@ cookie，所以 `opencli browser open "http://…/?token=…"` 会落在鉴权�
 ```sh
 # 0) 独立宿主（不需要 DSH，先起它）
 cd E:\dsh-a2a-bus\dsh-a2a
-$env:DSH_GROUPS_TOKEN="dsh-groups-host-token-2026"
-node bin\dsh-groups.js --port 3095 --data "C:\Users\niukl\.dsh-groups\a2a" `
-  --gateway "http://127.0.0.1:3000/a2a" --agent "dsh-groups"
+$env:AGENT_GROUPS_TOKEN="agent-groups-host-token-2026"
+node bin\agent-groups.js --port 3095 --data "C:\Users\niukl\.agent-groups\a2a" `
+  --gateway "http://127.0.0.1:3000/a2a" --agent "agent-groups"
 
 # 1) 独立宿主端到端（24 条断言，全程无 DSH）
-node scripts\standalone-probe.mjs --port 3095 --token dsh-groups-host-token-2026
+node scripts\standalone-probe.mjs --port 3095 --token agent-groups-host-token-2026
 
 # 2) 网关（WSL）
 /mnt/e/dsh-a2a-bus/scripts/aisix-dev/aisix-dev.sh up

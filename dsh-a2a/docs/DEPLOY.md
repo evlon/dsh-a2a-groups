@@ -16,7 +16,7 @@
 └──────────────────────────────────────────────────────────────┘
                             ↓
 ┌──────────────────────────────────────────────────────────────┐
-│  ② 群宿主 dsh-groups（必须，一台就够）                        │
+│  ② 群宿主 agent-groups（必须，一台就够）                        │
 │     作用：存群、存消息、对外提供 A2A 接口                      │
 │     位置：一台常开的服务器，不需要 GPU、不需要大模型            │
 └──────────────────────────────────────────────────────────────┘
@@ -57,9 +57,9 @@
 ### 3.1 准备目录
 
 ```bash
-sudo useradd --system --home /var/lib/dsh-groups --shell /usr/sbin/nologin dsh-groups
-sudo mkdir -p /var/lib/dsh-groups /opt/dsh-groups
-sudo chown -R dsh-groups:dsh-groups /var/lib/dsh-groups
+sudo useradd --system --home /var/lib/agent-groups --shell /usr/sbin/nologin agent-groups
+sudo mkdir -p /var/lib/agent-groups /opt/agent-groups
+sudo chown -R agent-groups:agent-groups /var/lib/agent-groups
 ```
 
 **为什么单独建用户**：`groups.json` 里有全部群消息，权限要收紧到只有服务自己能读。
@@ -69,9 +69,9 @@ sudo chown -R dsh-groups:dsh-groups /var/lib/dsh-groups
 从 Git 拉取（推荐，方便升级）：
 
 ```bash
-sudo -u dsh-groups git clone <你的仓库地址> /opt/dsh-groups
-cd /opt/dsh-groups/dsh-a2a
-sudo -u dsh-groups npm install --omit=dev
+sudo -u agent-groups git clone <你的仓库地址> /opt/agent-groups
+cd /opt/agent-groups/dsh-a2a
+sudo -u agent-groups npm install --omit=dev
 ```
 
 **没有外部依赖**。`npm install` 只装开发用的测试工具；运行本身只需要 Node.js 标准库。
@@ -96,24 +96,24 @@ openssl rand -hex 32
 ### 4.1 先手动跑一次，确认能起来
 
 ```bash
-sudo -u dsh-groups DSH_GROUPS_TOKEN='<你的令牌>' \
-  node /opt/dsh-groups/dsh-a2a/bin/dsh-groups.js \
+sudo -u agent-groups AGENT_GROUPS_TOKEN='<你的令牌>' \
+  node /opt/agent-groups/dsh-a2a/bin/agent-groups.js \
   --port 3095 \
   --host 127.0.0.1 \
-  --data /var/lib/dsh-groups \
+  --data /var/lib/agent-groups \
   --gateway http://<网关地址>:3000/a2a \
-  --agent dsh-groups
+  --agent agent-groups
 ```
 
 应该看到：
 
 ```
-2026-01-01T00:00:00.000Z info  dsh-groups 0.1.0 listening on 127.0.0.1:3095 (data: /var/lib/dsh-groups)
+2026-01-01T00:00:00.000Z info  agent-groups 0.1.0 listening on 127.0.0.1:3095 (data: /var/lib/agent-groups)
 2026-01-01T00:00:00.000Z info  agent card: http://127.0.0.1:3095/a2a/.well-known/agent-card.json
 2026-01-01T00:00:00.000Z info  0 group(s) hosted
-2026-01-01T00:00:00.000Z info  invite links will point at http://<网关>/a2a/dsh-groups
+2026-01-01T00:00:00.000Z info  invite links will point at http://<网关>/a2a/agent-groups
 2026-01-01T00:00:00.000Z info  AISIX entry (one per host, not per group) — resources.yaml:
-2026-01-01T00:00:00.000Z info    - name: dsh-groups
+2026-01-01T00:00:00.000Z info    - name: agent-groups
 2026-01-01T00:00:00.000Z info      url: http://127.0.0.1:3095/a2a
 ```
 
@@ -127,7 +127,7 @@ curl -s http://127.0.0.1:3095/a2a/.well-known/agent-card.json | head -c 300
 
 ### 4.2 用 systemd 常驻
 
-`/etc/systemd/system/dsh-groups.service`：
+`/etc/systemd/system/agent-groups.service`：
 
 ```ini
 [Unit]
@@ -138,16 +138,16 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=dsh-groups
-Group=dsh-groups
-WorkingDirectory=/opt/dsh-groups/dsh-a2a
-Environment=DSH_GROUPS_TOKEN=<你的令牌>
-Environment=DSH_GROUPS_PORT=3095
-Environment=DSH_GROUPS_HOST=127.0.0.1
-Environment=DSH_GROUPS_DATA=/var/lib/dsh-groups
-Environment=DSH_GROUPS_GATEWAY=http://<网关地址>:3000/a2a
-Environment=DSH_GROUPS_AGENT=dsh-groups
-ExecStart=/usr/bin/node /opt/dsh-groups/dsh-a2a/bin/dsh-groups.js
+User=agent-groups
+Group=agent-groups
+WorkingDirectory=/opt/agent-groups/dsh-a2a
+Environment=AGENT_GROUPS_TOKEN=<你的令牌>
+Environment=AGENT_GROUPS_PORT=3095
+Environment=AGENT_GROUPS_HOST=127.0.0.1
+Environment=AGENT_GROUPS_DATA=/var/lib/agent-groups
+Environment=AGENT_GROUPS_GATEWAY=http://<网关地址>:3000/a2a
+Environment=AGENT_GROUPS_AGENT=agent-groups
+ExecStart=/usr/bin/node /opt/agent-groups/dsh-a2a/bin/agent-groups.js
 Restart=always
 RestartSec=3
 
@@ -156,7 +156,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/lib/dsh-groups
+ReadWritePaths=/var/lib/agent-groups
 
 # 日志进 journald
 StandardOutput=journal
@@ -170,16 +170,16 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now dsh-groups
-sudo systemctl status dsh-groups
-sudo journalctl -u dsh-groups -f     # 看日志
+sudo systemctl enable --now agent-groups
+sudo systemctl status agent-groups
+sudo journalctl -u agent-groups -f     # 看日志
 ```
 
 **为什么 `Restart=always`**：群宿主是无状态的（数据在文件里），崩溃重启不丢数据。让它自己重启比等人发现好。
 
 **为什么 `127.0.0.1`**：生产上群宿主不直接对外，由 AISIX 或反向代理转发。直接暴露 3095 会让令牌成为唯一防线。
 
-> **单机试用**：如果只有一台机器、没有网关，把 `DSH_GROUPS_HOST` 改成 `0.0.0.0`，
+> **单机试用**：如果只有一台机器、没有网关，把 `AGENT_GROUPS_HOST` 改成 `0.0.0.0`，
 > 成员直接用 `http://<机器IP>:3095/a2a` 访问。此时**务必**设令牌，且建议加防火墙白名单。
 
 ---
@@ -192,7 +192,7 @@ sudo journalctl -u dsh-groups -f     # 看日志
 
 ```yaml
 agents:
-  - name: dsh-groups              # 这个名字要和各人 DSH 里配的 agentName 一致
+  - name: agent-groups              # 这个名字要和各人 DSH 里配的 agentName 一致
     url: http://127.0.0.1:3095/a2a
     # 或者宿主机在另一台机器上：
     # url: http://10.0.0.5:3095/a2a
@@ -208,14 +208,14 @@ AISIX 的 `config.yaml` 里给每个同事发一个 key：
 api_keys:
   - key: <每人一个的密钥>
     allowed_agents:
-      - dsh-groups
+      - agent-groups
       # 想限制某人只能访问某些群？AISIX 是按 agent 授权的，
       # 而所有群都在同一个 agent 下，所以群级别的隔离靠"群主审批"，
       # 不靠网关 ACL。
 ```
 
-**为什么不在网关做群级隔离**：所有群共享一个 A2A 端点（`/a2a/dsh-groups`），
-群是请求体里的参数。网关看到的是"访问 dsh-groups"，无法区分群。
+**为什么不在网关做群级隔离**：所有群共享一个 A2A 端点（`/a2a/agent-groups`），
+群是请求体里的参数。网关看到的是"访问 agent-groups"，无法区分群。
 群级权限由群宿主自己的 `memberKey` 校验保证——那是更强的一道门。
 
 ### 5.3 常见网关坑（都踩过）
@@ -224,8 +224,8 @@ api_keys:
 |---|---|---|
 | 网关调用群宿主卡 ~100 秒后 499 | 网关和宿主不在同一网络命名空间（如 WSL→Windows），reqwest 连接被吞 | 让网关和宿主**同机**，或宿主 URL 用 `127.0.0.1` |
 | 卡片里 URL 是 `https://` 但实际是 http | AISIX 默认假定 https | 成员侧配 `client.forwardProto: http`，或网关前置真 TLS |
-| 401 | 令牌不一致 | 宿主 `DSH_GROUPS_TOKEN` 与成员侧 `client.apiKey` 必须相同 |
-| 403 | `allowed_agents` 没含 `dsh-groups` | 补上 |
+| 401 | 令牌不一致 | 宿主 `AGENT_GROUPS_TOKEN` 与成员侧 `client.apiKey` 必须相同 |
+| 403 | `allowed_agents` 没含 `agent-groups` | 补上 |
 
 ---
 
@@ -236,7 +236,7 @@ api_keys:
 | 配置项 | 值 | 说明 |
 |---|---|---|
 | `groups.gatewayBase` | `http://<网关>:3000/a2a` | 网关基址 |
-| `groups.agentName` | `dsh-groups` | 与网关 `resources.yaml` 里的 name 一致 |
+| `groups.agentName` | `agent-groups` | 与网关 `resources.yaml` 里的 name 一致 |
 | `client.apiKey` | 网关分配的密钥 | 每人一个 |
 
 **`groups.embedded` 保持 `false`**（默认）。这表示"我不自己建群，群在共享宿主上"。
@@ -257,7 +257,7 @@ api_keys:
 
 ### 7.1 备份什么
 
-**只有一样东西**：`/var/lib/dsh-groups/groups.json`
+**只有一样东西**：`/var/lib/agent-groups/groups.json`
 
 这里面是：
 - 所有群的定义
@@ -270,20 +270,20 @@ api_keys:
 
 ```bash
 # 每天 3 点备份，保留 30 天
-sudo tee /etc/cron.daily/dsh-groups-backup >/dev/null <<'EOF'
+sudo tee /etc/cron.daily/agent-groups-backup >/dev/null <<'EOF'
 #!/bin/sh
 set -e
-DIR=/var/backups/dsh-groups
+DIR=/var/backups/agent-groups
 mkdir -p "$DIR"
 STAMP=$(date +%Y%m%d-%H%M%S)
 # 强制落盘再复制：服务可能在内存里有还没写入的改动。
 # 这个端点需要令牌，且必须用 POST（GET 只读，不会触发落盘）。
 curl -sf -X POST http://127.0.0.1:3095/__health \
-  -H "authorization: Bearer $DSH_GROUPS_TOKEN" >/dev/null || true
-cp /var/lib/dsh-groups/groups.json "$DIR/groups-$STAMP.json"
+  -H "authorization: Bearer $AGENT_GROUPS_TOKEN" >/dev/null || true
+cp /var/lib/agent-groups/groups.json "$DIR/groups-$STAMP.json"
 find "$DIR" -name 'groups-*.json' -mtime +30 -delete
 EOF
-sudo chmod +x /etc/cron.daily/dsh-groups-backup
+sudo chmod +x /etc/cron.daily/agent-groups-backup
 ```
 
 > `groups.json` 每次改动都是**原子写**（写临时文件再 rename），所以任何时刻读到的
@@ -292,11 +292,11 @@ sudo chmod +x /etc/cron.daily/dsh-groups-backup
 ### 7.3 恢复
 
 ```bash
-sudo systemctl stop dsh-groups
-sudo cp /var/backups/dsh-groups/groups-20260101-030000.json /var/lib/dsh-groups/groups.json
-sudo chown dsh-groups:dsh-groups /var/lib/dsh-groups/groups.json
-sudo chmod 600 /var/lib/dsh-groups/groups.json
-sudo systemctl start dsh-groups
+sudo systemctl stop agent-groups
+sudo cp /var/backups/agent-groups/groups-20260101-030000.json /var/lib/agent-groups/groups.json
+sudo chown agent-groups:agent-groups /var/lib/agent-groups/groups.json
+sudo chmod 600 /var/lib/agent-groups/groups.json
+sudo systemctl start agent-groups
 ```
 
 **恢复后成员不用重新加群**——凭证都在文件里，成员本机也存着。只有换了宿主机地址才需要重新邀请。
@@ -306,11 +306,11 @@ sudo systemctl start dsh-groups
 ## 八、升级
 
 ```bash
-cd /opt/dsh-groups
-sudo -u dsh-groups git pull
+cd /opt/agent-groups
+sudo -u agent-groups git pull
 # 有依赖变更时：
-# sudo -u dsh-groups npm install --omit=dev
-sudo systemctl restart dsh-groups
+# sudo -u agent-groups npm install --omit=dev
+sudo systemctl restart agent-groups
 ```
 
 **升级前先备份** `groups.json`。数据结构有版本号，老文件会被拒绝加载（而不是猜测转换），
@@ -319,7 +319,7 @@ sudo systemctl restart dsh-groups
 查看版本：
 
 ```bash
-node /opt/dsh-groups/dsh-a2a/bin/dsh-groups.js --version
+node /opt/agent-groups/dsh-a2a/bin/agent-groups.js --version
 ```
 
 ---
@@ -337,7 +337,7 @@ curl -sf http://127.0.0.1:3095/a2a/.well-known/agent-card.json >/dev/null && ech
 ### 9.2 关键日志
 
 ```bash
-sudo journalctl -u dsh-groups --since '1 hour ago' | grep -E 'warn|error'
+sudo journalctl -u agent-groups --since '1 hour ago' | grep -E 'warn|error'
 ```
 
 值得关注的：
@@ -352,7 +352,7 @@ sudo journalctl -u dsh-groups --since '1 hour ago' | grep -E 'warn|error'
 ### 9.3 容量
 
 ```bash
-ls -lh /var/lib/dsh-groups/groups.json
+ls -lh /var/lib/agent-groups/groups.json
 ```
 
 估算法：**1 条消息约 200 字节**。10 个群 × 每天 50 条 = 每天 100 KB。一年约 36 MB。
@@ -419,19 +419,19 @@ curl -X POST http://127.0.0.1:3095/a2a \
 
 ### 宿主机上
 
-- [ ] `systemctl status dsh-groups` 是 `active (running)`
+- [ ] `systemctl status agent-groups` 是 `active (running)`
 - [ ] `curl http://127.0.0.1:3095/a2a/.well-known/agent-card.json` 返回 200
 - [ ] 卡片里的 `protocolVersion` 是 `1.0`
-- [ ] `groups.json` 属主是 `dsh-groups`，权限 `600`
-- [ ] `journalctl -u dsh-groups` 里没有 `warn`（除了启动时的 token/gateway 提示）
+- [ ] `groups.json` 属主是 `agent-groups`，权限 `600`
+- [ ] `journalctl -u agent-groups` 里没有 `warn`（除了启动时的 token/gateway 提示）
 - [ ] 重启一次 `systemctl restart`，数据和群都还在
 
 ### 网关
 
-- [ ] `resources.yaml` 里有 `dsh-groups` 条目
+- [ ] `resources.yaml` 里有 `agent-groups` 条目
 - [ ] 通过网关访问卡片能拿到 200（带 key）
 - [ ] 不带 key 访问返回 401
-- [ ] key 的 `allowed_agents` 含 `dsh-groups`
+- [ ] key 的 `allowed_agents` 含 `agent-groups`
 
 ### 成员侧
 
@@ -456,7 +456,7 @@ curl -X POST http://127.0.0.1:3095/a2a \
 ### 群宿主起不来
 
 ```bash
-sudo journalctl -u dsh-groups -n 50 --no-pager
+sudo journalctl -u agent-groups -n 50 --no-pager
 ```
 
 常见：
@@ -464,7 +464,7 @@ sudo journalctl -u dsh-groups -n 50 --no-pager
 | 报错 | 原因 | 解决 |
 |---|---|---|
 | `EADDRINUSE` | 端口被占 | `ss -tlnp \| grep 3095` 找到占用者 |
-| `cannot use --data` | 目录无权限 | `chown dsh-groups:dsh-groups` |
+| `cannot use --data` | 目录无权限 | `chown agent-groups:agent-groups` |
 | `memberships.json is from an older version` | 数据结构升级 | 按日志提示处理（旧文件保留不动） |
 
 ### 成员连不上群宿主
@@ -497,7 +497,7 @@ curl -v http://<网关>:3000/a2a/.well-known/agent-card.json
 2. 数据目录不变（`groups.json` 兼容）
 3. 用新版命令启动：
    ```bash
-   node bin/dsh-groups.js --port 3095 --data <旧的数据目录> --gateway ... --agent ...
+   node bin/agent-groups.js --port 3095 --data <旧的数据目录> --gateway ... --agent ...
    ```
 4. 成员侧**不用改配置**（网关地址和 agent 名不变）
 
@@ -508,7 +508,7 @@ curl -v http://<网关>:3000/a2a/.well-known/agent-card.json
 
 ## 附：一份最小可用的完整配置
 
-**服务器上**（`/etc/systemd/system/dsh-groups.service`）：
+**服务器上**（`/etc/systemd/system/agent-groups.service`）：
 
 ```ini
 [Unit]
@@ -516,12 +516,12 @@ Description=DSH collaboration group host
 After=network-online.target
 
 [Service]
-User=dsh-groups
-Environment=DSH_GROUPS_TOKEN=换成你的64位随机串
-Environment=DSH_GROUPS_DATA=/var/lib/dsh-groups
-Environment=DSH_GROUPS_GATEWAY=http://127.0.0.1:3000/a2a
-Environment=DSH_GROUPS_AGENT=dsh-groups
-ExecStart=/usr/bin/node /opt/dsh-groups/dsh-a2a/bin/dsh-groups.js --port 3095
+User=agent-groups
+Environment=AGENT_GROUPS_TOKEN=换成你的64位随机串
+Environment=AGENT_GROUPS_DATA=/var/lib/agent-groups
+Environment=AGENT_GROUPS_GATEWAY=http://127.0.0.1:3000/a2a
+Environment=AGENT_GROUPS_AGENT=agent-groups
+ExecStart=/usr/bin/node /opt/agent-groups/dsh-a2a/bin/agent-groups.js --port 3095
 Restart=always
 RestartSec=3
 
@@ -533,7 +533,7 @@ WantedBy=multi-user.target
 
 ```yaml
 agents:
-  - name: dsh-groups
+  - name: agent-groups
     url: http://127.0.0.1:3095/a2a
 ```
 
@@ -542,14 +542,14 @@ agents:
 ```yaml
 api_keys:
   - key: 同事A的密钥
-    allowed_agents: [dsh-groups]
+    allowed_agents: [agent-groups]
 ```
 
 **同事的 DSH 插件设置**：
 
 ```
 groups.gatewayBase = http://127.0.0.1:3000/a2a
-groups.agentName   = dsh-groups
+groups.agentName   = agent-groups
 client.apiKey      = 同事A的密钥
 groups.embedded    = false
 ```

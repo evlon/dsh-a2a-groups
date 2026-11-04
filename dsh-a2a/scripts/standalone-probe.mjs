@@ -2,7 +2,7 @@
 /**
  * Exercise a STANDALONE group host over plain A2A.
  *
- * No DSH anywhere in this script: it talks to `bin/dsh-groups.js` the way a member
+ * No DSH anywhere in this script: it talks to `bin/agent-groups.js` the way a member
  * instance would, which is the claim this rewrite makes. If this passes, the host
  * really does not need a DSH to run.
  *

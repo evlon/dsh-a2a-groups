@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * dsh-groups — a standalone A2A group host.
+ * agent-groups — a standalone A2A group host.
  *
  * WHAT THIS IS
  *
@@ -23,9 +23,9 @@
  *
  * HOW TO RUN
  *
- *   node bin/dsh-groups.js --port 3095 --data /var/lib/dsh-groups
- *   node bin/dsh-groups.js --port 3095 --data ./data --token "$(openssl rand -hex 32)"
- *   DSH_GROUPS_TOKEN=... node bin/dsh-groups.js --port 3095 --data ./data
+ *   node bin/agent-groups.js --port 3095 --data /var/lib/agent-groups
+ *   node bin/agent-groups.js --port 3095 --data ./data --token "$(openssl rand -hex 32)"
+ *   AGENT_GROUPS_TOKEN=... node bin/agent-groups.js --port 3095 --data ./data
  *
  * It prints, on startup, the one line an operator needs: the agent card URL and the
  * AISIX entry that makes it reachable. Nothing else is required to deploy it —
@@ -49,14 +49,14 @@ const VERSION = readVersion();
 
 /** Print usage and exit. */
 function usage() {
-  process.stdout.write(`dsh-groups ${VERSION} — an A2A collaboration group host
+  process.stdout.write(`agent-groups ${VERSION} — an A2A collaboration group host
 
-Usage: dsh-groups [options]
+Usage: agent-groups [options]
 
-  --port <n>        port to listen on (default 3095, or $DSH_GROUPS_PORT)
-  --host <addr>     address to bind (default 127.0.0.1, or $DSH_GROUPS_HOST)
-  --data <dir>      data directory (default ./data, or $DSH_GROUPS_DATA)
-  --token <secret>  bearer token for /a2a (default $DSH_GROUPS_TOKEN, else none)
+  --port <n>        port to listen on (default 3095, or $AGENT_GROUPS_PORT)
+  --host <addr>     address to bind (default 127.0.0.1, or $AGENT_GROUPS_HOST)
+  --data <dir>      data directory (default ./data, or $AGENT_GROUPS_DATA)
+  --token <secret>  bearer token for /a2a (default $AGENT_GROUPS_TOKEN, else none)
   --agent <name>    this host's agent name inside the gateway, for invite links
   --gateway <url>   gateway base for invite links, e.g. http://gw:3000/a2a
   --forward-proto   scheme the gateway should advertise (http or https)
@@ -64,7 +64,7 @@ Usage: dsh-groups [options]
   --help            print this message
   --version         print the version
 
-Environment variables mirror the flags (DSH_GROUPS_PORT, _HOST, _DATA, _TOKEN,
+Environment variables mirror the flags (AGENT_GROUPS_PORT, _HOST, _DATA, _TOKEN,
 _AGENT, _GATEWAY, _FORWARD_PROTO, _PUBLIC_URL). Flags win over the environment.
 
 The data directory holds groups.json and must persist across restarts. Back it up:
@@ -139,9 +139,9 @@ function createHttpRegistrar(logger) {
   const registrar = {
     register({ kind, path, handler }) {
       if (typeof path !== 'string' || !path.startsWith('/')) {
-        throw new Error(`dsh-groups: a route path must start with "/" (got ${String(path)})`);
+        throw new Error(`agent-groups: a route path must start with "/" (got ${String(path)})`);
       }
-      if (typeof handler !== 'function') throw new Error('dsh-groups: a route handler must be a function');
+      if (typeof handler !== 'function') throw new Error('agent-groups: a route handler must be a function');
       const route = { kind: kind === 'prefix' ? 'prefix' : 'exact', path, handler };
       routes.push(route);
       return () => {
@@ -184,7 +184,7 @@ function createHttpRegistrar(logger) {
       // a host that serves nothing but A2A.
       response.writeHead(404, { 'content-type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify({ error: 'not_found', path: pathname }));
-      logger.debug?.(`dsh-groups: 404 ${request.method} ${pathname}`);
+      logger.debug?.(`agent-groups: 404 ${request.method} ${pathname}`);
       return;
     }
     try {
@@ -192,7 +192,7 @@ function createHttpRegistrar(logger) {
       // A handler may be async; an unhandled rejection would kill the process.
       if (result !== null && typeof result === 'object' && typeof result.catch === 'function') {
         result.catch((error) => {
-          logger.warn?.(`dsh-groups: handler failed for ${pathname}: ${error?.message ?? error}`);
+          logger.warn?.(`agent-groups: handler failed for ${pathname}: ${error?.message ?? error}`);
           if (!response.headersSent) {
             response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
             response.end(JSON.stringify({ error: 'internal_error' }));
@@ -200,7 +200,7 @@ function createHttpRegistrar(logger) {
         });
       }
     } catch (error) {
-      logger.warn?.(`dsh-groups: handler threw for ${pathname}: ${error?.message ?? error}`);
+      logger.warn?.(`agent-groups: handler threw for ${pathname}: ${error?.message ?? error}`);
       if (!response.headersSent) {
         response.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
         response.end(JSON.stringify({ error: 'internal_error' }));
@@ -220,7 +220,7 @@ function createLogger(verbose) {
   return {
     info: (line) => emit('info ', line),
     warn: (line) => emit('warn ', line),
-    // Debug output is per-request noise; only shown with DSH_GROUPS_VERBOSE=1.
+    // Debug output is per-request noise; only shown with AGENT_GROUPS_VERBOSE=1.
     debug: (line) => {
       if (verbose) emit('debug', line);
     },
@@ -230,7 +230,7 @@ function createLogger(verbose) {
 
 /** Exit with a message an operator can act on, rather than a stack trace. */
 function fail(message, code = 1) {
-  process.stderr.write(`dsh-groups: ${message}\n`);
+  process.stderr.write(`agent-groups: ${message}\n`);
   process.exit(code);
 }
 
@@ -251,16 +251,16 @@ async function main() {
     return;
   }
 
-  const port = Number(pick(flags.port, process.env.DSH_GROUPS_PORT) ?? 3095);
+  const port = Number(pick(flags.port, process.env.AGENT_GROUPS_PORT) ?? 3095);
   if (!Number.isInteger(port) || port < 0 || port > 65535) fail(`invalid --port: ${String(flags.port)}`, 2);
-  const host = pick(flags.host, process.env.DSH_GROUPS_HOST) ?? '127.0.0.1';
-  const dataDir = resolve(pick(flags.data, process.env.DSH_GROUPS_DATA) ?? 'data');
-  const token = pick(flags.token, process.env.DSH_GROUPS_TOKEN);
-  const agentName = pick(flags.agent, process.env.DSH_GROUPS_AGENT) ?? 'dsh-groups';
-  const gatewayBase = pick(flags.gateway, process.env.DSH_GROUPS_GATEWAY);
-  const forwardProto = pick(flags['forward-proto'], process.env.DSH_GROUPS_FORWARD_PROTO);
-  const publicUrl = pick(flags['public-url'], process.env.DSH_GROUPS_PUBLIC_URL);
-  const verbose = process.env.DSH_GROUPS_VERBOSE === '1';
+  const host = pick(flags.host, process.env.AGENT_GROUPS_HOST) ?? '127.0.0.1';
+  const dataDir = resolve(pick(flags.data, process.env.AGENT_GROUPS_DATA) ?? 'data');
+  const token = pick(flags.token, process.env.AGENT_GROUPS_TOKEN);
+  const agentName = pick(flags.agent, process.env.AGENT_GROUPS_AGENT) ?? 'agent-groups';
+  const gatewayBase = pick(flags.gateway, process.env.AGENT_GROUPS_GATEWAY);
+  const forwardProto = pick(flags['forward-proto'], process.env.AGENT_GROUPS_FORWARD_PROTO);
+  const publicUrl = pick(flags['public-url'], process.env.AGENT_GROUPS_PUBLIC_URL);
+  const verbose = process.env.AGENT_GROUPS_VERBOSE === '1';
   const logger = createLogger(verbose);
 
   // Fail before doing any work if the data directory is unusable: a host that starts
@@ -339,14 +339,14 @@ async function main() {
   const { registrar, handle, routes } = createHttpRegistrar(logger);
   const server = createServer({
     registrar,
-    where: 'standalone dsh-groups',
+    where: 'standalone agent-groups',
     logger,
     config,
     // The host never delivers: nobody is on the other end. Kept as a stub because the
     // facade asks for one, and a loud failure beats a silent no-op if that changes.
     deliverer: {
       deliver: async () => {
-        throw new Error('dsh-groups: a group host has no Sessions to deliver into; this is a bug');
+        throw new Error('agent-groups: a group host has no Sessions to deliver into; this is a bug');
       },
     },
     tasks,
@@ -360,7 +360,7 @@ async function main() {
 
   const httpServer = createHttpServer(handle);
   httpServer.on('clientError', (error, socket) => {
-    logger.warn(`dsh-groups: client error ${error?.message ?? error}`);
+    logger.warn(`agent-groups: client error ${error?.message ?? error}`);
     if (socket.writable) socket.end('HTTP/1.1 400 Bad Request\r\n\r\n');
   });
 
@@ -373,7 +373,7 @@ async function main() {
   const shown = publicUrl ?? `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${actualPort}`;
   const groups = store.list().length;
 
-  logger.info(`dsh-groups ${VERSION} listening on ${host}:${actualPort} (data: ${dataDir})`);
+  logger.info(`agent-groups ${VERSION} listening on ${host}:${actualPort} (data: ${dataDir})`);
   logger.info(`agent card: ${shown}/a2a/.well-known/agent-card.json`);
   logger.info(`${groups} group(s) hosted`);
   if (token === undefined) {

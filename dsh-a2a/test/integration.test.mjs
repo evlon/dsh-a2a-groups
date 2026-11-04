@@ -512,7 +512,7 @@ test('group/create, invite, join, post and read work end to end over A2A', async
     // "群密码：xxx" would go asking for a second secret that does not exist.
     assert.equal(/群密码/.test(invited.text), false, 'the prompt must not mention a password');
     assert.match(invited.text, /可以随时撤销/, 'the prompt must say the owner can revoke the link');
-    assert.match(invited.text, /dsh-a2a:\/\/group\?/, 'the prompt must carry the link');
+    assert.match(invited.text, /agent-a2a:\/\/group\?/, 'the prompt must carry the link');
 
     // The guest joins through its own bridge, exactly as a colleague's instance would.
     // It targets the HOST (not itself): the group lives there, and a colleague's

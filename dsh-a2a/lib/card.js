@@ -170,7 +170,7 @@ export function buildCard({ config, skills, url, name, description, version, pro
     const extension = { groups: profile.groups };
     if (typeof profile.headline === 'string' && profile.headline !== '') extension.headline = profile.headline;
     if (Array.isArray(profile.tags) && profile.tags.length > 0) extension.tags = profile.tags;
-    card['x-dsh-profiles'] = extension;
+    card['x-agent-profiles'] = extension;
   }
   return card;
 }

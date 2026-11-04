@@ -24,7 +24,7 @@
 import { randomBytes } from 'node:crypto';
 
 /** Custom scheme. Fixed: the UI and the prompt template match on it literally. */
-export const LINK_SCHEME = 'dsh-a2a';
+export const LINK_SCHEME = 'agent-a2a';
 
 /** The only host this scheme defines. Anything else is a different link type. */
 export const LINK_HOST = 'group';
@@ -52,7 +52,7 @@ export const MAX_LINK_CHARS = 2048;
  * then swallows `，群密码：abc` when a user pastes the prompt line without the
  * space that our own template happens to put there.
  */
-const LINK_IN_TEXT = /dsh-a2a:\/\/group\?[^\s"'<>`，。、；：（）【】「」！？]+/gu;
+const LINK_IN_TEXT = /agent-a2a:\/\/group\?[^\s"'<>`，。、；：（）【】「」！？]+/gu;
 
 /** Unambiguous alphabet: no O/0, no I/l/1 — these get retyped from paper and IM. */
 const PASSWORD_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -133,9 +133,9 @@ export function parseLink(input, options = {}) {
   try {
     url = new URL(raw);
   } catch {
-    throw new InviteLinkError('bad_link', '这不是有效的邀请链接：格式无法解析。请确认完整粘贴了 dsh-a2a://group?... 开头的整行。');
+    throw new InviteLinkError('bad_link', '这不是有效的邀请链接：格式无法解析。请确认完整粘贴了 agent-a2a://group?... 开头的整行。');
   }
-  // `URL` lowercases the protocol/host, so a hand-typed DSH-A2A://Group still works.
+  // `URL` lowercases the protocol/host, so a hand-typed AGENT-A2A://Group still works.
   if (url.protocol !== `${LINK_SCHEME}:` || url.host !== LINK_HOST) {
     throw new InviteLinkError('bad_link', `这不是群邀请链接：期望 ${LINK_PREFIX}?… ，实际是 ${url.protocol}//${url.host}。`);
   }

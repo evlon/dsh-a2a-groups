@@ -138,9 +138,9 @@ test('the card carries the profile as a vendor extension and never a credential'
 
   assert.equal(card.name, '张工', 'the derived name reaches the card');
   assert.equal(card.description, profile.headline, 'the derived headline reaches the card');
-  assert.ok(card['x-dsh-profiles'] !== undefined);
-  assert.equal(card['x-dsh-profiles'].groups.length, 1);
-  assert.deepEqual(card['x-dsh-profiles'].tags, ['研发', '产品']);
+  assert.ok(card['x-agent-profiles'] !== undefined);
+  assert.equal(card['x-agent-profiles'].groups.length, 1);
+  assert.deepEqual(card['x-agent-profiles'].tags, ['研发', '产品']);
 
   const serialized = JSON.stringify(card);
   for (const forbidden of ['memberKey', 'keyHash', 'passwordHash', 'tokenHash']) {
@@ -152,7 +152,7 @@ test('a card with no profile still renders its defaults', () => {
   const card = buildCard({ config: normalizeConfig({}), skills: { list: () => [] }, url: 'http://x/a2a' });
   assert.equal(card.name, 'dsh-a2a');
   assert.match(card.description, /Exposes a DSH Session/);
-  assert.equal(card['x-dsh-profiles'], undefined, 'no extension when there is no profile');
+  assert.equal(card['x-agent-profiles'], undefined, 'no extension when there is no profile');
 });
 
 test('a profile provider that throws degrades to no extension, not a broken card', () => {

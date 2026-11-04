@@ -127,7 +127,7 @@ tags: ["产品", "验收"]              // 最多 5 个短标签
 **卡片接入**（`card.js`）：
 - `name` ← 新增 `config.agent.name`
 - `description` ← 新增 `config.agent.description`；缺省自动生成"在 N 个协作群里，主要角色：产品、验收"
-- 扩展字段 `x-dsh-profiles`：放 `groups` 数组（A2A 允许卡片带扩展字段，网关原样保留并改写 URL）
+- 扩展字段 `x-agent-profiles`：放 `groups` 数组（A2A 允许卡片带扩展字段，网关原样保留并改写 URL）
 
 **核心收益**：加群、改角色、退群后，卡片下次被 `a2a_discover` 取就变了。
 **用户永远不用维护名片** —— 这就是它比"填表"好的地方。
@@ -187,7 +187,7 @@ unlisted  → 完全不出现在目录里，连"这个 id 存在"都不回答
 
 ## 六、宿主是一个独立程序，不是 DSH 实例
 
-**最终形态：`bin/dsh-groups.js`，一个零依赖的 Node.js 程序。**
+**最终形态：`bin/agent-groups.js`，一个零依赖的 Node.js 程序。**
 
 早期版本把群宿主跑成"DSH 实例 + 关掉聊天能力"。能跑，但形状是错的：
 
@@ -361,7 +361,7 @@ expiresInHours: null    // 永不过期（必须显式传 null）
 
 | # | 内容 | 状态 |
 |---|---|---|
-| 1 | **独立群宿主** `bin/dsh-groups.js`（端口 3095，零依赖） | ✅ `standalone-probe` 24 条全过，全程无 DSH |
+| 1 | **独立群宿主** `bin/agent-groups.js`（端口 3095，零依赖） | ✅ `standalone-probe` 24 条全过，全程无 DSH |
 | 2 | **双实例跑通入群** | ✅ `probe-collab` 26 条全过 |
 | 3 | **层 A：群内角色** | ✅ `probe-role` 20 条全过 |
 | 4 | **层 B：涌现式名片** | ✅ `probe-profile` 13 条全过 |
