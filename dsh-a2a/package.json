@@ -16,8 +16,8 @@
   "type": "module",
   "main": "lib/index.js",
   "bin": {
-    "agent-groups": "./bin/agent-groups.js",
-    "agent-groups-mcp": "./lib/mcp-server.js"
+    "agent-groups": "bin/agent-groups.js",
+    "agent-groups-mcp": "lib/mcp-server.js"
   },
   "exports": {
     ".": {

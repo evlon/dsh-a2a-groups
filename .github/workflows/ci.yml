@@ -70,6 +70,11 @@ jobs:
     needs: test
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    # Required by 'npm publish --provenance': it mints a sigstore attestation from the workflow identity,
+    # and without this permission npm refuses outright rather than publishing unsigned.
+    permissions:
+      contents: read
+      id-token: write
     defaults:
       run:
         working-directory: dsh-a2a
