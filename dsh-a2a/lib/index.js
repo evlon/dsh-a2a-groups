@@ -291,6 +291,9 @@ const PANEL_FEED_TAIL = 8;
       // no longer announces no-op saves and "已保存" for an unchanged value would be misleading.
       return { ok: true, value: { saved: true, changed: saved?.changed !== false, groupId, at: clock() } };
     } catch (error) {
+      // Log it. The panel can only render a code, and a user-triggered failure that leaves no trace costs a
+      // reproduction attempt every time it is reported.
+      console.error('[a2a-panel] write failed for ' + groupId + ': ' + describe(error));
       return { ok: false, error: { code: 'write_failed', message: describe(error), details: { groupId } } };
     }
   };
