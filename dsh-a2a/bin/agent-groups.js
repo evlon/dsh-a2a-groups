@@ -130,7 +130,7 @@ function pick(...values) {
  * disposer removes the entry from a table the request handler consults — that keeps
  * `detach()` honest instead of pretending to clean up.
  *
- * @returns {{registrar: object, handle: Function, routes: () => object[]}} the adapter.
+ * @returns {{registrar: {register: (route: {kind: string, path: string, handler: Function}) => (() => void)}, handle: Function, routes: () => object[]}} the adapter.
  */
 function createHttpRegistrar(logger) {
   /** @type {Array<{kind: string, path: string, handler: Function}>} */

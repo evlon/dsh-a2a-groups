@@ -48,6 +48,77 @@
  * @module dsh-a2a/groups
  */
 
+/**
+ * One member row, as the store keeps it.
+ *
+ * `keyHash` is the sha256 of the member credential — the plaintext exists only in
+ * the `join` response and is never recoverable from this record. Anything that
+ * publishes a member must go through the public projection, not this type.
+ *
+ * @typedef {object} GroupMemberRecord
+ * @property {string} personId - this person’s id inside the group.
+ * @property {string} displayName
+ * @property {string} role - `owner` or `member`.
+ * @property {string} keyHash - sha256 of the member credential.
+ * @property {number} joinedAt - epoch ms.
+ * @property {number} lastSeenAt - epoch ms; drives the online window.
+ * @property {string} [endpoint] - the member’s A2A endpoint, when it reported one.
+ * @property {string} [about] - layer A: self-described role in THIS group.
+ * @property {string[]} [tags]
+ * @property {number} [profileUpdatedAt]
+ */
+
+/**
+ * One join request, from asking to be admitted to being decided.
+ *
+ * @typedef {object} GroupRequestRecord
+ * @property {string} requestId
+ * @property {string} displayName
+ * @property {string} status - `pending`, `approved`, `denied`, or `expired`.
+ * @property {number} createdAt - epoch ms.
+ * @property {number} expiresAt - epoch ms; a pending row past this is expired.
+ * @property {number} [decidedAt] - epoch ms.
+ * @property {string} [reason]
+ */
+
+/**
+ * One feed entry.
+ *
+ * @typedef {object} GroupFeedEntry
+ * @property {number} seq - monotonic within the group.
+ * @property {number} at - epoch ms.
+ * @property {string} msgId
+ * @property {string} kind - `message` or `system`.
+ * @property {{personId: string, displayName: string}} from
+ * @property {string} text
+ * @property {object} [payload]
+ * @property {string[]} [mentions]
+ */
+
+/**
+ * The whole group record — the unit that `groups.json` persists.
+ *
+ * `passwordHash` is scrypt, `tokenHash`/`keyHash` are sha256; no plaintext secret
+ * is ever a field here. `nextSeq` is the feed’s allocator, kept on the group so
+ * sequence numbers survive a restart.
+ *
+ * @typedef {object} GroupRecord
+ * @property {string} groupId
+ * @property {string} name
+ * @property {string} topic
+ * @property {number} createdAt - epoch ms.
+ * @property {string} joinPolicy - `invite` or `password`.
+ * @property {string} ownerMemberId - which member row is the owner.
+ * @property {string} passwordHash - `scrypt$N$salt$hash`.
+ * @property {object} settings - per-group overrides of the store defaults.
+ * @property {Array<{tokenHash: string, label?: string, createdAt: number, expiresAt: number, maxUses: number, uses: number, revoked: boolean}>} invites
+ * @property {GroupMemberRecord[]} members
+ * @property {GroupFeedEntry[]} feed
+ * @property {number} nextSeq
+ * @property {GroupRequestRecord[]} [requests]
+ * @property {boolean} [archived]
+ */
+
 import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import {
   chmodSync,
@@ -341,7 +412,7 @@ export function verifyPassword(password, stored) {
  * mutations are human-paced, so the cost is acceptable.
  *
  * @param {object} options
- * @param {string} options.home directory holding `groups.json`
+ * @param {string} [options.home] directory holding `groups.json`
  * @param {object} [options.logger] `{info,warn,error}` (optional)
  * @param {() => number} [options.clock] epoch-ms source; injected so tests can travel in time
  * @param {object} [options.config] normalized plugin config (or a flat groups config)
@@ -426,7 +497,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * once, while a revocation hits only the link that leaked.
    *
    * @param {object} input
-   * @param {string} input.name group display name
+   * @param {string} [input.name] group display name
+   * @param {string} [input.about]
+   * @param {string[]} [input.tags]
    * @param {string} [input.topic]
    * @param {string} [input.ownerDisplayName]
    * @param {object} [input.settings] per-group overrides of the store defaults
@@ -513,7 +586,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * instead of a permanent group membership.
    *
    * @param {object} input
-   * @param {string} input.groupId
+   * @param {string} [input.groupId]
    * @param {string} [input.ownerKey] owner credential; REQUIRED — only the owner
    *   may mint, because only the owner may later revoke
    * @param {string} [input.label] who this invite is for, for later revocation
@@ -628,7 +701,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * becomes unusable through no fault of the owner.
    *
    * @param {object} input
-   * @param {string} input.groupId
+   * @param {string} [input.groupId]
+   * @param {string} [input.personId]
+   * @param {string} [input.about]
+   * @param {string[]} [input.tags]
    * @param {string} [input.token] invite token
    * @param {string} [input.displayName]
    * @param {string} [input.endpoint] optional callback address for the member
@@ -719,9 +795,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * of authenticate()" and "was constructed by the caller" is unforgeable.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {string} input.personId
-   * @param {string} input.personKey
+   * @param {string} [input.groupId]
+   * @param {string} [input.personId]
+   * @param {string} [input.personKey]
    * @returns {object|undefined} a public member view (never contains `keyHash`)
    */
   function authenticate(input = {}) {
@@ -761,8 +837,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * write of the rate-limit table.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member authenticated member (or `{personId, personKey}`)
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] authenticated member (or `{personId, personKey}`)
+   * @param {string} [input.mentions]
    * @param {string} [input.text]
    * @param {object} [input.payload] structured payload; not interpreted here
    * @returns {{seq: number, msgId: string, at: number, atIso: string}}
@@ -833,7 +910,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * An ambiguous display name is dropped rather than guessed: waking the wrong person is
    * worse than not waking anyone, and the poster can retry with an id.
    *
-   * @param {object} group - internal group record.
+   * @param {GroupRecord} group - internal group record.
    * @param {unknown} raw - the caller's mention list.
    * @returns {string[]} resolved ids, or `[MENTION_ALL]`; empty array for no mentions.
    */
@@ -873,8 +950,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * from the front, and a length-derived cursor would silently rewind.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member
+   * @param {string} [input.groupId]
+   * @param {object} [input.member]
    * @param {number} [input.sinceSeq]
    * @param {number} [input.limit]
    * @returns {{entries: object[], lastSeq: number, truncated: boolean}}
@@ -938,8 +1015,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * no key material.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {string} input.personId
+   * @param {string} [input.groupId]
+   * @param {string} [input.personId]
    * @returns {object|undefined} the public member view, or undefined.
    */
   function memberView(input = {}) {
@@ -966,8 +1043,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * something, and a crashed host never un-sets it. A timestamp is always honest.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member
+   * @param {string} [input.groupId]
+   * @param {object} [input.member]
    * @returns {object[]} public member views (no `keyHash`)
    */
   function members(input = {}) {
@@ -996,8 +1073,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    *    privilege escalation.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member authenticated member view, or `{personId, personKey}`
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] authenticated member view, or `{personId, personKey}`
    * @param {string} [input.about] one sentence; omit to leave unchanged
    * @param {string[]} [input.tags] up to MAX_TAGS short labels; `[]` clears them
    * @returns {{personId: string, roleAbout: (string|undefined), tags: string[], updatedAt: number}}
@@ -1048,9 +1125,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * it here would leave a group with an owner who is not in it.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member owner credential
-   * @param {string} input.targetPersonId who to remove
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] owner credential
+   * @param {string} [input.targetPersonId] who to remove
    * @param {string} [input.reason] one line for the system entry
    * @returns {{removed: boolean, personId: string, feedSeq: number|undefined}}
    */
@@ -1102,8 +1179,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * groups kept wrong names.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member owner credential
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] owner credential
    * @param {string} [input.name] new display name
    * @param {string} [input.topic] new topic; an empty string clears it
    * @returns {{name: string, topic: string, changed: string[]}}
@@ -1154,8 +1231,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * would make the feature useless.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member owner credential
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] owner credential
    * @param {boolean} [input.archived] defaults to true
    * @returns {{archived: boolean}}
    */
@@ -1186,8 +1263,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * notes.)
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member
+   * @param {string} [input.groupId]
+   * @param {object} [input.member]
    * @returns {boolean} whether a member was removed
    */
   function leave(input = {}) {    const group = requireGroup(input.groupId);
@@ -1222,7 +1299,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * them.
    *
    * @param {object} input
-   * @param {string} input.groupId
+   * @param {string} [input.groupId]
    * @param {string} [input.ownerKey]
    * @param {string} [input.token]
    * @param {string} [input.inviteId]
@@ -1261,8 +1338,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * it, because the post is already durable at that point.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {(entry: object) => void} input.fn
+   * @param {string} [input.groupId]
+   * @param {(entry: object) => void} [input.fn]
    * @returns {() => void} unsubscribe
    */
   function subscribe(input = {}) {
@@ -1292,7 +1369,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * group's shape, while what was said is the thing a password protects.
    *
    * @param {object} input
-   * @param {string} input.groupId
+   * @param {string} [input.groupId]
    * @param {object} [input.member]
    * @returns {object} summary without any hash field
    */
@@ -1346,8 +1423,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * somebody else's membership.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {string} input.displayName who is asking
+   * @param {string} [input.groupId]
+   * @param {string} [input.displayName] who is asking
    * @param {string} [input.reason] one line about why
    * @returns {{requestId: string, claimKey: string, expiresAt: number, groupName: string}}
    */
@@ -1422,8 +1499,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * names and stated reasons — the same class of information as the member list.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member owner credential
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] owner credential
    * @param {string} [input.status] 'pending' (default) | 'approved' | 'rejected' | 'all'
    * @returns {object[]} public request views
    */
@@ -1460,10 +1537,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * here would hand an unusable row to someone who cannot authenticate with it.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {object} input.member owner credential
-   * @param {string} input.requestId
-   * @param {boolean} input.approve true to approve, false to reject
+   * @param {string} [input.groupId]
+   * @param {object} [input.member] owner credential
+   * @param {string} [input.requestId]
+   * @param {boolean} [input.approve] true to approve, false to reject
    * @returns {{requestId: string, status: string, displayName: string}}
    */
   function decideRequest(input = {}) {
@@ -1529,9 +1606,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * approval path skips the password.
    *
    * @param {object} input
-   * @param {string} input.groupId
-   * @param {string} input.requestId
-   * @param {string} input.claimKey the secret from `requestJoin`
+   * @param {string} [input.groupId]
+   * @param {string} [input.requestId]
+   * @param {string} [input.claimKey] the secret from `requestJoin`
    * @returns {{member: object, personKey: string, group: object}}
    */
   function claimJoin(input = {}) {

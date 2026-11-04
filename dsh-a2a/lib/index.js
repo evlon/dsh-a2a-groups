@@ -32,7 +32,6 @@ import { readFileSync } from 'node:fs';
 import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './core/config.js';
 import { createServer } from './core/server.js';
 import { createBridge } from './core/bridge.js';
-import { aggregateColleagueCards } from './core/colleague-cards.js';
 import { createRegistry } from './core/registry.js';
 import { createDeliverer } from './dsh/deliver.js';
 import { createGroupStore } from './core/groups.js';
@@ -235,6 +234,12 @@ const PANEL_FEED_TAIL = 8;
           // Session" — but it can say which one each group belongs to, which is what
           // lets a person tell two memberships in one group apart.
           sessionId: record.sessionId ?? '',
+          // Which person this Session is in this group. The panel needs it to mark
+          // "me" in the roster: without it there is no way to tell which row is the
+          // reader, and the edit affordance has no target. The line above already
+          // reads `record.personId` to decide `role`, so the value is present in the
+          // record — it simply was not being passed on.
+          personId: record.personId ?? '',
           local: hostedHere,
           // The roster a Session cached earlier, via a2a_group_info / a2a_group_members.
           // Nothing is fetched at render time — this page is built before any Session
@@ -286,12 +291,31 @@ const PANEL_FEED_TAIL = 8;
         // snapshot: a second channel would mean a second way for the two to disagree.
         // The aggregator is a pure function in core/: rosters in, cards out. Keeping it here
         // would make it testable only by mounting the whole plugin.
+        // One source: the host's own person table, which already merges stored profiles with
+        // membership rows so somebody who joined before the table existed still appears.
+        // Deriving cards from memberships instead was a workaround with the wrong shape — one
+        // card per group, stitched together from whichever rosters happened to be cached.
         cards: (() => {
           try {
-            return aggregateColleagueCards(identities.list());
+            const people = typeof groups.listPersons === 'function' ? groups.listPersons() : [];
+            return people.map((person) => ({
+              personId: person.personId,
+              name: person.displayName,
+              headline: person.headline,
+              tags: Array.isArray(person.tags) ? person.tags : [],
+              endpoint: typeof person.endpoint === 'string' ? person.endpoint : '',
+              // "Mine" is decided by the ledger: it knows which person ids this instance holds.
+              // Matching on a display name would mark a stranger's card as mine, and offer an
+              // edit that changes the wrong profile.
+              isSelf: identities.list().some((record) => record.personId === person.personId),
+              // Presence is the one fact a profile cannot carry: it changes by the minute. It is
+              // read from the cached rosters, and absence simply means "unknown", not "offline".
+              online: identities.list().some((record) => (record.members ?? [])
+                .some((member) => member.personId === person.personId && member.online === true)),
+            }));
           } catch (error) {
             // Cards are reference material; a failure must not blank the panel.
-            info(ctx, `a2a: could not aggregate colleague cards (${describe(error)})`);
+            info(ctx, `a2a: could not build colleague cards (${describe(error)})`);
             return [];
           }
         })(),

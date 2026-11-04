@@ -18,7 +18,14 @@
  * would make a caller's `skill` field ambiguous and the card advertise a
  * capability that dispatches somewhere unpredictable.
  *
- * @returns {{register: Function, get: Function, list: Function, ids: Function}} the registry.
+ * @returns {{
+ *   register: (skill: object) => (() => boolean),
+ *   get: (id: string) => any,
+ *   list: () => any[],
+ *   ids: () => string[],
+ * }} the registry. The concrete signatures matter: a bare `Function` is not
+ * assignable to a declared call signature, so callers that pass the registry
+ * into `createServer()` would each report an error at their own call site.
  */
 export function createSkillRegistry() {
   /** @type {Map<string, object>} */

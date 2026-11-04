@@ -322,4 +322,85 @@ node scripts/aisix-dev/shot-page.mjs <session> 3091 "E:\dsh-a2a-bus\.shots\panel
 **验收的最低标准**：`standalone-probe` 报 `standalone: OK`，单元测试 `fail 0`。
 这两条过了，协议层和宿主就都是对的；剩下的都是界面与体验。
 
+## 类型检查（`tsc --noEmit`）
 
+这一层是**可选的静态护栏**，不参与运行：项目仍然直接跑 `.js`，没有 TypeScript 构建步骤。它存在的意义只有一个——把「读了一个没人写的字段」这类错误从运行时挪到提交前。
+
+### 怎么跑
+
+```bash
+cd dsh-a2a
+.\node_modules\.bin\tsc --project tsconfig.check.json
+```
+
+`tsconfig.check.json` 是 `allowJs + checkJs + noEmit + strict:false`，`include` 是 `lib/**/*.js` 和 `bin/**/*.js`（**不含 `test/`、不含 `client.js`**）。依赖两个 devDependency：
+
+```json
+"devDependencies": {
+  "@types/node": "^26.6.6",
+  "typescript": "^7.0.2"
+}
+```
+
+`"types": ["node"]` 是必需的：没有它，`Buffer`、`process`、`node:*` 导入全部报 TS2591（本次起始状态里有 72 个）。
+
+### 当前状态：**423 个错误，其中 402 个是 TS2339 —— 已知，且决定不再追**
+
+按类别：
+
+| 代码 | 数量 | 含义 | 处理 |
+|---|---|---|---|
+| TS2339 | 402 | JSDoc 写成 `{object}`，导致任何 `input.xxx` 都报「属性不存在」 | **不追**，理由见下 |
+| TS2353 | 8 | 对象字面量多了未声明的字段 | 未修，多为返回值的补充字段 |
+| TS2345 | 6 | 实参类型与形参不符 | 未修 |
+| TS2769 / TS2810 / TS2554 / TS2695 | 2/1/1/1 | 重载、Promise 提示、调用参数、逗号运算符 | 未修 |
+| ~~TS2591~~ | ~~72~~ | 找不到 node 类型 | **已消**（装 `@types/node` + `types:["node"]`） |
+| ~~TS2304~~ | ~~11~~ | 找不到名称 | **已消**，其中 5 个是真 bug（见下） |
+| ~~TS8032~~ | ~~9~~ | `@param` 限定名语法错误 | **已消** |
+| ~~TS2739/2741~~ | ~~27~~ | 对象缺字段 | **已消** |
+| ~~TS2322~~ | ~~17~~ | 类型不匹配 | **已消** |
+
+### 为什么不再追那 402 个 TS2339
+
+**成因单一**：几乎全部是同一个动作——JSDoc 把参数标成 `{object}`，于是函数里每一处 `input.groupId` 都报错。修它只有两条路，代价都很高：
+
+1. 把 `{object}` 展开成完整内联记录。一个 20 个字段的选项对象要写 20 行注释，而这个函数的实际逻辑往往只有 5 行。
+2. 引入 `@typedef`。可 `@typedef` 一旦定义在「被调用方」，就要保证每个调用点传进来的形状都精确匹配；实测中这会把错误**从定义处搬到每个调用处**（我先试过一轮：402 个 TS2339 变成了 380 个 TS2339 + 95 个 TS8032 + 50 个 TS2345，净效果是负的）。
+
+**它拦不住真正的 bug**。这次实际发现的有价值问题，没有一个是 TS2339 报出来的：
+
+- 4 个 `ReferenceError`（`displayNameOf`、`settingsAgentName`、`parseInviteLink`、`probeReachability`）→ 是 **TS2304** 报的
+- `splitRoster` 丢 `isSelf` → 是**测试**抓到的
+
+也就是说：**TS2339 的 402 个里，真 bug 命中率接近 0；而为了它们改 400 处注释，会让 diff 在 review 时不可读**，反而淹没真正有价值的改动。
+
+### 已修的真问题（附证据）
+
+| 位置 | 症状 | 证据 |
+|---|---|---|
+| `lib/shared/tool-runtime.js` | `displayNameOf` 未定义 → `a2a_group_create` 100% 崩溃 | 运行时 `ReferenceError: displayNameOf is not defined` |
+| 同上 | `settingsAgentName` 未定义 → 建群成功后取 gatewayName 崩溃 | 同一路径复现 |
+| 同上 | `parseInviteLink` 未定义 → `a2a_group_join` 100% 崩溃 | `ReferenceError: parseInviteLink is not defined`；该函数其实存在于 `lib/dsh/tools.js:65`，只是没 import |
+| 同上 | `probeReachability` 未定义 → `a2a_serve` 100% 崩溃 | `ReferenceError: probeReachability is not defined`；实存于 `lib/core/probe.js:38` |
+| `lib/core/bridge.js:117` | `detail.code` 被标成 `{number}`，但代码传了 10 处字符串子码（`'aborted'`、`'bad_target'`…），而同文件 `toJSON()` 自己写的是 `number\|string` | 注释自相矛盾；3 个消费方用 `typeof code === 'string'` 判断，说明字符串才是约定 |
+
+前四条由 Lead 修复（补 import + 补两个函数），最后一条是这次改注释时发现并修正的。
+
+### 什么情况下该重新考虑
+
+不是"等有空再说"，而是有明确的触发条件：
+
+1. **如果开始定义核心数据结构的 `@typedef`**（`Group` / `Member` / `Task` / `Membership`），TS2339 会**自然**大幅下降——因为错误的根源是形状没有名字，而不是代码有问题。那时再追它，就是在收一份已经付过成本的收益。
+2. **如果准备上 `strict: true`**。`strict` 会让 `null`/`undefined` 成为必须处理的分支，收益远高于 TS2339；但它要求先把上面那批 `@typedef` 建好，否则错误数会先暴涨。
+3. **如果 TS2339 之外出现了新的 TS2304**。这一类便宜且命中率高，任何时候都值得立刻修。
+
+反之，**不要**为了降低错误总数去批量展开 `{object}`——本次实测证明那是在搬动错误，不是在消除错误。
+
+### 这一轮的约束（供后续参照）
+
+改这一层时只动注释，不改逻辑。落地的校验方式有两个，都在本次过程中实际用过：
+
+1. **代码行比对**：去掉所有注释、丢掉空行后，逐行必须完全一致。
+2. **测试基线**：`node --test test/*.test.mjs` 必须保持 `395 tests / 394 pass / 1 skip`（那 1 个 skip 是 Windows 没有 POSIX 文件权限，属预期）。
+
+唯一一处例外需要在 review 时留意：`lib/core/server.js` 的 `readBody()` 里给 `for await` 的目标加了一个 `/** @type {AsyncIterable<Buffer|string>} */` 断言——`node:http` 的 request 本身就是异步可迭代对象，而 JSDoc 无法用 `@property` 表达这一点。它不改变任何运行时行为（断言在运行时被擦除），测试也照旧全绿。

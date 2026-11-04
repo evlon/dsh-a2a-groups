@@ -114,7 +114,7 @@ export class A2aClientError extends Error {
    * @param {'auth'|'permission'|'version'|'network'|'rpc'} kind - 一级分类。
    * @param {string} message - 面向人的说明（**绝不包含明文凭证**）。
    * @param {object} [detail] - 结构化细节。
-   * @param {number} [detail.code] - JSON-RPC 错误码或系统错误码（如 `ECONNREFUSED`）。
+   * @param {number|string} [detail.code] - JSON-RPC 错误码，或稳定的子码（如 `aborted`、`bad_target`）。
    * @param {number} [detail.status] - HTTP 状态码（若有）。
    * @param {string} [detail.data] - 错误正文摘录（已截断）。
    * @param {unknown} [detail.cause] - 原始异常，便于上层打日志。
@@ -200,12 +200,72 @@ function textOfParts(parts) {
 }
 
 /**
+ * 客户端配置：一元调用、流式重连与卡片缓存共用的那一组旋钮。
+ *
+ * 单独命名，是因为 `readClientConfig()` 允许调用方直接传 `client` 段——单测和
+ * 「只关心客户端」的调用方不必伪造整个配置对象。写成 union 就是把这条已经存在
+ * 的运行时判断（`typeof config.client === 'object'`）说清楚。
+ *
+ * @typedef {object} BridgeClientConfig
+ * @property {string} [apiKey] - 上游网关的 Key，一人一把。
+ * @property {string} [protocolVersion] - 默认 1.0。
+ * @property {string} [forwardProto] - 联调 http 时填 http。
+ * @property {number} [cardTtlMs] - 卡片缓存时长。
+ * @property {number} [timeoutMs] - 一元调用超时。
+ * @property {number} [reconnectAttempts] - 流式断线重试次数。
+ */
+
+/**
+ * `readClientConfig()` 接受的两种形状，合并成一个类型。
+ *
+ * 写成 `{client?: ...} & BridgeClientConfig` 而不是 union：union 会让「有 client」
+ * 那一支上读 `apiKey` 不合法、另一支上读 `client` 不合法，而函数本身是两者都读、
+ * 再按运行时判断取舍。类型跟着真实判断走，才不需要在多处重复收窄。
+ *
+ * @typedef {object} BridgeConfigInput
+ * @property {BridgeClientConfig} [client] - 完整配置里的 client 段。
+ * @property {string} [apiKey]
+ * @property {string} [protocolVersion]
+ * @property {string} [forwardProto]
+ * @property {number} [cardTtlMs]
+ * @property {number} [timeoutMs]
+ * @property {number} [reconnectAttempts]
+ */
+
+/**
+ * 一个 A2A 1.0 任务对象，本模块真正会读的那几个字段。
+ *
+ * 只列读到的字段而非完整 schema：这样「这里读了一个上游不会给的字段」会变成
+ * 类型错误，而不是安静地拿到 undefined 再退回空文本。
+ *
+ * @typedef {object} BridgeTask
+ * @property {string} [id]
+ * @property {string} [contextId]
+ * @property {BridgeTaskStatus} [status]
+ * @property {BridgeArtifact[]} [artifacts]
+ * @property {object} [metadata]
+ */
+
+/**
+ * @typedef {object} BridgeTaskStatus
+ * @property {string} [state] - `TASK_STATE_*`。
+ * @property {object} [message] - 状态附带的说明消息。
+ * @property {string|number} [timestamp]
+ */
+
+/**
+ * @typedef {object} BridgeArtifact
+ * @property {string} [artifactId]
+ * @property {string} [name]
+ * @property {Array<{kind: string, text?: string}>} [parts]
+ */
+/**
  * 从一个任务里取「这次答复」的文本。
  *
  * 优先取 `name === 'reply'` 的 artifact：群技能一次可能回多个 artifact（`posted`、
  * `feed`、`members`…），`reply` 是约定的「给人看的那段」，其余是给程序读的结构。
  *
- * @param {object} task - A2A 任务对象。
+ * @param {BridgeTask} task - A2A 任务对象。
  * @returns {string} 文本；没有 artifact 时退回任务状态消息里的文本。
  */
 function textOfTask(task) {
@@ -332,7 +392,7 @@ export function createSseParser(onFrame) {
  * 允许直接把 `client` 段传进来：这样单测和「只关心客户端」的调用方不必伪造整个
  * 配置对象。
  *
- * @param {object} config - `normalizeConfig()` 的产物，或其 `client` 段。
+ * @param {BridgeConfigInput} config - `normalizeConfig()` 的产物，或其 `client` 段。
  * @returns {{apiKey: string, protocolVersion: string, forwardProto: string, cardTtlMs: number, timeoutMs: number, reconnectAttempts: number}}
  */
 function readClientConfig(config) {
@@ -350,12 +410,53 @@ function readClientConfig(config) {
 }
 
 /**
+ * 一个对端目标：要么是网关里的 agent，要么是直连的 A2A 端点。
+ *
+ * 只有 `baseUrl` 必填——其余三项目标里不给就继承客户端配置。把「哪些必须由
+ * 调用方提供」写进类型，比在错误信息里补一句更容易被发现。
+ *
+ * @typedef {object} BridgeTarget
+ * @property {string} baseUrl - `http://gw:3000/a2a/<agent>` 或 `http://host:3091/a2a`。
+ * @property {string} [agent] - 网关里的 agent 名，拼在 baseUrl 后面。
+ * @property {string} [apiKey] - 覆盖客户端配置里的 Key。
+ * @property {string} [protocolVersion] - 覆盖客户端配置里的版本。
+ * @property {string} [forwardProto] - 覆盖客户端配置里的 X-Forwarded-Proto。
+ */
+
+/**
+ * `send()` 的入参。
+ *
+ * @typedef {object} BridgeSendInput
+ * @property {string} [skill] - `metadata.skill`，缺省 `session/ask`。
+ * @property {string} [text] - 消息正文。
+ * @property {object} [data] - 结构化参数，进 `metadata.data`。
+ * @property {string} [contextId] - 续接已有的 A2A 上下文。
+ * @property {number} [timeoutMs] - 覆盖客户端超时。
+ * @property {string} [from] - 调用方标识，进 `metadata.from`。
+ */
+
+/**
+ * `stream()` 的入参：在一元入参之上多了订阅位置与取消。
+ *
+ * @typedef {object} BridgeStreamInput
+ * @property {string} [skill]
+ * @property {string} [text]
+ * @property {object} [data]
+ * @property {string} [contextId]
+ * @property {number} [sinceSeq] - 断线重连时的续读位置。
+ * @property {AbortSignal} [signal] - 取消订阅。
+ * @property {(event: object) => void} [onEvent] - 每帧回调。
+ * @property {number} [timeoutMs]
+ * @property {string} [from]
+ */
+
+/**
  * 规范化一个 target。
  *
  * `baseUrl` 是唯一必填项。`agent` 可以单独给：网关的基址是 `…/a2a`，具体 agent 是
  * 路径段，登记簿里两者分开存更省事，这里负责拼起来（已经带上了就不重复拼）。
  *
- * @param {object} raw - 调用方给的 target。
+ * @param {BridgeTarget} raw - 调用方给的 target。
  * @param {ReturnType<typeof readClientConfig>} cfg - 客户端配置。
  * @returns {{baseUrl: string, agent: string, apiKey: string, protocolVersion: string, forwardProto: string}}
  * @throws {A2aClientError} `baseUrl` 缺失或不是合法 URL 时（kind `'rpc'`，属于调用方用法错误）。

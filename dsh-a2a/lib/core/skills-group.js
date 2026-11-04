@@ -456,9 +456,12 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
                 personId: item.personId,
                 displayName: item.displayName,
                 role: item.role,
-                // Layer A, self-declared. An older member that never set these
-                // reads as an empty about and no tags, not as a missing field.
-                about: item.roleAbout ?? '',
+                // Layer A, self-declared. Named `roleAbout` to match `group/info` and the
+                // store's own field. An earlier version emitted `about` here while `group/info`
+                // emitted `roleAbout`, so a caller reading one and caching against the other
+                // silently lost every role — which is exactly how the colleague cards came out
+                // blank.
+                roleAbout: item.roleAbout ?? '',
                 tags: item.tags ?? [],
                 joinedAt: item.joinedAt,
                 lastSeenAt: item.lastSeenAt,

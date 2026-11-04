@@ -40,6 +40,148 @@ import {
 } from './wire.js';
 import { A2A_PATH, CARD_ALIAS_PATH, CARD_PATH, buildCard, resolveAgentUrl } from './card.js';
 
+/** @typedef {import('./wire.js').TaskRow} TaskRow */
+
+/**
+ * Something with the usual three log levels, any of which may be absent.
+ *
+ * Declared here because `logger?.warn` is called on an injected value that this
+ * module never constructs: naming the shape is what tells a reader the fields
+ * are optional on purpose rather than forgotten.
+ *
+ * @typedef {object} A2aLogger
+ * @property {(message: string) => void} [info]
+ * @property {(message: string) => void} [warn]
+ * @property {(message: string) => void} [debug]
+ */
+
+/**
+ * One `node:http` request, reduced to what this module actually reads.
+ *
+ * Narrower than the real `IncomingMessage` on purpose: a checker that knows this
+ * shape can verify every property access here, and any handler that reaches for
+ * a field outside this list becomes a visible decision instead of a silent one.
+ *
+ * @typedef {object} A2aRequest
+ * @property {string} [method] - HTTP verb.
+ * @property {string} [url] - request target.
+ * @property {Record<string, string|string[]|undefined>} [headers] - lower-cased header bag.
+ * @property {{remoteAddress?: string}} [socket] - peer address, for the loopback gate.
+ * @property {boolean} [readableEnded] - whether the body was fully consumed.
+ * @property {(event: string, fn: () => void) => void} [once] - one-shot listener.
+ * @property {(event: string, fn: () => void) => void} [off] - listener removal.
+ * @property {AsyncIterable<Buffer|string>} [body] - the request IS an async iterable of body chunks; see `readBody`.
+ */
+
+/**
+ * One `node:http` response, reduced to what this module writes.
+ *
+ * @typedef {object} A2aResponse
+ * @property {number} [statusCode] - status to send.
+ * @property {boolean} [headersSent] - whether the head went out already.
+ * @property {boolean} [writableEnded] - whether `end()` was called.
+ * @property {boolean} [destroyed] - whether the socket is gone.
+ * @property {(name: string, value: string) => void} [setHeader] - header setter.
+ * @property {() => void} [flushHeaders] - force the head out, for SSE.
+ * @property {(chunk?: string) => boolean} [write] - body write.
+ * @property {(body?: string) => void} [end] - finish the response.
+ * @property {(event: string, fn: () => void) => void} [once]
+ * @property {(event: string, fn: () => void) => void} [off]
+ */
+
+/**
+ * The four registrations this module needs from a route table.
+ *
+ * @typedef {object} A2aRegistrar
+ * @property {(route: {kind: 'exact'|'prefix', path: string, handler: Function}) => (() => void)} register
+ */
+
+/**
+ * A JSON-RPC `params` bag, as the four supported methods shape it.
+ *
+ * Every field is optional because a malformed call is answered with a coded
+ * error, not a crash: the handlers check for themselves rather than trusting the
+ * shape. Declaring the fields still buys the important half — a handler that
+ * reads `params.id` when the caller promised `params.message` now reads a
+ * known-optional field instead of an unknown one.
+ *
+ * @typedef {object} A2aParams
+ * @property {A2aMessage} [message] - SendMessage / SendStreamingMessage payload.
+ * @property {string} [id] - GetTask / CancelTask target.
+ * @property {string} [taskId] - legacy alias for `id`.
+ * @property {string} [name] - 0.3 spelling of `id`.
+ */
+
+/**
+ * One inbound A2A 1.0 message.
+ *
+ * @typedef {object} A2aMessage
+ * @property {'user'|'agent'} [role]
+ * @property {string} [messageId]
+ * @property {string} [contextId]
+ * @property {Array<{kind: string, text?: string}>} [parts]
+ * @property {Record<string, any>} [metadata]
+ */
+
+/**
+ * What a skill registry must offer: dispatch by id, and a list for the card.
+ *
+ * @typedef {object} A2aSkillRegistry
+ * @property {(id: string) => any} get
+ * @property {() => any[]} list
+ */
+
+/**
+ * One callable skill.
+ *
+ * @typedef {object} A2aSkill
+ * @property {string} id
+ * @property {string} [name]
+ * @property {string} [description]
+ * @property {(input: object, context: object) => Promise<object|string>} run
+ */
+
+/**
+ * The task store this module drives.
+ *
+ * @typedef {object} A2aTaskStore
+ * @property {(input?: object) => any} create
+ * @property {(id: string, patch?: object) => any} update
+ * @property {(id: string, artifact: object) => any} attachArtifact
+ * @property {(id: string) => any} get
+ * @property {(id: string) => any} cancel
+ * @property {() => boolean} flush
+ * @property {number} [size]
+ */
+
+/**
+ * The two shapes `admit()` can return: a runnable admission, or a refusal.
+ *
+ * Declared as one optional-laden type rather than `object` because the callers
+ * immediately narrow on `admitted.error`: with `object`, every `.task`/`.signal`
+ * read on the success branch was an error, and the refusal branch could not be
+ * distinguished from a success that merely lacked `error`.
+ *
+ * @typedef {object} A2aAdmission
+ * @property {TaskRow} [task] - the opened task row.
+ * @property {A2aSkill} [skill] - resolved skill.
+ * @property {string} [skillId]
+ * @property {string} [text] - flattened request text.
+ * @property {A2aMessage} [message] - the original 1.0 message.
+ * @property {AbortSignal} [signal] - timeout/disconnect cancellation.
+ * @property {Promise<any>} [timeout] - independent deadline rejection.
+ * @property {() => void} [cleanup] - clears the timer and listeners.
+ * @property {{code: number, message: string, data?: object}} [error] - refusal.
+ */
+
+/**
+ * Arguments to `admit()`.
+ *
+ * @typedef {object} A2aAdmitInput
+ * @property {A2aResponse} res - the HTTP response, for the disconnect signal.
+ * @property {A2aParams} params - JSON-RPC params.
+ */
+
 /**
  * Operator endpoint: liveness plus an authenticated flush.
  *
@@ -79,6 +221,30 @@ const HEARTBEAT_MS = 15000;
 const DEFAULT_SKILL = 'session/ask';
 
 /**
+ * The options `createServer` accepts.
+ *
+ * Kept as one named type rather than a pile of `@param` lines because the object
+ * is DESTRUCTURED in the signature: TypeScript only validates a destructured
+ * parameter against a single declared type, so per-property `@param` entries
+ * leave the parameter's shape `{}` and every read of `config`/`tasks`/`skills`
+ * reports "does not exist". Naming the type also makes the `profileProvider`
+ * and `onFlush` seams — the two injectable hooks a non-DSH host uses — visible
+ * in one place instead of being implicit.
+ *
+ * @typedef {object} A2aServerOptions
+ * @property {object} [ctx] - Host context; only `ctx.webServer` is read, as the default registrar.
+ * @property {A2aRegistrar} [registrar] - route table; defaults to `ctx?.webServer`.
+ * @property {string} [where] - where this server runs, for error messages.
+ * @property {A2aLogger} [logger] - logger with `info` / `warn` / `debug`.
+ * @property {object} [config] - normalized plugin config (§3 of the contract).
+ * @property {object} [deliverer] - from `createDeliverer`.
+ * @property {A2aTaskStore} [tasks] - a `TaskStore`.
+ * @property {A2aSkillRegistry} [skills] - skill registry `{get, list}`.
+ * @property {() => object} [profileProvider] - layer-B profile for the card, or a throw.
+ * @property {() => Promise<void>|void} [onFlush] - operator flush hook behind `/__health`.
+ */
+
+/**
  * Build the A2A server facade.
  *
  * The facade needs a way to add four routes and nothing else, so the route table is
@@ -90,23 +256,12 @@ const DEFAULT_SKILL = 'session/ask';
  *   - as a standalone Node program (a production group host): pass an object whose
  *     `register` attaches to a plain `http.Server`.
  *
- * @param {object} options - server options.
- * @param {object} [options.ctx] - Host context. Optional now; kept so existing
- *   callers need no change, and unused when `registrar` is given.
- * @param {object} [options.registrar] - `{register({kind, path, handler}) => disposeFn}`.
- *   Defaults to `ctx?.webServer`.
- * @param {string} [options.where] - where this server runs, for error messages
- *   ("inside DSH" / "standalone").
- * @param {object} [options.logger] - logger with `info` / `warn` / `debug`.
- * @param {object} options.config - normalized plugin config (§3 of the contract).
- * @param {object} options.deliverer - from `createDeliverer`.
- * @param {object} options.tasks - a `TaskStore`.
- * @param {object} options.skills - skill registry `{get, list}`.
+ * @param {A2aServerOptions} options - server options.
  * @returns {{attach: () => () => void, detach: () => void, card: () => object, info: () => object}} the facade.
  */
 export function createServer({
   ctx,
-  registrar = ctx?.webServer,
+  registrar = /** @type {A2aRegistrar|undefined} */ (ctx?.webServer),
   where = 'inside DSH',
   logger,
   config,
@@ -116,7 +271,7 @@ export function createServer({
   profileProvider,
   onFlush,
 } = {}) {
-  const serverConfig = config?.server ?? {};
+  const serverConfig = /** @type {any} */ (config)?.server ?? {};
   const maxBodyBytes = positiveInt(serverConfig.maxBodyBytes, DEFAULT_MAX_BODY_BYTES);
   const taskTimeoutMs = positiveInt(serverConfig.taskTimeoutMs, DEFAULT_TASK_TIMEOUT_MS);
   const token = typeof serverConfig.token === 'string' ? serverConfig.token.trim() : '';
@@ -196,9 +351,9 @@ export function createServer({
       config,
       skills,
       url: resolveAgentUrl({ config, origin: originProvider() }),
-      name: config?.agent?.name,
-      description: config?.agent?.description,
-      version: config?.agent?.version,
+      name: /** @type {any} */ (config)?.agent?.name,
+      description: /** @type {any} */ (config)?.agent?.description,
+      version: /** @type {any} */ (config)?.agent?.version,
       // Layer B: derived per read, never stored. A provider that throws must not
       // take the card down — a peer needs the skills list even if the identity
       // aggregation is unhappy, so a failed profile degrades to "no extension".
@@ -232,8 +387,8 @@ export function createServer({
 
   /**
    * Serve the agent card.
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleCard(req, res) {
@@ -251,8 +406,8 @@ export function createServer({
    * SPA fallback would otherwise answer 200 with HTML, and a client that parsed
    * the body would report a confusing schema error instead of "no such document".
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleWellKnownFallback(req, res) {
@@ -275,8 +430,8 @@ export function createServer({
    * demand. `POST` is required for the flush so a crawler or a browser prefetch cannot
    * trigger it by accident.
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleHealth(req, res) {
@@ -320,8 +475,8 @@ export function createServer({
    * buffer a megabyte, and versioning before parsing means a 0.3 caller gets a
    * precise `-32003` instead of an `-32600` that hides the real problem.
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleRpc(req, res) {
@@ -422,10 +577,10 @@ export function createServer({
   /**
    * Unary `SendMessage`: run one skill to completion and return the task.
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @param {string|number|null} id - request id.
-   * @param {object} params - `{message}`.
+   * @param {A2aParams} params - `{message}`.
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleSendMessage(req, res, id, params) {
@@ -459,10 +614,10 @@ export function createServer({
    * that only waits for `final` still works, and a peer that renders progress gets
    * something real instead of a single blob at the end.
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @param {string|number|null} id - request id.
-   * @param {object} params - `{message}`.
+   * @param {A2aParams} params - `{message}`.
    * @returns {Promise<void>} resolves when the stream ended.
    */
   async function handleStreaming(req, res, id, params) {
@@ -539,10 +694,10 @@ export function createServer({
   /**
    * `GetTask`: read one task by id.
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @param {string|number|null} id - request id.
-   * @param {object} params - `{id}` (also tolerates `taskId` and 0.3's `name`).
+   * @param {A2aParams} params - `{id}` (also tolerates `taskId` and 0.3's `name`).
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleGetTask(req, res, id, params) {
@@ -562,10 +717,10 @@ export function createServer({
   /**
    * `CancelTask`: cancel a task that has not settled.
    *
-   * @param {object} req - `node:http` request.
-   * @param {object} res - `node:http` response.
+   * @param {A2aRequest} req - `node:http` request.
+   * @param {A2aResponse} res - `node:http` response.
    * @param {string|number|null} id - request id.
-   * @param {object} params - `{id}`.
+   * @param {A2aParams} params - `{id}`.
    * @returns {Promise<void>} resolves when the response is written.
    */
   async function handleCancelTask(req, res, id, params) {
@@ -591,10 +746,8 @@ export function createServer({
    * the outcome to. A peer that disconnects mid-call can still `GetTask` the id
    * it guessed from a submission frame.
    *
-   * @param {object} input - admission inputs.
-   * @param {object} input.res - the HTTP response, for the disconnect signal.
-   * @param {object} input.params - JSON-RPC params.
-   * @returns {Promise<object>} `{task, skill, text, signal, timeout, cleanup}` or `{error}`.
+   * @param {A2aAdmitInput} input - admission inputs; the response carries the disconnect signal.
+   * @returns {Promise<A2aAdmission>} `{task, skill, text, signal, timeout, cleanup}` or `{error}`.
    */
   async function admit({ res, params }) {
     const message = params?.message;
@@ -637,10 +790,10 @@ export function createServer({
    * `res.writableEnded` tells us whether we had already answered.
    *
    * @param {object} input - cancellation inputs.
-   * @param {object} input.res - the response, for the disconnect signal.
+   * @param {A2aResponse} input.res - the response, for the disconnect signal.
    * @param {string} input.taskId - task being run.
    * @param {string} input.skillId - skill being run.
-   * @returns {{signal: AbortSignal, timeout: Promise<never>, cleanup: () => void}} cancellation handles.
+   * @returns {{signal: AbortSignal, timeout: Promise<any>, cleanup: () => void}} cancellation handles.
    */
   function openCancellation({ res, taskId, skillId }) {
     const controller = new AbortController();
@@ -688,7 +841,7 @@ export function createServer({
    *
    * @param {object} input - run inputs.
    * @param {object} input.task - task row.
-   * @param {object} input.skill - registry skill.
+   * @param {A2aSkill} input.skill - registry skill.
    * @param {string} input.skillId - resolved skill id.
    * @param {string} input.text - request text.
    * @param {object} input.message - the original 1.0 message.
@@ -817,7 +970,7 @@ export function createServer({
    * incident. The refusal names the reason (missing vs wrong credential) but
    * never echoes what was presented.
    *
-   * @param {object} req - `node:http` request.
+   * @param {A2aRequest} req - `node:http` request.
    * @returns {{ok: true} | {ok: false, reason: string}} the verdict.
    */
   function authenticate(req) {
@@ -857,7 +1010,7 @@ export function createServer({
  * lie about the header, and buffering whatever it sends is the whole attack this
  * check exists to stop.
  *
- * @param {object} req - `node:http` request.
+ * @param {A2aRequest} req - `node:http` request.
  * @param {number} limit - maximum bytes.
  * @returns {Promise<string>} the decoded body.
  * @throws {Error} with `code: 'body_too_large'` when the ceiling is exceeded.
@@ -872,7 +1025,7 @@ async function readBody(req, limit) {
   }
   const chunks = [];
   let total = 0;
-  for await (const chunk of req) {
+  for await (const chunk of /** @type {AsyncIterable<Buffer|string>} */ (req)) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buffer.length;
     if (total > limit) {
@@ -887,7 +1040,7 @@ async function readBody(req, limit) {
 
 /**
  * Write a JSON response, guarding against a double write when the peer left.
- * @param {object} res - `node:http` response.
+ * @param {A2aResponse} res - `node:http` response.
  * @param {number} status - HTTP status.
  * @param {object} payload - JSON body.
  * @param {object} [headers] - extra headers.
@@ -917,7 +1070,7 @@ function writeJson(res, status, payload, headers) {
  * `Authorization: Bearer` wins when both are present because it is the standard
  * one; a caller that sets both is usually a proxy adding a header.
  *
- * @param {object} req - `node:http` request.
+ * @param {A2aRequest} req - `node:http` request.
  * @returns {string} the credential, or `''`.
  */
 function presentedToken(req) {
@@ -949,7 +1102,7 @@ function firstHeader(value) {
 
 /**
  * Read the `A2A-Version` header, defaulting to the implied legacy version.
- * @param {object} req - `node:http` request.
+ * @param {A2aRequest} req - `node:http` request.
  * @returns {string} the version the caller speaks.
  */
 function versionOf(req) {
@@ -970,7 +1123,7 @@ function skillIdOf(message) {
 
 /**
  * Extract a task id from either the 1.0 (`id`) or legacy (`taskId`) spelling.
- * @param {object} params - JSON-RPC params.
+ * @param {A2aParams} params - JSON-RPC params.
  * @returns {string} the task id, or `''`.
  */
 function taskIdOf(params) {

@@ -125,7 +125,7 @@ function maskSecret(value) {
  * 造一个对端登记簿。
  *
  * @param {object} options - 依赖注入。
- * @param {string} options.home - 存放 `agents.json` 的目录（一般是 `<DSH_HOME>/a2a`）。
+ * @param {string} [options.home] - 存放 `agents.json` 的目录（一般是 `<DSH_HOME>/a2a`）。
  * @param {{warn?: Function, info?: Function, debug?: Function}} [options.logger] - 日志器。
  * @param {() => number} [options.clock] - 时钟注入（记录 `updatedAt` 用；单测可固定）。
  * @param {string} [options.fileName] - 覆盖文件名，单测用。

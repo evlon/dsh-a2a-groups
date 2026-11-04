@@ -37,6 +37,56 @@ const DEFAULT_INPUT_MODES = Object.freeze(['text/plain']);
 const DEFAULT_OUTPUT_MODES = Object.freeze(['text/plain']);
 
 /**
+ * The subset of a plugin config the card reads.
+ *
+ * Declared apart from the full §3 config because the card builder needs three
+ * facts only: whether streaming is served at all (it changes what the card
+ * promises), the public endpoint to advertise, and the agent identity strings.
+ * A wider type here would let the card quietly start depending on more config.
+ *
+ * @typedef {object} CardConfig
+ * @property {CardServerConfig} [server] - the server slice of the config.
+ */
+
+/**
+ * The server-config fields the card cares about.
+ *
+ * @typedef {object} CardServerConfig
+ * @property {string} [publicUrl] - fully qualified endpoint; empty means derive from origin.
+ * @property {boolean} [streaming] - whether SendStreamingMessage is served at all.
+ */
+
+/**
+ * One skill as the registry exposes it and the card publishes it.
+ *
+ * Note what is NOT here: the run function. The card is a public JSON document,
+ * so the callable body never travels with it — a peer names the skill id and the
+ * server dispatches. Listing it would either serialize as undefined or leak a
+ * function reference into a document that is served to anyone.
+ *
+ * @typedef {object} CardSkill
+ * @property {string} id - the value a caller puts in message.metadata.skill.
+ * @property {string} [name] - display name; falls back to the id.
+ * @property {string} [description]
+ * @property {string[]} [tags] - free-form grouping, for example a streaming marker.
+ * @property {string[]} [examples] - sample prompts, shown in a discovery UI.
+ * @property {string[]} [inputModes] - defaults to text/plain when absent.
+ * @property {string[]} [outputModes] - defaults to text/plain when absent.
+ */
+
+/**
+ * What the card builder accepts.
+ *
+ * @typedef {object} CardOptions
+ * @property {CardConfig} [config] - normalized plugin config.
+ * @property {{list: () => CardSkill[]}} [skills] - skill registry.
+ * @property {string} [url] - absolute endpoint URL, already ending in /a2a.
+ * @property {string} [name] - agent display name.
+ * @property {string} [description] - agent description.
+ * @property {string} [version] - plugin version.
+ * @property {object} [profile] - layer-B profile extension, or absent.
+ */
+/**
  * Resolve the public endpoint URL advertised in the card and its interfaces.
  *
  * Per §3 of the contract, `config.server.publicUrl` is the *fully qualified*
@@ -47,9 +97,7 @@ const DEFAULT_OUTPUT_MODES = Object.freeze(['text/plain']);
  * to a configured publicUrl would produce `/a2a/me/a2a`, so the two cases are
  * kept distinct rather than folded into one "base" concept.
  *
- * @param {object} input - resolution inputs.
- * @param {object} [input.config] - normalized plugin config.
- * @param {() => string|undefined} [input.origin] - origin provider, e.g. `webServer.getOrigin`.
+ * @param {{config?: CardConfig, origin?: () => string|undefined}} input - resolution inputs.
  * @returns {string} absolute endpoint URL without a trailing slash, or `''` when unknown.
  */
 export function resolveAgentUrl({ config, origin } = {}) {
@@ -74,7 +122,7 @@ export function resolveAgentUrl({ config, origin } = {}) {
  * public document, and shipping a function reference would serialize as
  * `undefined` in JSON and silently change the shape under test.
  *
- * @param {object} skill - registry skill `{id, name, description, examples, tags, inputModes, outputModes}`.
+ * @param {CardSkill} skill - registry skill.
  * @returns {object|undefined} the card entry, or `undefined` for a malformed skill.
  */
 export function buildSkillEntry(skill) {
@@ -107,14 +155,7 @@ export function buildSkillEntry(skill) {
  * groups it belongs to. It is derived at read time from memberships, so it can
  * never be stale — which is why it is a parameter here rather than stored state.
  *
- * @param {object} input - card inputs.
- * @param {object} input.config - normalized plugin config.
- * @param {{list: () => object[]}} [input.skills] - skill registry.
- * @param {string} input.url - absolute endpoint URL, i.e. already ending in `/a2a`.
- * @param {string} [input.name] - agent display name.
- * @param {string} [input.description] - agent description.
- * @param {string} [input.version] - plugin version.
- * @param {object} [input.profile] - layer B profile, from `buildProfile()`.
+ * @param {CardOptions} input - card inputs.
  * @returns {object} the card document, ready to serialize as JSON.
  */
 export function buildCard({ config, skills, url, name, description, version, profile } = {}) {

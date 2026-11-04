@@ -30,8 +30,8 @@ const PROBE_TIMEOUT_MS = 8000;
  * Check whether this instance is reachable through a gateway.
  *
  * @param {object} options - probe inputs.
- * @param {object} options.config - normalized plugin config.
- * @param {object} options.server - the server facade (for `info()`).
+ * @param {object} [options.config] - normalized plugin config.
+ * @param {object} [options.server] - the server facade (for `info()`).
  * @param {object} [options.fetchImpl] - fetch implementation, for tests.
  * @returns {Promise<object>} a report: `{ok, checks, hint}`.
  */

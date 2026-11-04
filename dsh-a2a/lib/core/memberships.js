@@ -65,10 +65,46 @@ function keyOf(sessionId, groupId) {
 }
 
 /**
+ * One membership record: what this instance knows about a Session in a group.
+ *
+ * Every field here is written by `upsert` and read by the panel, so this type is
+ * the ledger's contract rather than a description of one call site. `personKey`
+ * is the member credential and never leaves the process; the rest is either
+ * addresses for A2A calls or cached facts for a panel that cannot make them.
+ *
+ * @typedef {object} MembershipRecord
+ * @property {string} sessionId - the Session this membership belongs to.
+ * @property {string} groupId - the group, as its host named it.
+ * @property {string} [personId] - this person's id inside that group.
+ * @property {string} [personKey] - member credential; plaintext, never published.
+ * @property {string} [baseUrl] - host endpoint, for a remote group.
+ * @property {boolean} [local] - true when this instance hosts the group.
+ * @property {string} [groupName] - cached name, for a panel rendered offline.
+ * @property {string} [role] - `owner` or `member`, as the host reported it.
+ * @property {number} [lastSeq] - read watermark, for the unread count.
+ * @property {number} [touchedAt] - epoch ms of the last write.
+ * @property {object[]} [members] - cached roster, newest first.
+ * @property {number} [rosterCachedAt] - epoch ms the roster was cached.
+ * @property {object[]} [feed] - cached feed tail for a local group.
+ * @property {string} [groupTopic]
+ * @property {number} [memberCount]
+ * @property {number} [onlineCount]
+ * @property {number} [lastTime]
+ * @property {boolean} [isOwner]
+ */
+
+/**
+ * The filter `list()` accepts. Both fields are optional and combine.
+ *
+ * @typedef {object} MembershipFilter
+ * @property {string} [sessionId]
+ * @property {string} [groupId]
+ */
+/**
  * Build the ledger.
  *
  * @param {object} options - construction options.
- * @param {string} options.home - plugin home directory (`<DSH_HOME>/a2a`).
+ * @param {string} [options.home] - plugin home directory (`<DSH_HOME>/a2a`).
  * @param {object} [options.logger] - host logger.
  * @param {Function} [options.clock] - epoch-millisecond clock.
  * @returns {object} the ledger.
@@ -85,8 +121,8 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
    * Returned as copies: a caller must not be able to change a credential by
    * assigning to a field of a view it was handed.
    *
-   * @param {object} [filter] - `{sessionId}`, `{groupId}`, or both.
-   * @returns {object[]} matching records.
+   * @param {MembershipFilter} [filter] - one field, the other, or both.
+   * @returns {MembershipRecord[]} matching records.
    */
   function list(filter = {}) {
     const wantSession = typeof filter.sessionId === 'string' ? filter.sessionId : undefined;

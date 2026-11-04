@@ -25,6 +25,26 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname } from 'node:path';
 
 /**
+ * One task row as `TaskStore` keeps it.
+ *
+ * Declared as a typedef rather than left as `{object}` because the row is the
+ * store's own product: every field below is written by `create`/`update`/
+ * `attachArtifact` and read by `toWireTask`. Naming it is what lets a reader see
+ * the row's contract, and it is the difference between the type checker
+ * reporting "you read a field this store never sets" and reporting nothing.
+ *
+ * @typedef {object} TaskRow
+ * @property {string} id - `task-<uuid>`.
+ * @property {string} contextId - A2A conversation context.
+ * @property {string} state - internal state name (`submitted`, `working`, …).
+ * @property {string} [note] - one-line status text surfaced as `status.message`.
+ * @property {object[]} artifacts - 1.0 artifacts, appended in completion order.
+ * @property {object} [metadata] - caller metadata, echoed on the wire untouched.
+ * @property {number} createdAt - epoch ms.
+ * @property {number} updatedAt - epoch ms; also drives the TTL.
+ */
+
+/**
  * Protobuf enum names, as A2A 1.0 spells task states.
  *
  * Exposed as a frozen lookup so callers can compare against `TASK_STATES.DONE`
@@ -183,8 +203,8 @@ export function textOfMessage(message) {
  * Build a 1.0 message value.
  *
  * @param {object} input - message fields.
- * @param {'user'|'agent'} input.role - who authored it.
- * @param {string} input.text - text body.
+ * @param {'user'|'agent'} [input.role] - who authored it.
+ * @param {string} [input.text] - text body.
  * @param {string} [input.messageId] - stable id; generated when omitted.
  * @param {string} [input.contextId] - conversation context.
  * @param {object} [input.metadata] - opaque caller metadata.
@@ -207,7 +227,7 @@ export function makeMessage({ role = 'agent', text = '', messageId, contextId, m
  * @param {object} input - artifact fields.
  * @param {string} [input.artifactId] - stable id; generated when omitted.
  * @param {string} [input.name] - short display name, e.g. `reply`.
- * @param {string} input.text - artifact body.
+ * @param {string} [input.text] - artifact body.
  * @param {object[]} [input.parts] - pre-built parts; wins over `text` when given.
  * @returns {{artifactId: string, name: string, parts: object[]}} the artifact.
  */
@@ -228,9 +248,9 @@ export function makeArtifact({ artifactId, name = 'reply', text = '', parts } = 
  * a handler cannot forget it.
  *
  * @param {object} input - frame fields.
- * @param {string} input.taskId - task this frame belongs to.
+ * @param {string} [input.taskId] - task this frame belongs to.
  * @param {string} [input.contextId] - conversation context.
- * @param {string|undefined} input.state - internal state name or wire enum.
+ * @param {string|undefined} [input.state] - internal state name or wire enum.
  * @param {string} [input.note] - text surfaced as `status.message`.
  * @param {boolean} [input.final] - whether this frame ends the stream.
  * @param {number} [input.at] - epoch ms override, for deterministic tests.
@@ -248,9 +268,9 @@ export function statusUpdate({ taskId, contextId, state, note, final = false, at
  * Build one streaming `artifactUpdate` payload.
  *
  * @param {object} input - frame fields.
- * @param {string} input.taskId - task this frame belongs to.
+ * @param {string} [input.taskId] - task this frame belongs to.
  * @param {string} [input.contextId] - conversation context.
- * @param {object} input.artifact - artifact value from {@link makeArtifact}.
+ * @param {object} [input.artifact] - artifact value from {@link makeArtifact}.
  * @param {boolean} [input.append] - append to the previous chunk instead of replacing.
  * @param {boolean} [input.lastChunk] - whether this is the artifact's final chunk.
  * @returns {object} `{taskId, contextId?, artifact, append, lastChunk}`.
@@ -268,7 +288,7 @@ export function artifactUpdate({ taskId, contextId, artifact, append = false, la
  * timestamps with `Date.parse`, and an epoch number would read as year 1970 in
  * every A2A client that follows the schema.
  *
- * @param {object} task - a task row from {@link TaskStore}.
+ * @param {TaskRow} task - a task row from {@link TaskStore}.
  * @returns {object} `{id, contextId?, status, artifacts}`.
  */
 export function toWireTask(task) {

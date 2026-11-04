@@ -46,10 +46,23 @@ const IDLE_POLL_MS = 50;
 const SECRET_FIELDS = Object.freeze(['token', 'password', 'personKey', 'apiKey', 'secret', 'key']);
 
 /**
+ * What `deliver()` reports about how the target took the message.
+ *
+ * `injected` names the admit path that ran, which is also the diagnostic a
+ * caller needs: `followup` queued for the next turn, `steer` went into the
+ * running step, `inbox` was seated without waking anything, and `duplicate`
+ * means the message had already landed. `interrupted` is true only when a steer
+ * actually cut into a running turn.
+ *
+ * @typedef {object} DeliveryReceipt
+ * @property {'followup'|'steer'|'inbox'|'duplicate'} injected
+ * @property {boolean} interrupted
+ */
+/**
  * Build the deliverer.
  *
  * @param {object} options - deliverer options.
- * @param {object} options.ctx - Host context; `sessionController` is the only part used.
+ * @param {object} [options.ctx] - Host context; `sessionController` is the only part used.
  * @param {object} [options.logger] - logger with `info` / `warn` / `debug`.
  * @param {object} [options.config] - normalized config; `delivery.*` is read here.
  * @param {() => number} [options.clock] - epoch-ms source, for deterministic tests.
@@ -182,7 +195,7 @@ export function createDeliverer({ ctx, logger, config, clock } = {}) {
    * @param {'queue'|'steer'|'inbox'} [input.mode] - delivery mode.
    * @param {object} [input.source] - extra source fields recorded on the message.
    * @param {AbortSignal} [input.signal] - cancellation.
-   * @returns {Promise<{injected: 'followup'|'steer'|'inbox'|'duplicate', interrupted: boolean}>} how the target took it.
+   * @returns {Promise<DeliveryReceipt>} how the target took it.
    * @throws {Error} when the Session is unknown or the Host refuses the delivery.
    */
   async function deliver(input) {

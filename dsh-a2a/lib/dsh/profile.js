@@ -31,8 +31,8 @@ const HEADLINE_LIMIT = 3;
  * profile that did I/O would make discovery slow and failure-prone.
  *
  * @param {object} input - sources.
- * @param {object} input.identities - the membership ledger.
- * @param {object} input.store - the group store (for hosted groups' roles).
+ * @param {object} [input.identities] - the membership ledger.
+ * @param {object} [input.store] - the group store (for hosted groups' roles).
  * @param {object} [input.config] - normalized config, for explicit overrides.
  * @returns {{name: string|undefined, headline: string|undefined, groups: object[], tags: string[]}} the profile.
  */
