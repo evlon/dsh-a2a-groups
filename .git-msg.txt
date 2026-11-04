@@ -1,37 +1,44 @@
-fix(security): the panel no longer carries message bodies
+feat: the panel can write to the Host, over DSH's own Connection RPC
 
-`__DSH_A2A_GROUPS__` is injected into the index page's HTML, and it included the last eight feed
-entries WITH their text. Two consequences, both bad:
+The panel needed a write path that does not drag the user into a Session. It has one: a channel on DSH's
+Connection transport, called from the browser through `ctx.connection.rpc`.
 
-  1. **Content left the process.** Into HTML, which a proxy may cache, a screenshot may capture, and a
-     browser extension may read. A member is entitled to read their group; that is not the same as the
-     body being written into every page render.
-  2. **It crossed conversations.** The snapshot is global while groups are bound per Session, so one
-     conversation's messages appeared in another conversation's page. The binding only means something
-     if the data respects it.
+Verified end to end over HTTP with the documented envelope:
 
-WHAT THE CARD SHOWS NOW
+    POST /a2a-panel/ping
+    { "type": "client-request", "rpcId": "...", "method": "ping", "payload": { ... } }
 
-    李四 发来一条消息
-    3 人 · 2 条未读 · 1 分钟前
+    -> {"ok":true,"value":{"pong":true,"at":1793776928558}}
+    -> {"ok":false,"error":{"code":"not_found",...}}      for an unknown endpoint
 
-Which answers "should I open this?" — recency, unread count, and who is talking. The words are in the
-conversation, behind a deliberate `a2a_group_read` with a member credential.
+FOUR THINGS I HAD WRONG
 
-FOUR SHAPES, ONE RULE
+1. `ctx.connection.rpc.handle()` was the right call, but from the plugin's own fiber it hits the known
+   upstream bug (#8414): registration runs an effect on a fiber that lacks the declaration and throws
+   `cannot get property "webServer" without inject`. The discussion notes the ROOT context is unaffected;
+   registering through `ctx.root` works, and that is what this does.
 
-The panel accepts four summary formats because the snapshot has passed through several generations:
-`lastFromName`/`lastTime`, `lastPost`, `lastMessage`, and a raw `feed` tail. All four contribute an
-author and a time; **none contributes text**. Dropping the body at every door matters because a
-compatibility path that forwards it is the same leak in a place nobody audits — and it is how the
-current bug would have survived the first fix.
+2. The browser half is NOT `createWebConnectionRpc` — that name is internal. The module's real exports are
+   `{ RpcId, apply, inject, installConnection, transportError }`: it is a plugin, and what it publishes is
+   the `connection` service. The call is `ctx.connection.rpc.call(channel, endpoint, payload)`, the exact
+   mirror of the Host's `handle`.
 
-ONE RULE WORTH KEEPING
+3. `dsh.client.inject` is the module table, not a service list — a package can only `require` what it
+   declares there. Ours listed only `slots`, which is why the first attempt reported "module 未能加载".
 
-A timestamp alone is not a message. `lastPostAt` with no author means something happened, not that
-somebody spoke, and rendering 「有新消息」 for it invents a line the group never had. An author or a
-system marker is required; ordering reads `lastTime` separately, so nothing is lost.
+4. A raw POST is 405 because the transport carries a `ClientRequest` envelope, not a bare body.
 
-Verified: 422 tests. Four card tests were rewritten rather than repaired — they asserted that message
-text appears on the card, which was the behaviour being removed. They now assert that the summary names
-the author and that the body is absent.
+WHY THIS PATH RATHER THAN A CREDENTIAL IN THE PAGE
+
+The write happens in the Host process, where the ledger holding the member credential lives. The credential
+never leaves, there is no second authentication scheme, and Connection already authenticates the request. A
+panel carrying a member key would hand every group's credential to anything that can read the DOM.
+
+STILL TO DO
+
+The `profile` endpoint's handler is in place (it calls `groups.setProfile`, `groups.setPersonProfile`, or
+the remote `group/role`), and `saveProfile()` on the client posts to it. What is left is the form that uses
+it. The transport is no longer the blocker.
+
+The temporary self-check button has been removed now that it has done its job — it was a probe, and a probe
+that stays in the UI is clutter. Verified: 422 tests, and the HTTP probe above.

@@ -29,6 +29,14 @@
 
 import { readFileSync } from 'node:fs';
 
+/**
+ * The RPC channel the panel uses to write.
+ *
+ * A single absolute prefix, per `HostConnectionRpc.handle`. Endpoints live under it
+ * (`/a2a-panel/profile`), so one registration serves every panel write.
+ */
+const PANEL_RPC_CHANNEL = '/a2a-panel';
+
 import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './core/config.js';
 import { createServer } from './core/server.js';
 import { createBridge } from './core/bridge.js';
@@ -66,7 +74,7 @@ export const name = 'a2a';
  * called. Found the hard way: a real Host rejects the mount with "cannot get
  * property X without inject", while a plain test double silently allows it.
  */
-export const inject = ['webServer', 'sessionController', 'systemPrompt', 'tools'];
+export const inject = ['webServer', 'sessionController', 'systemPrompt', 'tools', 'connection'];
 
 /**
  * Mount A2A on one Host.
@@ -184,6 +192,83 @@ const PANEL_FEED_TAIL = 8;
   // Read on every index render, so a page refresh always sees the current groups
   // and a group created after boot appears without a restart. Pushing into an
   // open page is the panel's own 2s signature poll — one mechanism, not two.
+
+  /**
+   * Write one person's group-scoped self-description, on behalf of the panel.
+   *
+   * The panel cannot call a tool: it renders before any Session exists and holds no member credential.
+   * This runs in the Host process, where the ledger that holds that credential lives — so the write
+   * happens with the same authority a Session turn would have, without the credential ever leaving.
+   *
+   * Scope is deliberately narrow: the caller names ONE group and this writes only the profile of the
+   * person this instance already is in that group. There is no path here that names somebody else.
+   *
+   * @param {object} payload - `{ groupId, sessionId?, about?, tags?, headline?`.
+   * @returns {Promise<object>} a Connection result.
+   */
+  const setPanelProfile = async (payload) => {
+    const body = payload !== null && typeof payload === 'object' ? payload : {};
+    const groupId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
+    if (groupId === '') {
+      return { ok: false, error: { code: 'bad_argument', message: 'groupId is required', details: {} } };
+    }
+    // Which membership to act as. The panel sends the Session it belongs to; without one there is no
+    // honest answer, because a person can hold different credentials per Session.
+    const records = identities.list({ groupId });
+    const record = body.sessionId === undefined
+      ? records[0]
+      : records.find((entry) => entry.sessionId === body.sessionId) ?? records[0];
+    if (record === undefined) {
+      return {
+        ok: false,
+        error: { code: 'not_member', message: 'this instance is not in that group', details: { groupId } },
+      };
+    }
+    try {
+      if (record.local === true) {
+        groups.setProfile({
+          groupId,
+          member: { personId: record.personId, personKey: record.personKey },
+          about: body.about,
+          tags: body.tags,
+        });
+        // A group-independent headline, when the panel edits the personal profile.
+        if (body.headline !== undefined) {
+          groups.setPersonProfile({
+            groupId,
+            member: { personId: record.personId, personKey: record.personKey },
+            headline: body.headline,
+          });
+        }
+        await groups.flush();
+      } else {
+        // A remote group: the host that owns it holds the authority, so the write goes there.
+        await bridge.send(
+          {
+            baseUrl: record.baseUrl,
+            apiKey: record.apiKey ?? config.client.apiKey,
+            forwardProto: config.client.forwardProto,
+            protocolVersion: config.client.protocolVersion,
+          },
+          {
+            skill: 'group/role',
+            text: 'set role',
+            data: {
+              groupId,
+              personId: record.personId,
+              personKey: record.personKey,
+              about: body.about,
+              tags: body.tags,
+            },
+            timeoutMs: config.client.timeoutMs,
+          },
+        );
+      }
+      return { ok: true, value: { saved: true, groupId, at: clock() } };
+    } catch (error) {
+      return { ok: false, error: { code: 'write_failed', message: describe(error), details: { groupId } } };
+    }
+  };
 
   const publishGroups = () => {
     try {
@@ -338,6 +423,56 @@ const PANEL_FEED_TAIL = 8;
       return { updatedAt: clock(), groups: [], cards: [], unreadTotal: 0 };
     }
   };
+
+  // The panel's write path. Client → Host over DSH's own connection layer: same origin, authenticated by
+  // the connection transport, and no credential ever placed in the page.
+  //
+  // Registered defensively because the service is optional: a host without the Connection plugin has no
+  // panel, and that must not stop the A2A side from working.
+
+  try {
+    // The upstream bug (#8414): registration from a plugin fiber throws "cannot get property webServer
+    // without inject" because the registration effect runs on a fiber that lacks the declaration. The
+    // discussion notes the ROOT context registers fine, so try the plugin's root before giving up.
+    const rootCtx = ctx.root ?? (typeof ctx.get === "function" ? ctx.get("root") : undefined) ?? ctx;
+    const connection = (rootCtx.get ?? ctx.get)("connection");
+    if (connection === undefined || connection === null || typeof connection.rpc?.handle !== 'function') {
+      console.error("[a2a-panel] no connection.rpc available");
+    } else {
+      const disposePanelRpc = connection.rpc.handle(
+        PANEL_RPC_CHANNEL,
+        async (endpoint, payload) => {
+          // `endpoint` is channel-relative, per the Connection contract, so it arrives without the
+          // leading slash the channel itself has.
+          const name = String(endpoint ?? '').replace(/^\/+/, '');
+          try {
+            if (name === 'ping') {
+              return { ok: true, value: { pong: true, at: clock() } };
+            }
+            if (name === 'profile') {
+              return await setPanelProfile(payload);
+            }
+            // `details` is mandatory in ConnectionRpcFailure; omitting it yields a malformed response
+            // rather than a clean refusal.
+            return {
+              ok: false,
+              error: { code: 'not_found', message: 'unknown panel endpoint: ' + name, details: { endpoint: name } },
+            };
+          } catch (error) {
+            return {
+              ok: false,
+              error: { code: 'panel_failed', message: describe(error), details: {} },
+            };
+          }
+        },
+      );
+      if (typeof disposePanelRpc === "function") disposers.push(disposePanelRpc);
+      console.error("[a2a-panel] registered " + PANEL_RPC_CHANNEL);
+    }
+  } catch (error) {
+    // A probe that breaks the mount would be worse than no probe.
+    console.error("[a2a-panel] register failed: " + describe(error));
+  }
 
   try {
     const disposeInject = ctx.on('webserver/index-inject', (table) => {

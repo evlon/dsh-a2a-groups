@@ -1572,6 +1572,104 @@ window.__ModuleLoader__.load({
 		 * @param {string[]} [input.tags] - current tags.
 		 * @returns {string} text to insert into the composer.
 		 */
+		/**
+		 * Write a profile through the Host, over DSH's Connection RPC.
+		 *
+		 * Lazy and cached: the module is resolved on first save rather than at render, so a host without
+		 * the Connection plugin shows "saving is unavailable" instead of breaking the pane.
+		 *
+		 * @returns {object|undefined} the RPC client, or undefined when unavailable.
+		 */
+		/**
+		 * Caller into the Host, installed once by apply().
+		 *
+		 * The browser half of Connection publishes `ctx.connection.rpc`, and that is the same service object
+		 * the Host half registers channels on. Handing the call function down as a prop keeps this file free of
+		 * any service lookup at render time, which is where a pane must not throw.
+		 *
+		 * @type {((channel: string, endpoint: string, payload: unknown) => Promise<object>)|undefined}
+		 */
+		let panelRpcCaller;
+
+		/** Why the caller is unavailable, for the self-check to show instead of a silent failure. */
+		let panelRpcError = "";
+
+		/**
+		 * Install the Connection caller from the plugin's context.
+		 *
+		 * Called from apply(), where the service exists. Records the reason when it does not, because a panel
+		 * that says "unavailable" without saying why costs a debugging session per occurrence.
+		 *
+		 * @param {object} ctx - plugin context.
+		 */
+		function installPanelRpc(ctx) {
+			try {
+				const connection = ctx !== null && ctx !== undefined && typeof ctx.get === "function"
+					? ctx.get("connection")
+					: undefined;
+				if (connection !== undefined && connection !== null && connection.rpc !== undefined
+					&& typeof connection.rpc.call === "function") {
+					panelRpcCaller = function (channel, endpoint, payload) {
+						return connection.rpc.call(channel, endpoint, payload);
+					};
+					panelRpcError = "";
+					return;
+				}
+				panelRpcError = "connection service has no rpc.call";
+			} catch (error) {
+				panelRpcError = String((error && error.message) || error);
+			}
+		}
+
+		/**
+		 * Save one profile field through the Host.
+		 *
+		 * Resolves to `{ ok, message }` rather than throwing: the caller is a button handler, and a
+		 * rejected promise there would surface as silence.
+		 *
+		 * @param {object} input - `{ groupId, sessionId, about?, tags?, headline? }`.
+		 * @returns {Promise<{ok: boolean, message: string}>} the outcome, phrased for a person.
+		 */
+		async function saveProfile(input) {
+			if (panelRpcCaller === undefined) {
+				return { ok: false, message: "面板写入通道不可用（" + (panelRpcError === "" ? "未安装" : panelRpcError) + "）" };
+			}
+			try {
+				const result = await panelRpcCaller("/a2a-panel", "profile", input);
+				if (result !== null && result !== undefined && result.ok === true) {
+					return { ok: true, message: "已保存" };
+				}
+				const code = result && result.error ? result.error.code : "unknown";
+				return { ok: false, message: "保存失败：" + code };
+			} catch (error) {
+				return { ok: false, message: "保存失败：" + String((error && error.message) || error) };
+			}
+		}
+
+		/**
+		 * Call the Host's `ping` endpoint and report what came back.
+		 *
+		 * Uses the same client as `saveProfile`, on purpose: a probe that takes a different path proves
+		 * nothing about the path the feature will use.
+		 *
+		 * @returns {Promise<string>} a line to show in the pane.
+		 */
+		async function panelSelfCheck() {
+			if (panelRpcCaller === undefined) {
+				return "面板通道不可用：" + (panelRpcError === "" ? "未安装" : panelRpcError);
+			}
+			try {
+				const result = await panelRpcCaller("/a2a-panel", "ping", { at: Date.now() });
+				if (result !== null && result !== undefined && result.ok === true) {
+					const value = result.value ?? {};
+					return "面板通道正常（" + String(value.at ?? "?") + "）";
+				}
+				return "面板通道返回失败：" + String(result && result.error ? result.error.code : "?");
+			} catch (error) {
+				return "面板通道异常：" + String((error && error.message) || error);
+			}
+		}
+
 		function draftGroupRoleEdit(input) {
 			const given = input === null || input === undefined ? {} : input;
 			const groupName = pickString(given.groupName);
@@ -3204,7 +3302,11 @@ window.__ModuleLoader__.load({
 				reportUnavailable("sidebarRight lookup", error);
 			}
 
-			const slots = ctx === null || ctx === undefined ? undefined : ctx.slots;
+			// The Host-facing caller for panel writes. Installed here because `ctx.connection` exists at apply time,
+	// not at render time: the pane receives the call function as a prop rather than looking a service up.
+	installPanelRpc(ctx);
+
+	const slots = ctx === null || ctx === undefined ? undefined : ctx.slots;
 			if (slots === undefined || slots === null || typeof slots.inject !== "function" || typeof slots.register !== "function") {
 				reportUnavailable("slots service", undefined);
 				return;

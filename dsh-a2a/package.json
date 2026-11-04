@@ -61,7 +61,8 @@
     "client": {
       "platform": "web",
       "inject": [
-        "slots"
+        "slots",
+        "@deepseek-ai/dsh-client-connection/client"
       ]
     }
   },
