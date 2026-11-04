@@ -69,8 +69,29 @@ window.__ModuleLoader__.load({
 		 */
 		const MEMBERS_TAB_KEY = "a2a-members";
 
+		/** Kind of the right-column members page. Also its tab key. */
+		const MEMBERS_TAB_KIND = "a2a-members-page";
+
+		/**
+		 * Services the components reach for, captured in `apply(ctx)`.
+		 *
+		 * Components are rendered by the host rather than called by us, so they cannot take
+		 * the context as an argument. One module-level handle is the smallest way to let a
+		 * click handler ask the right column to open.
+		 */
+		const services = { sidebarRight: undefined, sidebarRightTabs: undefined };
+
 		/** Id of the members strip above the composer. */
 		const MEMBERS_DOCK_ID = "a2a-members";
+
+		/** The panel's tabs, in the order a person scans them. */
+		const PANEL_TABS = [
+			{ id: "all", label: "全部" },
+			{ id: "mine", label: "我创建" },
+			{ id: "joined", label: "我参与" },
+			{ id: "cards", label: "同事名片" }
+		];
+
 		//#endregion
 
 		//#region host bridge
@@ -342,6 +363,7 @@ window.__ModuleLoader__.load({
 		function readSnapshot(raw) {
 			const empty = {
 				groups: [],
+				cards: [],
 				updatedAt: 0,
 				unreadTotal: 0,
 				ok: false
@@ -358,6 +380,7 @@ window.__ModuleLoader__.load({
 				const updatedAt = raw !== null && typeof raw === "object" && !Array.isArray(raw) ? pickTime(firstDefined(raw, ["updatedAt", "time", "ts"])) : 0;
 				return {
 					groups: groups,
+					cards: readCards(raw),
 					updatedAt: updatedAt,
 					unreadTotal: unreadTotal,
 					ok: true
@@ -696,9 +719,23 @@ window.__ModuleLoader__.load({
 			}
 		}
 
-		function useLocalState() {
-			const [value, setValue] = react.useState(false);
-			return { value: value, set: setValue };
+		/**
+		 * Component-local state that survives re-renders.
+		 *
+		 * Deliberately unpersisted: the panel keeps its active tab and its tag filter here,
+		 * and neither should outlive the page. A remembered tag filter would silently hide
+		 * colleagues after a reload, which is worse than losing the filter.
+		 */
+		function useLocalState(initial) {
+			const [value, setValue] = react.useState(initial === undefined ? false : initial);
+			return {
+				value: value,
+				set: setValue,
+				/** The active tag filter, when this state holds a {tab, tag} pair. */
+				get tag() {
+					return value !== null && typeof value === "object" ? value.tag : "";
+				}
+			};
 		}
 		//#endregion
 
@@ -810,6 +847,39 @@ window.__ModuleLoader__.load({
 		 * because showing an owner control for a group somebody merely belongs to would offer
 		 * an action the server will refuse.
 		 */
+
+		/**
+		 * Colleague cards from the snapshot.
+		 *
+		 * A card is a person's own description aggregated across their groups: name,
+		 * headline, tags, and which groups they share with this instance. The Host
+		 * assembles it from what members declared, so nothing here invents identity — an
+		 * absent card means "not fetched" and the tab says so.
+		 */
+		function readCards(raw) {
+			const list = raw !== null && typeof raw === "object" && !Array.isArray(raw) && Array.isArray(raw.cards)
+				? raw.cards
+				: [];
+			const cards = [];
+			for (let i = 0; i < list.length; i += 1) {
+				const entry = list[i];
+				if (entry === null || typeof entry !== "object") continue;
+				const name = pickString(firstDefined(entry, [ "name", "displayName", "title" ]));
+				if (name === "") continue;
+				cards.push({
+					id: pickString(firstDefined(entry, [ "memberId", "id", "name" ])) || name,
+					name: name,
+					headline: pickString(firstDefined(entry, [ "headline", "role", "about" ])),
+					tags: (Array.isArray(entry.tags) ? entry.tags : []).filter(function (tag) {
+						return typeof tag === "string" && tag !== "";
+					}),
+					groups: Array.isArray(entry.groups) ? entry.groups : [],
+					online: entry.online === true
+				});
+			}
+			return cards;
+		}
+
 		function groupByRelationship(groups) {
 			const mine = [];
 			const joined = [];
@@ -830,6 +900,156 @@ window.__ModuleLoader__.load({
 			joined.sort(byActivity);
 			discover.sort(byActivity);
 			return { mine: mine, joined: joined, discover: discover };
+		}
+
+
+		/**
+		 * The panel's horizontal tab bar.
+		 *
+		 * Counts are shown on each tab because "我创建 (0)" is information: it says the
+		 * question is answerable, and the answer is none. A tab that vanished when empty
+		 * would leave a person wondering whether the feature existed.
+		 */
+		function TabBar(props) {
+			return h(
+				"div",
+				{
+					style: {
+						display: "flex",
+						gap: "2px",
+						borderBottom: "1px solid var(--dsh-color-border, #2a2f3a)",
+						paddingBottom: "0"
+					}
+				},
+				props.tabs.map(function (tab) {
+					const active = props.active === tab.id;
+					return h(
+						"button",
+						{
+							key: tab.id,
+							type: "button",
+							style: {
+								padding: "6px 10px",
+								border: "none",
+								borderBottom: active
+									? "2px solid var(--dsh-color-accent, #4c8dff)"
+									: "2px solid transparent",
+								background: "transparent",
+								color: "inherit",
+								font: "inherit",
+								fontSize: "12px",
+								fontWeight: active ? 600 : 400,
+								opacity: active ? 1 : 0.7,
+								cursor: "pointer"
+							},
+							onClick: function () {
+								props.onSelect(tab.id);
+							}
+						},
+						tab.label,
+						tab.count === undefined ? null : h("span", { style: { opacity: 0.6, marginLeft: "4px" } }, String(tab.count))
+					);
+				})
+			);
+		}
+
+		/**
+		 * One colleague's card, in the roster style rather than the group-card style.
+		 *
+		 * A card answers "who is this and what do they do", so it leads with the name and
+		 * the tags rather than with an unread count. Tags are clickable: filtering the
+		 * roster by "测试" is the whole point of having tags at all.
+		 */
+		function ColleagueCard(props) {
+			const card = props.card;
+			return h(
+				"div",
+				{
+					style: {
+						display: "flex",
+						flexDirection: "column",
+						gap: "3px",
+						padding: "8px 10px",
+						border: "1px solid var(--dsh-color-border, #2a2f3a)",
+						borderRadius: "6px"
+					}
+				},
+				h(
+					"div",
+					{ style: { display: "flex", alignItems: "baseline", gap: "6px" } },
+					h("span", { style: { fontWeight: 600, fontSize: "13px" } }, card.name),
+					card.headline !== ""
+						? h("span", { style: { fontSize: "11px", opacity: 0.7 } }, card.headline)
+						: null
+				),
+				card.tags.length === 0
+					? null
+					: h(
+							"div",
+							{ style: { display: "flex", flexWrap: "wrap", gap: "3px" } },
+							card.tags.map(function (tag) {
+								return h(
+									"button",
+									{
+										key: tag,
+										type: "button",
+										title: "只看标签「" + tag + "」的同事",
+										style: {
+											padding: "1px 7px",
+											border: "1px solid var(--dsh-color-border, #444)",
+											borderRadius: "999px",
+											background: "transparent",
+											color: "inherit",
+											font: "inherit",
+											fontSize: "11px",
+											cursor: "pointer",
+											opacity: 0.85
+										},
+										onClick: function () {
+											props.onPickTag(tag);
+										}
+									},
+									tag
+								);
+							})
+						),
+				card.groups.length === 0
+					? null
+					: h("span", { style: { fontSize: "11px", opacity: 0.6 } }, "在 " + String(card.groups.length) + " 个群")
+			);
+		}
+
+		/** A tag chip row: "all" plus every tag present in the roster. */
+		function TagFilter(props) {
+			return h(
+				"div",
+				{ style: { display: "flex", flexWrap: "wrap", gap: "4px" } },
+				[ "全部" ].concat(props.tags).map(function (tag, index) {
+					const value = index === 0 ? "" : tag;
+					const active = props.active === value;
+					return h(
+						"button",
+						{
+							key: tag,
+							type: "button",
+							style: {
+								padding: "2px 8px",
+								border: "1px solid var(--dsh-color-border, #444)",
+								borderRadius: "999px",
+								background: active ? "var(--dsh-color-accent, #4c8dff)" : "transparent",
+								color: active ? "#fff" : "inherit",
+								font: "inherit",
+								fontSize: "11px",
+								cursor: "pointer"
+							},
+							onClick: function () {
+								props.onSelect(value);
+							}
+						},
+						tag
+					);
+				})
+			);
 		}
 
 		/**
@@ -877,7 +1097,7 @@ window.__ModuleLoader__.load({
 			const snapshot = useSnapshot();
 			// Local collapse state: a per-Session preference would need to persist, and a
 			// strip that resets to collapsed on reload is the conservative default.
-			const local = useLocalState();
+			const local = useLocalState(false);
 			const collapsed = local.value !== true;
 			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
 
@@ -1164,39 +1384,180 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+
+		/**
+		 * Composer button that opens the members column.
+		 *
+		 * Lives in `conversation.input.left` beside the other small controls rather than in
+		 * the global sidebar: the column shows THIS conversation's group, so a global
+		 * destination for it would be a lie about its scope.
+		 */
+		function MembersButton() {
+			const snapshot = useSnapshot();
+			// Which group this conversation is in decides the count on the button, and
+			// whether the button is worth showing at all.
+			const joined = snapshot.groups.filter(function (group) {
+				return group.discovered !== true;
+			});
+			if (joined.length === 0) return null;
+			joined.sort(function (left, right) {
+				return (right.lastTime || 0) - (left.lastTime || 0);
+			});
+			const group = joined[0];
+
+			function openColumn() {
+				try {
+					// Record what happened on the window so a missing service is diagnosable
+					// from the page instead of looking like a dead button. Cheap, and the only
+					// way to see the difference between "no service" and "service refused".
+					window.__dsh_a2a_open = {
+						hasService: services.sidebarRight !== undefined,
+						hasTabs: services.sidebarRightTabs !== undefined,
+						kind: MEMBERS_TAB_KIND
+					};
+					const right = services.sidebarRight;
+					if (right === undefined || typeof right.openTab !== "function") {
+						window.__dsh_a2a_open.error = "sidebarRight.openTab unavailable";
+						reportUnavailable("sidebarRight.openTab", undefined);
+						return;
+					}
+					right.openTab(MEMBERS_TAB_KIND);
+					window.__dsh_a2a_open.opened = true;
+				} catch (error) {
+					window.__dsh_a2a_open.error = String(error && error.message ? error.message : error);
+					reportUnavailable("sidebarRight.openTab", error);
+				}
+			}
+
+			return h(
+				"button",
+				{
+					type: "button",
+					title: "展开「" + group.name + "」的群成员，点人即可 @ 对方",
+					style: {
+						display: "inline-flex",
+						alignItems: "center",
+						gap: "4px",
+						padding: "2px 8px",
+						border: "1px solid var(--dsh-color-border, #444)",
+						borderRadius: "999px",
+						background: "transparent",
+						color: "inherit",
+						font: "inherit",
+						fontSize: "12px",
+						cursor: "pointer"
+					},
+					onClick: openColumn
+				},
+				"群成员",
+				group.memberCount > 0 ? h("span", { style: { opacity: 0.7 } }, String(group.memberCount)) : null
+			);
+		}
+
 		function GroupsPanel() {
 			const snapshot = useSnapshot();
 			const [expanded, toggle] = useExpanded();
+			// One state object for the pair: switching tabs clears the tag filter, which is
+			// what a person expects when they change the question they are asking.
+			const local = useLocalState({ tab: "all", tag: "" });
+			const state = local.value !== null && typeof local.value === "object"
+				? local.value
+				: { tab: "all", tag: "" };
+			const tab = typeof state.tab === "string" ? state.tab : "all";
+			const cards = typeof state.tag === "string" ? state.tag : "";
 
 			const sections = groupByRelationship(snapshot.groups);
-			const total = snapshot.groups.length;
-			const body =
-				total === 0
-					? h(EmptyState, null)
-					: h(
-							"div",
-							{ style: { display: "flex", flexDirection: "column", gap: "14px" } },
-							h(GroupSection, {
-								title: "我创建的",
-								hint: "可审批、可发邀请",
-								groups: sections.mine,
-								expanded: expanded,
-								onToggle: toggle
-							}),
-							h(GroupSection, {
-								title: "我参加的",
-								groups: sections.joined,
-								expanded: expanded,
-								onToggle: toggle
-							}),
-							h(GroupSection, {
-								title: "可加入",
-								hint: "宿主上的公开群",
-								groups: sections.discover,
-								expanded: expanded,
-								onToggle: toggle
-							})
-						);
+			const counts = {
+				all: snapshot.groups.length,
+				mine: sections.mine.length,
+				joined: sections.joined.length,
+				cards: snapshot.cards.length
+			};
+
+			/** The group rows for the active tab; empty on the cards tab. */
+			const activeGroups =
+				tab === "mine"
+					? sections.mine
+					: tab === "joined"
+						? sections.joined
+						: tab === "cards"
+							? []
+							: snapshot.groups;
+
+			/** Every tag present across the roster, so the filter offers real choices only. */
+			const allTags = [];
+			for (const card of snapshot.cards) {
+				for (const tag of card.tags) if (allTags.indexOf(tag) < 0) allTags.push(tag);
+			}
+			allTags.sort();
+
+			const visibleCards = cards === ""
+				? snapshot.cards
+				: snapshot.cards.filter(function (card) {
+					return card.tags.indexOf(cards) > -1;
+				});
+
+			const groupBody = activeGroups.length === 0
+				? h(
+						"p",
+						{ style: S.emptyBody },
+						tab === "mine"
+							? "还没有创建过协作群。在会话里说「建个群叫 xxx」即可。"
+							: tab === "joined"
+								? "这个会话还没有加入协作群。在「全部」里找一个申请加入，或向同事要邀请链接。"
+								: "还没有任何协作群。"
+					)
+				: h(
+						"div",
+						{ style: { display: "flex", flexDirection: "column", gap: "8px" } },
+						activeGroups.map(function (group) {
+							return h(GroupCard, {
+								key: group.id,
+								group: group,
+								open: expanded[group.id] === true,
+								onToggle: function () {
+									toggle(group.id);
+								}
+							});
+						})
+					);
+
+			const cardsBody = snapshot.cards.length === 0
+				? h(
+						"p",
+						{ style: S.emptyBody },
+						"还没有同事名片。名片由各人在群里声明的角色汇总而成——在会话里让助手查一次群成员即可。"
+					)
+				: h(
+						"div",
+						{ style: { display: "flex", flexDirection: "column", gap: "10px" } },
+						h(TagFilter, {
+							tags: allTags,
+							active: cards,
+							onSelect: function (value) {
+								local.set({ tab: tab, tag: value });
+							}
+						}),
+						visibleCards.length === 0
+							? h("p", { style: S.emptyBody }, "没有标签为「" + cards + "」的同事。")
+							: h(
+									"div",
+									{ style: { display: "flex", flexDirection: "column", gap: "6px" } },
+									visibleCards.map(function (card) {
+										return h(ColleagueCard, {
+											key: card.id,
+											card: card,
+											onPickTag: function (tag) {
+												local.set({ tab: "cards", tag: tag });
+											}
+										});
+									})
+								)
+					);
+
+			const tabs = PANEL_TABS.map(function (def) {
+				return { id: def.id, label: def.label, count: counts[def.id] };
+			});
 
 			return h(
 				"div",
@@ -1205,11 +1566,19 @@ window.__ModuleLoader__.load({
 					"div",
 					{ style: S.header },
 					h("h2", { style: S.title }, "协作群"),
-					h("span", { style: S.hint }, snapshot.ok ? String(snapshot.groups.length) + " 个群" : "数据源未就绪"),
-					snapshot.unreadTotal > 0 ? h("span", { style: S.badge }, String(snapshot.unreadTotal) + " 条未读") : null,
+					snapshot.unreadTotal > 0
+						? h("span", { style: S.badge }, String(snapshot.unreadTotal) + " 条未读")
+						: null,
 					h("span", { style: S.hint }, "只读")
 				),
-				body
+				h(TabBar, {
+					tabs: tabs,
+					active: tab,
+					onSelect: function (id) {
+						local.set({ tab: id, tag: "" });
+					}
+				}),
+				tab === "cards" ? cardsBody : groupBody
 			);
 		}
 
@@ -1264,7 +1633,14 @@ window.__ModuleLoader__.load({
 		 * else (locale, layout) is read opportunistically through `ctx.get(...)`
 		 * so a version skew silently degrades instead of parking the fiber.
 		 */
-		const inject = ["slots"];
+		// `sidebarRight` and `sidebarRightTabs` are OPTIONAL services: declaring them makes
+		// the right-column controller and its tab registry reachable, and Cordis keeps the
+		// plugin running on a Host that does not provide them (which is why every use site
+		// still checks for undefined).
+		//
+		// Without them in this list, `ctx.get("sidebarRight")` returns undefined: the
+		// service exists, but this plugin never declared it, so the proxy guard refuses.
+		const inject = ["slots", "sidebarRight", "sidebarRightTabs"];
 
 		/** Registration failures are reported once, never thrown into the shell. */
 		let reported = false;
@@ -1287,6 +1663,17 @@ window.__ModuleLoader__.load({
 		 * @param ctx - browser fiber context; only `slots` is assumed present.
 		 */
 		function apply(ctx) {
+			// Optional services: absent on a Host without the sidebar-right package, and a
+			// missing one must cost the column, not the whole plugin.
+			try {
+				if (ctx !== null && ctx !== undefined && typeof ctx.get === "function") {
+					services.sidebarRight = ctx.get("sidebarRight");
+					services.sidebarRightTabs = ctx.get("sidebarRightTabs");
+				}
+			} catch (error) {
+				reportUnavailable("sidebarRight lookup", error);
+			}
+
 			const slots = ctx === null || ctx === undefined ? undefined : ctx.slots;
 			if (slots === undefined || slots === null || typeof slots.inject !== "function" || typeof slots.register !== "function") {
 				reportUnavailable("slots service", undefined);
@@ -1372,6 +1759,73 @@ window.__ModuleLoader__.load({
 				}
 			};
 
+			/**
+			 * Declare the members page type.
+			 *
+			 * `priority: "extension"` because this type comes from outside the product: it
+			 * outranks shipped viewers and may take over a builtin kind, which is the right
+			 * posture for a page only this plugin can draw. `patterns` is omitted because a
+			 * page type is opened by kind and recognizes no address.
+			 */
+			const membersTabType = () => {
+				try {
+					const tabs = services.sidebarRightTabs;
+					if (tabs === undefined || tabs === null || typeof tabs.register !== "function") return undefined;
+					return tabs.register({
+						id: MEMBERS_TAB_KIND,
+						kind: MEMBERS_TAB_KIND,
+						priority: "extension",
+						title: function () {
+							return "群成员";
+						}
+					});
+				} catch (error) {
+					reportUnavailable("sidebarRightTabs.register", error);
+					return undefined;
+				}
+			};
+
+			/** Register the members page body under the tab definition id. */
+			const membersTabBody = () => {
+				try {
+					return slots.register(
+						{ name: "sidebar.right.pane.tab", key: MEMBERS_TAB_KIND },
+						MembersPane
+					);
+				} catch (error) {
+					reportUnavailable("sidebar.right.pane.tab register", error);
+					return undefined;
+				}
+			};
+
+			/** Register the tab chip text; a body without one renders as blank chrome. */
+			const membersTabChip = () => {
+				try {
+					return slots.register(
+						{ name: "sidebar.right.pane.tab.title", key: MEMBERS_TAB_KIND },
+						function MembersTabChip() {
+							return h("span", { style: { fontSize: "12px" } }, "群成员");
+						}
+					);
+				} catch (error) {
+					reportUnavailable("sidebar.right.pane.tab.title register", error);
+					return undefined;
+				}
+			};
+
+			/** The opener, in the composer tool row. */
+			const membersButtonSlot = () => {
+				try {
+					return slots.register(
+						{ name: "conversation.input.left", id: MEMBERS_TAB_KIND, order: 40 },
+						MembersButton
+					);
+				} catch (error) {
+					reportUnavailable("conversation.input.left register", error);
+					return undefined;
+				}
+			};
+
 			const sidebarRow = () => {
 				try {
 					return slots.register(
@@ -1410,6 +1864,28 @@ window.__ModuleLoader__.load({
 			} catch (error) {
 				reportUnavailable("conversation.input.dock inject", error);
 			}
+
+			// The right-hand members column. All four pieces are needed for it to appear:
+			// the type so openTab has a kind, the body and chip so the seat can draw it, and
+			// the button so a person can ask for it.
+			try {
+				slots.inject("sidebar.right.pane.tab", membersTabBody);
+			} catch (error) {
+				reportUnavailable("sidebar.right.pane.tab inject", error);
+			}
+			try {
+				slots.inject("sidebar.right.pane.tab.title", membersTabChip);
+			} catch (error) {
+				reportUnavailable("sidebar.right.pane.tab.title inject", error);
+			}
+			try {
+				slots.inject("conversation.input.left", membersButtonSlot);
+			} catch (error) {
+				reportUnavailable("conversation.input.left inject", error);
+			}
+			// The type registration is not a slot and needs no inject: it is live as soon as
+			// it is registered, and it must exist before the first click.
+			membersTabType();
 		}
 		//#endregion
 
@@ -1428,6 +1904,8 @@ window.__ModuleLoader__.load({
 		exports.GroupCard = GroupCard;
 		exports.EmptyState = EmptyState;
 		exports.MembersPane = MembersPane;
+		exports.MembersButton = MembersButton;
+		exports.MEMBERS_TAB_KIND = MEMBERS_TAB_KIND;
 		exports.MembersDock = MembersDock;
 		exports.MEMBERS_DOCK_ID = MEMBERS_DOCK_ID;
 		exports.MEMBERS_TAB_KEY = MEMBERS_TAB_KEY;

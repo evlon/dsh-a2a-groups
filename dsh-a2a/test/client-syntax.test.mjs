@@ -170,6 +170,25 @@ function createFakeSlots(options = {}) {
 		},
 	};
 }
+
+/**
+ * A stand-in for `sidebarRightTabs`.
+ *
+ * Only `register` is modelled, because that is the one method the plugin calls: the tab
+ * TYPE has to exist before `openTab(kind)` will accept the kind, so the registration is
+ * the part worth asserting on.
+ */
+function createFakeTabs(options = {}) {
+	const registered = [];
+	return {
+		registered,
+		register(definition) {
+			if (options.throwOnRegister === true) throw new Error("tab register exploded");
+			registered.push(definition);
+			return () => undefined;
+		},
+	};
+}
 //#endregion
 
 test("bundle registers itself under the id the contract requires", () => {
@@ -234,7 +253,10 @@ test("factory only requires modules from the shell seed table", () => {
 test("factory exports the plugin surface", () => {
 	const exportsObject = loadBundle().materialize();
 	assert.equal(typeof exportsObject.apply, "function");
-	assert.deepEqual([...exportsObject.inject], ["slots"]);
+	// `sidebarRight` and `sidebarRightTabs` are declared so the members column can be
+	// opened; both are optional services, so Cordis keeps the plugin alive on a Host that
+	// does not provide them.
+	assert.deepEqual([...exportsObject.inject], ["slots", "sidebarRight", "sidebarRightTabs"]);
 	for (const name of ["setDataSource", "readSnapshot", "currentSnapshot", "subscribeGroups", "formatTime"]) {
 		assert.equal(typeof exportsObject[name], "function", `${name} must be exported`);
 	}
@@ -246,13 +268,21 @@ test("factory exports the plugin surface", () => {
 	assert.ok(exportsObject.GLOBAL_KEY.startsWith("__") && exportsObject.GLOBAL_KEY.endsWith("__"));
 });
 
-test("apply registers the sidebar row, the main panel, and the members strip", () => {
+test("apply registers the panel, the members strip, and the right-column members page", () => {
 	const exportsObject = loadBundle().materialize();
 	const slots = createFakeSlots();
-	exportsObject.apply({ slots });
+	const tabs = createFakeTabs();
+	exportsObject.apply({ slots, get: (key) => (key === "sidebarRightTabs" ? tabs : undefined) });
 
-	assert.deepEqual(slots.injected, ["sidebar.panellist", "main", "conversation.input.dock"]);
-	assert.equal(slots.registered.length, 3);
+	assert.deepEqual(slots.injected, [
+		"sidebar.panellist",
+		"main",
+		"conversation.input.dock",
+		"sidebar.right.pane.tab",
+		"sidebar.right.pane.tab.title",
+		"conversation.input.left",
+	]);
+	assert.equal(slots.registered.length, 6);
 
 	const sidebar = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.panellist");
 	const main = slots.registered.find((entry) => entry.slotOptions.name === "main");
@@ -266,21 +296,37 @@ test("apply registers the sidebar row, the main panel, and the members strip", (
 	assert.equal(typeof sidebar.component, "function");
 	assert.equal(typeof main.component, "function");
 
-	// The members strip goes in the composer dock: that slot renders whenever a Session is
-	// open, whereas `sidebar.right.pane.tab` is dispatched by tab kind and stays inert
-	// unless the host opens a tab this plugin does not own.
+	// A collapsed one-line strip in the composer dock: it renders with any open Session.
 	const dock = slots.registered.find((entry) => entry.slotOptions.name === "conversation.input.dock");
 	assert.ok(dock !== undefined, "the members strip must be registered");
 	assert.equal(dock.slotOptions.id, exportsObject.MEMBERS_DOCK_ID);
 	assert.equal(typeof dock.component, "function");
 
-	// It must NOT claim the right-column slot: an inert registration there looks like a
-	// working feature in config and does nothing on screen.
-	assert.equal(
-		slots.registered.some((entry) => entry.slotOptions.name === "sidebar.right.pane.tab"),
-		false,
-		"the right-column slot is dispatched by tab kind and would never render",
-	);
+	// The right column: a tab TYPE must be declared before `openTab(kind)` works, because
+	// the registry throws for a kind nothing registered. The body and chip are keyed by the
+	// definition id, which is what the seat looks them up by.
+	assert.equal(tabs.registered.length, 1, "exactly one tab type is declared");
+	const definition = tabs.registered[0];
+	assert.equal(definition.id, exportsObject.MEMBERS_TAB_KIND);
+	assert.equal(definition.kind, exportsObject.MEMBERS_TAB_KIND);
+	assert.equal(definition.priority, "extension", "an out-of-product type must outrank shipped viewers");
+	assert.equal(typeof definition.title, "function");
+	assert.equal(definition.title(), "群成员");
+	assert.equal(definition.patterns, undefined, "a page type is opened by kind, not by address");
+
+	const body = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.right.pane.tab");
+	const chip = slots.registered.find((entry) => entry.slotOptions.name === "sidebar.right.pane.tab.title");
+	assert.ok(body !== undefined, "the members page body must be registered");
+	assert.ok(chip !== undefined, "the tab needs a chip, or it renders as blank chrome");
+	assert.equal(body.slotOptions.key, exportsObject.MEMBERS_TAB_KIND);
+	assert.equal(chip.slotOptions.key, exportsObject.MEMBERS_TAB_KIND);
+
+	// The opener, in the composer tool row rather than the global sidebar: the column shows
+	// THIS conversation's group.
+	const button = slots.registered.find((entry) => entry.slotOptions.name === "conversation.input.left");
+	assert.ok(button !== undefined, "the opener button must be registered");
+	assert.equal(button.slotOptions.id, exportsObject.MEMBERS_TAB_KIND);
+	assert.equal(typeof button.component, "function");
 });
 
 test("apply survives a broken or absent slots service", () => {
@@ -298,12 +344,14 @@ test("apply survives a broken or absent slots service", () => {
 	});
 });
 
-test("no data renders 还没有加入任何群 instead of throwing", () => {
+test("no data renders the empty tab state instead of throwing", () => {
 	const { harness, exports: exportsObject } = bundleWith();
 	assert.equal(harness.window[exportsObject.GLOBAL_KEY], undefined, "nothing injected yet");
 
 	const text = textOf(exportsObject.GroupsPanel({}));
-	assert.ok(text.includes("还没有加入任何群"), `empty state text missing, got: ${text}`);
+	// The panel now shows tabs; with nothing to show the 全部 tab states that plainly.
+	assert.ok(text.includes("还没有任何协作群"), `empty state text missing, got: ${text}`);
+	assert.ok(text.includes("全部"), "the tab bar must render even with no data");
 
 	// The mount-time effect (subscription + polling) must also be safe.
 	assert.ok(harness.effects.length > 0, "panel must subscribe on mount");
@@ -344,7 +392,7 @@ test("garbage data never throws and degrades to an empty snapshot", () => {
 test("an injected empty array still renders the empty state", () => {
 	const { exports: exportsObject } = bundleWith([]);
 	const text = textOf(exportsObject.GroupsPanel({}));
-	assert.ok(text.includes("还没有加入任何群"), `expected empty state, got: ${text}`);
+	assert.ok(text.includes("还没有任何协作群"), `expected empty state, got: ${text}`);
 });
 
 test("real data renders name, member count, unread badge and last message", () => {
@@ -412,7 +460,7 @@ test("sidebar row renders and tolerates missing props", () => {
 
 test("a Host data source overrides the global and is preferred", () => {
 	const { exports: exportsObject } = bundleWith([]);
-	assert.ok(textOf(exportsObject.GroupsPanel({})).includes("还没有加入任何群"));
+	assert.ok(textOf(exportsObject.GroupsPanel({})).includes("还没有任何协作群"));
 
 	exportsObject.setDataSource({
 		read: () => ({ groups: [{ id: "g-3", name: "来自 remote 的群", unreadCount: 1 }] }),
@@ -420,7 +468,7 @@ test("a Host data source overrides the global and is preferred", () => {
 	assert.ok(textOf(exportsObject.GroupsPanel({})).includes("来自 remote 的群"), "data source ignored");
 
 	exportsObject.setDataSource(null);
-	assert.ok(textOf(exportsObject.GroupsPanel({})).includes("还没有加入任何群"), "clearing the source restores the empty state");
+	assert.ok(textOf(exportsObject.GroupsPanel({})).includes("还没有任何协作群"), "clearing the source restores the empty state");
 
 	// A bare reader function is accepted too.
 	exportsObject.setDataSource(() => [{ id: "g-4", name: "函数式数据源" }]);
