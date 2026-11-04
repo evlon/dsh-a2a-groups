@@ -1,26 +1,32 @@
-feat: remove, rename, archive — the three things running a group needs
+feat: a removed member finds out, because their local record goes
 
-A group could be created and joined but never maintained. The only remedy for a wrong name
-was to create a new group and lose its history, which nobody would do, so groups kept wrong
-names; and the only way to deal with a person who should no longer be there was to abandon
-the group.
+`group/remove` disturbed nothing on the removed person's machine. Their memberships.json
+kept the record, so their panel kept listing the group, their unread count kept growing from
+nothing, and every action failed with `not_member` — a code they never saw. From their side
+the feature looked broken rather than their access having ended.
 
-The three share one shape — owner credential, one mutation, one system entry — so they got
-one security review rather than three passes at the same question.
+The runtime now notices the two codes that mean "your membership is gone" and deletes the
+local record:
 
-`remove` keeps the target's messages. Deleting them would rewrite the conversation: a
-reader would see people answering somebody who never spoke. A system line records the
-removal because the remaining members will notice the absence, and silence in a group about
-people is how rumours start. The owner cannot remove themselves — that is `leave`, which
-transfers ownership, and mixing the two would leave a group owned by someone not in it.
+    not_member      the credential is no longer valid for the group
+    unknown_group   the group is gone, or the cache points at a host that lacks it
 
-`rename` covers name and topic. Empty topic clears it; a no-op rename reports "nothing
-changed" and writes no feed entry, because a maintenance action must not add noise.
+Centralised in `call()` rather than per handler: the alternative is the same eight lines in
+twenty places, and one of them gets forgotten. The error keeps its code and gains
+`membershipDropped`, so a caller can tell "you were removed" from "that call failed".
 
-`archive` is readable-but-not-writable and absent from the directory. Deliberately not a
-delete: a finished project's conversation is worth keeping, and reopening a misclick must
-be possible. Reads stay allowed because the first reason to archive is "we are done" and
-the second is "what did we decide".
+Two deliberate narrowings:
 
-Verification: 337 tests (16 new), and end to end on a real host over A2A — removed member
-gets not_member, archived group gets group_archived, history survives both.
+- it removes exactly one (groupId, sessionId) pair. A failure on one group says nothing
+  about the others, and a broader sweep would turn one stale credential into a wiped ledger.
+- it reaps only on those two codes. A network blip or a rate limit says nothing about
+  membership, and dropping a valid membership over one bad afternoon is worse than the
+  confusion being fixed.
+
+I considered keeping a "recent departures" ring so the panel could say "you were removed
+from X", and dropped it: the panel renders from the injected snapshot, so a cleaned record
+already removes the group, which is what happened. The extra field would be one more thing
+to keep correct for one line of text.
+
+Verification: 345 tests (8 new), and end to end with a real ledger — only the failing group
+is dropped, the other membership is untouched.

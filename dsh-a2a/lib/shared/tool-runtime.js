@@ -972,6 +972,50 @@ function requireSession(sessionId, tool) {
   };
 
   /**
+   * Drop the local membership when the host says the credential is dead.
+   *
+   * A removed member has no way to find out otherwise: nothing pushes to them, their panel
+   * keeps listing the group, and every action fails with a code they never see. Deleting the
+   * record is what turns an invisible revocation into a visible one — the group disappears
+   * from their panel, which is exactly what happened.
+   *
+   * Scoped to one (groupId, sessionId) pair. A failure on one group says nothing about the
+   * others, and a broader sweep would turn one stale credential into a wiped ledger.
+   *
+   * @param {Error} error - the failure from the handler.
+   * @param {object} args - the tool arguments, for the group id.
+   * @param {object} caller - `{ sessionId }`.
+   * @returns {boolean} whether a record was removed.
+   */
+  function reapStaleMembership(error, args, caller) {
+    const code = typeof error?.code === 'string' ? error.code : '';
+    // `not_member` is the host saying "this credential is not one of mine".
+    // `unknown_group` covers a group that was deleted, or a cache pointing at a host that
+    // no longer has it.
+    if (code !== 'not_member' && code !== 'unknown_group') return false;
+    const groupId = typeof args?.groupId === 'string' ? args.groupId : '';
+    const sessionId = typeof caller?.sessionId === 'string' ? caller.sessionId : '';
+    if (groupId === '' || sessionId === '') return false;
+    if (identities === undefined || identities === null || typeof identities.remove !== 'function') return false;
+    try {
+      const removed = identities.remove({ groupId, sessionId });
+      if (removed > 0) {
+        // flush() is fire-and-forget: the in-memory ledger is already correct, and making a
+        // failed disk write turn a clear error into a different one would help nobody.
+        if (typeof identities.flush === 'function') {
+          Promise.resolve(identities.flush()).catch(() => {});
+        }
+        logger?.info?.(
+          `a2a: dropped the local membership for ${groupId} after the host answered ${code}`,
+        );
+      }
+      return removed > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Run one tool.
    *
    * @param {string} name - tool name.
@@ -982,7 +1026,19 @@ function requireSession(sessionId, tool) {
   async function call(name, args, caller) {
     const handler = HANDLERS[name];
     if (typeof handler !== 'function') throw new Error(`unknown tool: ${name}`);
-    return handler(args ?? {}, normaliseCaller(caller));
+    const normalised = normaliseCaller(caller);
+    try {
+      return await handler(args ?? {}, normalised);
+    } catch (error) {
+      // One funnel for "your membership is gone", so the twelve group tools do not each
+      // need their own copy of the same eight lines.
+      if (reapStaleMembership(error, args, normalised)) {
+        // Annotate rather than replace: the caller still needs the original code, and the
+        // new field is what a UI can use to say "you were removed" instead of "not a member".
+        if (error !== null && typeof error === 'object') error.membershipDropped = true;
+      }
+      throw error;
+    }
   }
 
   /** Whether this runtime knows a tool. */
