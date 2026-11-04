@@ -1,31 +1,35 @@
-feat: a join now tells both sides
+feat: edit my personal headline, distinct from my role in one group
 
-`person/send` has carried `join-notice` and `welcome` since it was written, and nothing ever sent one. So a
-join produced a line in the feed that the owner sees only if they happen to be looking, and the newcomer got
-no statement of what they had walked into — the invitation flow was one-directional.
+Two facts, two places, and until now only one had a form:
 
-    owner      [join-notice] 李四 加入了「入群提示验证」
-    newcomer   [welcome]     欢迎加入「入群提示验证」
+    「我在这个群负责什么」  member.roleAbout, changes per group
+    「我是谁」              person.headline, follows me into every group and onto every card
 
-Both verified against a live host, and both reported in the join result (`notifiedOwner`, `welcomed`) so
-"did the owner get told?" is answerable instead of assumed.
+Somebody who is 负责对账 in one project and 兼产品 in another needs both; one field would force a choice.
 
-THE WELCOME CANNOT BE SIGNED BY THE PERSON BEING WELCOMED
+The editor now shows them as two labelled fields rather than one field with a hint, because a user who edits
+the wrong one gets a change that does not appear where they expected — and the difference is invisible in a
+screenshot. The label states the scope: 「个人介绍（所有群共用，显示在同事名片上）」 vs 「群内介绍（只在这个群生效）」.
 
-The store refuses a message from yourself, which is not an inconvenience here but the right rule: a greeting
-signed by its own recipient reads oddly and gives the UI a sender it has to special-case. The owner signs it;
-a group with no owner gets a reserved `system` id — deliberately not a session id, because pretending a
-session identifier is a person id is how ids stop meaning one thing.
+WHY A NEW SKILL WAS NEEDED
 
-NEITHER MESSAGE CARRIES THE INVITE TOKEN
+`group/role` writes `about` and `tags` — facts about ONE membership. The headline lives on the person row, so
+a member of a remotely hosted group had no way to set it: the skill for it did not exist. `person/profile` now
+does, and takes a group id only because a credential belongs to a membership — the store then writes the
+person that credential identifies. There is no path that names somebody else.
 
-A notice that quoted the invitation would put the token in the owner's own inbox, which is precisely where a
-forwarded screenshot comes from. Asserted, because it is the kind of leak that looks helpful.
+TWO DETAILS THAT KEEP IT HONEST
 
-A FAILURE TO NOTIFY DOES NOT FAIL THE JOIN
+- an untouched headline is omitted from the payload rather than sent empty, because an absent field means
+  "leave it alone" and a cleared one would wipe the value on every role edit
+- the editor reads the current headline from the person table, not the roster row: the headline is a person
+  fact, and a roster cached before it existed would not carry it
 
-The membership is already on disk. A missing courtesy costs nothing; turning it into an error would report a
-failed join for somebody who is, in fact, in the group.
+OBSERVED, NOT INTRODUCED
 
-Verified: 427 tests (5 new — both directions, self-send refusal, no token in the payload, owner not notified
-about their own join, and notice surviving an absent owner), plus the live run above.
+`text` comes back empty for BOTH `group/role` and `person/profile` when called through the gateway; `meta`
+carries the values. Pre-existing, unrelated to this change, and recorded here so the next person does not
+spend a turn on it.
+
+Verified: 427 tests, and on a live host `persons` gains
+`张工 headline='后端工程师，专注对账系统'` while `groups` keeps `roleAbout='这个群的负责人'`.

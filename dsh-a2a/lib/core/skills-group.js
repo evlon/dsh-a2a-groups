@@ -239,6 +239,39 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       },
     },
     {
+      id: 'person/profile',
+      name: 'Set my person-level profile',
+      description:
+        'What I do, independent of any group: the line that appears on every colleague card. Different from group/role, which describes me in ONE group. Requires a member credential from any group I am in — that is how the host knows which person row to write, not because the value belongs to that group.',
+      examples: ['My headline is 后端工程师，专注对账系统'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const updated = store.setPersonProfile({
+            groupId,
+            member,
+            // `undefined` leaves it alone; an empty string clears it. The distinction matters: a member
+            // clearing their headline must not have it silently restored by the next role save.
+            headline: data.headline === undefined ? undefined : data.headline,
+            tags: data.tags === undefined ? undefined : data.tags,
+          });
+          return {
+            text: updated.headline === ''
+              ? '个人介绍已清空。'
+              : `个人介绍已更新：${updated.headline}`,
+            meta: {
+              personId: updated.personId,
+              headline: updated.headline,
+              tags: updated.tags ?? [],
+            },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
       id: 'person/inbox',
       name: "Read one person's waiting messages",
       description:

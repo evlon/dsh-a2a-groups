@@ -263,6 +263,29 @@ const PANEL_FEED_TAIL = 8;
             timeoutMs: config.client.timeoutMs,
           },
         );
+        // The headline is a PERSON fact, so it needs its own skill: `group/role` writes one membership,
+        // while the value that appears on every colleague card lives on the person row.
+        if (body.headline !== undefined) {
+          await bridge.send(
+            {
+              baseUrl: record.baseUrl,
+              apiKey: record.apiKey ?? config.client.apiKey,
+              forwardProto: config.client.forwardProto,
+              protocolVersion: config.client.protocolVersion,
+            },
+            {
+              skill: 'person/profile',
+              text: 'set headline',
+              data: {
+                groupId,
+                personId: record.personId,
+                personKey: record.personKey,
+                headline: body.headline,
+              },
+              timeoutMs: config.client.timeoutMs,
+            },
+          );
+        }
       }
       // `changed: false` means the value was already that — worth telling the reader, because the feed
       // no longer announces no-op saves and "已保存" for an unchanged value would be misleading.

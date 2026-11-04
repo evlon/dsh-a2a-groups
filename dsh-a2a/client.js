@@ -1682,6 +1682,9 @@ window.__ModuleLoader__.load({
 		function RoleEditor(props) {
 			const [about, setAbout] = react.useState(props.about ?? "");
 			const [tags, setTags] = react.useState((props.tags ?? []).join("、"));
+			// The person-level headline. Different scope from `about`: that one is this membership, this one
+			// follows the person into every group and onto every colleague card.
+			const [headline, setHeadline] = react.useState(props.headline ?? "");
 			const [state, setState] = react.useState("idle");
 			const [message, setMessage] = react.useState("");
 
@@ -1700,6 +1703,11 @@ window.__ModuleLoader__.load({
 					sessionId: props.sessionId,
 					about: String(about ?? "").trim(),
 					tags: parsed,
+					// Omitted when untouched rather than sent empty: an absent field means "leave it alone",
+					// and a cleared one would wipe the person's headline on every role edit.
+					headline: String(headline ?? "").trim() === String(props.headline ?? "").trim()
+						? undefined
+						: String(headline ?? "").trim(),
 				}).then(function (result) {
 					setState(result.ok ? "done" : "failed");
 					setMessage(result.message);
@@ -1710,6 +1718,20 @@ window.__ModuleLoader__.load({
 			return h(
 				"div",
 				{ style: membersLayout.editorBox },
+				// Scope stated in the label, not only in a placeholder: editing the wrong one produces a
+				// change that does not show up where the reader expects, and the difference is invisible in a
+				// screenshot.
+				h("span", { style: { fontSize: "10px", opacity: 0.6 } }, "个人介绍（所有群共用，显示在同事名片上）"),
+				h("input", {
+					type: "text",
+					value: headline,
+					placeholder: "我是谁，例如：后端工程师，专注对账系统",
+					onChange: function (event) {
+						setHeadline(event !== null && event !== undefined && event.target !== undefined ? event.target.value : "");
+					},
+					style: membersLayout.editorInput
+				}),
+				h("span", { style: { fontSize: "10px", opacity: 0.6 } }, "群内介绍（只在这个群生效）"),
 				h("input", {
 					type: "text",
 					value: about,
@@ -3123,6 +3145,14 @@ window.__ModuleLoader__.load({
 						sessionId: sessionId,
 						about: self.about,
 						tags: self.tags,
+						// Read from the person table, not the roster row: the headline is a person fact and a
+						// roster written before it existed would not carry it.
+						headline: (function () {
+							const mine = (Array.isArray(snapshot.cards) ? snapshot.cards : []).filter(function (card) {
+								return card.isSelf === true;
+							})[0];
+							return mine === undefined ? "" : (mine.headline ?? "");
+						})(),
 						onCancel: function () { setEditingRole(false); },
 						onSaved: function () {
 							// Close on success; the panel refreshes from the Host's next snapshot, so the new
