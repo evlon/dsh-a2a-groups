@@ -1,36 +1,39 @@
-refactor!: two gateway namespaces — group-host for the host, person-* for people
+fix: the host was writing its own address onto every member
 
-The gateway named a person with the word "group". Reading a 403 or a timeout in the logs, there was
-no way to tell whether an address belonged to a group entry or to somebody's machine.
+Found by running the real flow with two instances rather than by reading the code.
 
-    agent-group-host       the host: ONE entry, every group
-    agent-person-<who>     a person's DSH: ONE entry per machine
+`group/join` executes INSIDE the host process, so `ownEndpointFromConfig(config)` there names the
+host. Every member who joined was therefore recorded at the host's own address:
 
-WHY ONLY ONE OF THEM CAN SHARE AN ENTRY
+    张工  http://gw/a2a/agent-group-host     (should be agent-person-dev1)
+    李四  http://gw/a2a/agent-group-host     (should be agent-person-dev2)
 
-A group is DATA. Every group lives in one host's `groups.json`, and a request names the group in the
-payload (`data.groupId`), so one URL path serves all of them — adding a group never touches the
-gateway. That is why the host can carry every group behind one name.
+Two different people, one address, and it pointed at the wrong process even for the owner — a card
+would have said "reach them directly here" and dialled the group host.
 
-A person is a PROCESS on their own machine. The gateway forwards a given path to exactly one
-address, so two people behind one entry would leave one of their DSH instances permanently
-unreachable. One entry per person is not a design preference; it is the only thing that works.
+WHY THE PREVIOUS COMMIT GOT IT WRONG
 
-ALSO FIXED: the member ACL never admitted members
+It assumed `join` ran on the member's machine. It does not: `group/join` is a host skill, and the
+member-side work happens in the `a2a_group_join` TOOL, which runs on the member's machine and does
+know its own configuration. The two are different processes with different configs, and the field
+was filled from the wrong one.
 
-`allowed_agents` listed `agent-groups`, `agent-group*`, `group-*` — but a member instance registers
-as `dsh-group`, which matched none of them. A member could join a group and then get 403 on every
-subsequent call. The earlier commit on this branch added `dsh-group*` as a patch; that patch is
-removed here, because a wrong name that still works is a wrong name that never gets fixed.
+WHAT CHANGED
 
-The namespace is now `agent-group-host`, `agent-group*`, `group-*`, `agent-person-*`.
+- the host no longer composes a joiner's address at all; it takes only what the caller supplies
+- the member-side tool sends its own, composed from ITS config, because that process knows
+- `create` still composes one, because there the caller IS the host — same field, two processes,
+  and the asymmetry is the point
 
-Docs: DEPLOY gains a section on the two namespaces, including the table of why one is shareable and
-the other is not — that asymmetry is the thing that will confuse the next reader. The rename itself
-touched six lines of prose and left every `/opt/agent-groups`, `bin/agent-groups.js` and
-`useradd agent-groups` alone: those are paths, not gateway names, and a blind replace would have
-broken every command in the deployment guide.
+A member with no gateway name sends nothing and stays empty. Empty now means "no address known"
+instead of "here is a plausible lie".
 
-Verified: 403 tests unchanged, MCP probe OK, standalone probe OK, all three gateway entries answer
-200, and end to end through the gateway — create, invite, join, post, read — with the composed
-endpoint now resolving to `agent-group-host` rather than the old name.
+Verified on two live instances: 张工 gets the host address, 李四 gets agent-person-dev2, and 王五 —
+who sent none — stays empty. 403 tests unchanged.
+
+ALSO FOUND (not fixed, recorded for the MVP decision)
+
+A raw A2A call to a member instance returns an empty result: its tools need a Session, and only a
+Session turn has one. That is correct behaviour, not a bug — but it means a colleague cannot be
+driven by an outside HTTP caller, only through their own conversation. Worth knowing before anyone
+plans on a gateway-level "just call that person" feature.

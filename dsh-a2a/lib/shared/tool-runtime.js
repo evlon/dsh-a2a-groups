@@ -20,6 +20,9 @@
 
 import { parseInviteLink } from '../dsh/tools.js';
 import { probeReachability } from '../core/probe.js';
+// The member's own address, composed from the MEMBER's config — this file runs on the member's
+// machine when it joins, which is the only process that knows this.
+import { ownEndpointFromConfig } from '../core/endpoint.js';
 
 /**
  * Build the runtime over one set of dependencies.
@@ -514,6 +517,8 @@ function requireSession(sessionId, tool) {
         groupId: parsed.groupId,
         token: parsed.token,
         displayName,
+        // Same reasoning as the remote path: this process knows its own address.
+        endpoint: ownEndpointFromConfig(config),
       });
       identities.upsert({
         sessionId,
@@ -558,7 +563,18 @@ function requireSession(sessionId, tool) {
     const result = await bridge.send(target, {
       skill: 'group/join',
       text: `join ${parsed.groupId}`,
-      data: { groupId: parsed.groupId, token: parsed.token, displayName },
+      data: {
+        groupId: parsed.groupId,
+        token: parsed.token,
+        displayName,
+        // Our own address, so the host can record where to reach us. Composed here rather than
+        // there: the host process only knows its own name, and composing from it recorded every
+        // member at the host's address.
+        //
+        // Omitted when unconfigured, which the host reads as "no address" — the honest answer,
+        // since nothing can dial a member that has no gateway name.
+        endpoint: ownEndpointFromConfig(config),
+      },
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};

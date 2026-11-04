@@ -33,8 +33,9 @@ import { randomFillSync } from 'node:crypto';
 // remote agent, not a conversation. A pure group host is exactly that case, and it
 // still keeps a membership record (the owner credential lives there). See
 // `HOST_SESSION_ID` for why that record cannot simply be keyed on nothing.
-// A joiner cannot know the address the gateway publishes them under, so the host composes it
-// from its own config rather than asking.
+// Used by `group/create` only: when the caller creates a group it IS the host, so the host's
+// own config is the right source for its address. `group/join` must NOT use it — see the note
+// there.
 import { ownEndpointFromConfig } from './endpoint.js';
 import { HOST_SESSION_ID } from './memberships.js';
 
@@ -207,12 +208,18 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
         const data = payload(input);
         const groupId = required(data.groupId, 'groupId');
         try {
-          // An explicit endpoint wins: a host reachable at a different public URL than its
-          // gateway base has to be able to say so. Otherwise the address is composed from config,
-          // which is the only place that knows how the gateway names this instance.
+          // ONLY what the caller supplies. This skill runs inside the HOST process, so
+          // `config.groups.agentName` here names the host — never the person joining. Composing
+          // from it recorded every member at the host's own address, which is not a best guess but
+          // a guaranteed-wrong one: two people, one address, and it pointed at the wrong process
+          // even for the owner.
+          //
+          // The address belongs to the member's own configuration on the member's own machine. A
+          // member that wants to be reachable passes it; one that does not stays empty, and empty
+          // means "no address known" rather than "here is a plausible lie".
           const endpoint = typeof data.endpoint === 'string' && data.endpoint !== ''
             ? data.endpoint
-            : ownEndpointFromConfig(config);
+            : undefined;
           const joined = store.join({
             groupId,
             token: typeof data.token === 'string' && data.token !== '' ? data.token : undefined,
