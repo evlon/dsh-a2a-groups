@@ -33,6 +33,9 @@ import { randomFillSync } from 'node:crypto';
 // remote agent, not a conversation. A pure group host is exactly that case, and it
 // still keeps a membership record (the owner credential lives there). See
 // `HOST_SESSION_ID` for why that record cannot simply be keyed on nothing.
+// A joiner cannot know the address the gateway publishes them under, so the host composes it
+// from its own config rather than asking.
+import { ownEndpointFromConfig } from './endpoint.js';
 import { HOST_SESSION_ID } from './memberships.js';
 
 /** How many feed entries a join hands back so a new member has context. */
@@ -120,6 +123,10 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             settings: {
               visibility: data.visibility === 'unlisted' ? 'unlisted' : 'public',
             },
+            // The owner is a member too, and joins by creating. Without an address here the
+            // roster shows an empty endpoint for the one person guaranteed to be in every group
+            // they own, which reads as "the feature is broken" rather than "not configured".
+            endpoint: ownEndpointFromConfig(config),
           });
           const groupId = created.group.groupId;
           const ownerPersonId = created.group.owner.personId;
@@ -200,11 +207,17 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
         const data = payload(input);
         const groupId = required(data.groupId, 'groupId');
         try {
+          // An explicit endpoint wins: a host reachable at a different public URL than its
+          // gateway base has to be able to say so. Otherwise the address is composed from config,
+          // which is the only place that knows how the gateway names this instance.
+          const endpoint = typeof data.endpoint === 'string' && data.endpoint !== ''
+            ? data.endpoint
+            : ownEndpointFromConfig(config);
           const joined = store.join({
             groupId,
             token: typeof data.token === 'string' && data.token !== '' ? data.token : undefined,
             displayName: typeof data.displayName === 'string' && data.displayName !== '' ? data.displayName : 'member',
-            endpoint: typeof data.endpoint === 'string' ? data.endpoint : undefined,
+            endpoint,
           });
           identities.upsert({
             sessionId: context?.sessionId ?? HOST_SESSION_ID,
@@ -221,7 +234,15 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               + `groupId  : ${groupId}\n`
               + `personId : ${joined.member.personId}\n`
               + `personKey: ${joined.personKey}   ← shown once; this instance has stored it\n\n`
-              + `${joined.feedTail.length} recent message(s) are included in the result.`,
+              + `${joined.feedTail.length} recent message(s) are included in the result.`
+              // Saying this once at join time is the only moment it is actionable: the fix is a
+              // config change, and silence would leave the card's address blank forever with no
+              // hint why.
+              + (endpoint === undefined
+                ? '\n\n(No A2A address recorded for this instance: set groups.gatewayBase and '
+                  + 'groups.agentName so colleagues can reach you directly. Groups still work '
+                  + 'through the invite link.)'
+                : `\n\nThis instance's address: ${endpoint}`),
             meta: {
               groupId,
               personId: joined.member.personId,
@@ -231,6 +252,10 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               members: joined.group.memberCount,
               lastSeq: joined.group.lastSeq ?? 0,
               feedTail: joined.feedTail,
+              // Surfaced so the caller can tell "you are reachable" from "you are not", without
+              // having to read the group back. Empty means the host is not configured with a
+              // gateway base and agent name; it does NOT mean the join failed.
+              endpoint: endpoint ?? '',
             },
           };
         } catch (error) {
@@ -416,6 +441,10 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
                 role: entry.role,
                 roleAbout: entry.roleAbout ?? '',
                 tags: Array.isArray(entry.tags) ? entry.tags : [],
+                // Where this person can be reached directly, when it is known. Empty is the
+                // normal case for a host with no gateway base configured; a caller must read it
+                // as "no address", never as "offline".
+                endpoint: typeof entry.endpoint === 'string' ? entry.endpoint : '',
                 online: entry.online === true,
               })),
               // Surfaced so a member instance can tell a stale cache from live data.

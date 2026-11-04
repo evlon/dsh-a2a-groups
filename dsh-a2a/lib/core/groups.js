@@ -542,7 +542,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
           keyHash: sha256Hex(ownerKey),
           joinedAt: createdAt,
           lastSeenAt: createdAt,
-          endpoint: undefined,
+          // The owner is a member like any other, and creating a group is how they join it. An
+          // address here keeps the one person guaranteed to be present from showing a blank
+          // endpoint, which reads as a broken feature rather than an unconfigured host.
+          endpoint: optionalText(input.endpoint, MAX_ENDPOINT_CHARS, 'endpoint') ?? undefined,
           // Layer A: what this person is IN THIS GROUP. Deliberately separate from
           // `role`: `role` is a permission bit (owner may mint invites), while
           // these are self-described identity. Folding them together would make
