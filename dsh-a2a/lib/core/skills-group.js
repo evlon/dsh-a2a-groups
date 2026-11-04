@@ -28,6 +28,7 @@
  */
 
 import { randomFillSync } from 'node:crypto';
+import { buildJoinUrl } from './public-origin.js';
 
 // A skill call arrives over A2A and therefore carries no Session: the caller is a
 // remote agent, not a conversation. A pure group host is exactly that case, and it
@@ -86,6 +87,8 @@ export function createGroupSkills({
   // must not reach into a sibling module's state. Absent on a host with no page, in which case `group/invite`
   // simply returns no URL rather than a broken one.
   mintJoinToken,
+  // The origin a link should use, resolved once by whoever assembles the host. Absent means unresolved.
+  joinOrigin,
 }) {
   const settings = config.groups;
 
@@ -418,7 +421,11 @@ export function createGroupSkills({
           ? (() => {
               try {
                 const token = mintJoinToken();
-                return token === undefined ? undefined : `${settings.publicUrl ?? ''}/join?t=${token.token}`;
+                // Absolute when an origin is known: a relative path pasted into a chat reaches the receiver as
+                // a path with no host, which is the failure mode this feature exists to prevent.
+                return token === undefined
+                  ? undefined
+                  : buildJoinUrl({ token: token.token, origin: joinOrigin ?? '', path: '/join' });
               } catch {
                 return undefined;
               }

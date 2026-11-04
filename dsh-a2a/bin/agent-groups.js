@@ -43,6 +43,7 @@ import { createGroupStore } from '../lib/core/groups.js';
 import { createSkillRegistry } from '../lib/core/skills.js';
 import { createGroupSkills } from '../lib/core/skills-group.js';
 import { createJoinTokenStore } from '../lib/core/join-page.js';
+import { resolvePublicOrigin, buildJoinUrl } from '../lib/core/public-origin.js';
 import { createServer } from '../lib/core/server.js';
 import { TaskStore } from '../lib/core/wire.js';
 
@@ -293,7 +294,9 @@ async function main() {
     },
     server: {
       token: token ?? '',
-      bindSessionId: 'self',
+      // The address a LINK should use, which is often not the address this process bound to. Without it the join
+      // page falls back to the listen address and produces links that only work on this machine.
+      publicUrl: publicUrl ?? '',
     },
     client: {
       forwardProto: forwardProto ?? '',
@@ -309,14 +312,29 @@ async function main() {
 
   // One store for both sides: the invite skill mints a token, the join page consumes it. Two stores would
   // mean every printed link is rejected — a bug that reads as "the page does not work".
+  // The origin a LINK should use. Configuration wins; otherwise the listener address, which is right for a
+  // direct bind and wrong behind a rewriting proxy — so `server.publicUrl` is the setting an operator behind one
+  // must fill in, and the startup log says which answer was used.
+  const publicOrigin = resolvePublicOrigin({
+    configured: config.server.publicUrl,
+    origin: () => `http://127.0.0.1:${options.port}`,
+  });
+
   const joinTokens = createJoinTokenStore({
     newToken: () => randomUUID().replace(/-/gu, ''),
     now: () => Date.now(),
   });
 
+  if (publicOrigin === '') {
+    logger.warn('agent-groups: no public origin known; join links will be relative and unusable off-machine. Set server.publicUrl.');
+  } else {
+    logger.info(`agent-groups: join links will use ${publicOrigin}`);
+  }
+
   const registry = createSkillRegistry();
   for (const skill of createGroupSkills({
     mintJoinToken: () => joinTokens.mint(),
+    joinOrigin: publicOrigin,
     
     store,
     // A host has no memberships of its own. The ledger is never read here; passing a

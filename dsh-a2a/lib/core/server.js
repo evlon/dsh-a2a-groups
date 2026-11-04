@@ -46,6 +46,7 @@ import {
   renderJoinErrorPage,
   renderJoinPage,
 } from './join-page.js';
+import { resolvePublicOrigin } from './public-origin.js';
 
 /** @typedef {import('./wire.js').TaskRow} TaskRow */
 
@@ -298,6 +299,9 @@ export function createServer({
     now: () => Date.now(),
   });
 
+  /** @type {Array<() => void>} disposers for every registered route. */
+  let disposers = [];
+  let attached = false;
   /**
    * Serve the join page, or explain why this token is spent.
    *
@@ -329,13 +333,15 @@ export function createServer({
       return;
     }
 
+    // The link inside the page must use the address the READER can reach, not the one this process bound to.
+    const publicOrigin = resolvePublicOrigin({
+      req,
+      configured: serverConfig.publicUrl,
+      origin: originProvider(),
+    });
     const fresh = joinTokens.mint();
-    writeHtml(res, 200, renderJoinPage({ ...detail, expiresAt: fresh.expiresAt }));
+    writeHtml(res, 200, renderJoinPage({ ...detail, publicOrigin, expiresAt: fresh.expiresAt }));
   }
-
-  /** @type {Array<() => void>} disposers for every registered route. */
-  let disposers = [];
-  let attached = false;
 
   /**
    * Attach every route to the Host webserver.
