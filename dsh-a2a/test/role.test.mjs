@@ -19,8 +19,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createGroupStore, normalizeTags, MAX_TAGS, MAX_TAG_CHARS } from '../lib/groups.js';
-import { normalizeConfig } from '../lib/config.js';
+import { createGroupStore, normalizeTags, MAX_TAGS, MAX_TAG_CHARS } from '../lib/core/groups.js';
+import { normalizeConfig } from '../lib/core/config.js';
 
 /** A store with its own temp directory, removed when the test ends. */
 function makeStore(t) {

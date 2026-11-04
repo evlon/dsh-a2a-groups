@@ -21,7 +21,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 
-import { createBridge, A2aClientError, maskSecret, createSseParser } from '../lib/bridge.js';
+import { createBridge, A2aClientError, maskSecret, createSseParser } from '../lib/core/bridge.js';
 
 /* -------------------------------------------------------------------------- */
 /* 假上游                                                                      */

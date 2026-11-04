@@ -12,10 +12,10 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 
-import { createServer } from '../lib/server.js';
-import { TaskStore } from '../lib/wire.js';
-import { CARD_ALIAS_PATH, CARD_PATH } from '../lib/card.js';
-import { createDeliverer } from '../lib/deliver.js';
+import { createServer } from '../lib/core/server.js';
+import { TaskStore } from '../lib/core/wire.js';
+import { CARD_ALIAS_PATH, CARD_PATH } from '../lib/core/card.js';
+import { createDeliverer } from '../lib/dsh/deliver.js';
 
 /**
  * A fake webserver implementing the Host's route table.

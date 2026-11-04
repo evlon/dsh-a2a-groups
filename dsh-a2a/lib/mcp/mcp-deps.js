@@ -22,10 +22,10 @@
  * @module dsh-a2a/mcp-deps
  */
 
-import { createBridge } from './bridge.js';
-import { createMembershipLedger } from './memberships.js';
-import { createRegistry } from './registry.js';
-import { normalizeConfig } from './config.js';
+import { createBridge } from '../core/bridge.js';
+import { createMembershipLedger } from '../core/memberships.js';
+import { createRegistry } from '../core/registry.js';
+import { normalizeConfig } from '../core/config.js';
 
 /** A logger that writes to stderr: stdout is the MCP channel and must stay clean. */
 function stderrLogger(verbose) {

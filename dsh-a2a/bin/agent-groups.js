@@ -37,12 +37,12 @@ import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizeConfig } from '../lib/config.js';
-import { createGroupStore } from '../lib/groups.js';
-import { createSkillRegistry } from '../lib/skills.js';
-import { createGroupSkills } from '../lib/skills-group.js';
-import { createServer } from '../lib/server.js';
-import { TaskStore } from '../lib/wire.js';
+import { normalizeConfig } from '../lib/core/config.js';
+import { createGroupStore } from '../lib/core/groups.js';
+import { createSkillRegistry } from '../lib/core/skills.js';
+import { createGroupSkills } from '../lib/core/skills-group.js';
+import { createServer } from '../lib/core/server.js';
+import { TaskStore } from '../lib/core/wire.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const VERSION = readVersion();

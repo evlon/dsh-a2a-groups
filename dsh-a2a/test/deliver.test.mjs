@@ -11,7 +11,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createDeliverer } from '../lib/deliver.js';
+import { createDeliverer } from '../lib/dsh/deliver.js';
 
 /**
  * Build a fake Host around one Session.

@@ -1,20 +1,33 @@
-fix: the directory renderer referenced a deleted variable, and point the gateway at the new name
+refactor: organise lib/ by host boundary
 
-Two defects that only appear once MCP talks to a real host:
+The directory layout now states the architectural claim, so "is this file host-specific?"
+has a one-word answer instead of requiring a read:
 
-- `a2a_group_directory`'s renderer still interpolated `${policy}` after join policy was
-  removed from the directory row. Rendering threw "policy is not defined" — a code path
-  the DSH tests never hit because they assert on the tool's VALUE, not its rendered text.
-  The line also still promised a group password. Both fixed.
+    lib/core/    zero DSH dependency, reusable by any host     13 files
+    lib/dsh/     the only place that reads ctx                  7 files
+    lib/shared/  pure data + logic both hosts call              2 files
+    lib/mcp/     the only place that reads MCP                  1 file
+    lib/index.js, lib/mcp-server.js   package entry points
 
-- `resources.yaml` registered `dsh-groups`, so a call for `agent-groups` came back
-  "unknown A2A agent". Renaming the code without the gateway leaves the two halves
-  disagreeing, which is the exact failure a half-done rename produces. Agent name, ACL
-  entry and secret are now consistent.
+`package.json` keeps every entry path unchanged. The plugin is junctioned into a live DSH
+profile, so moving the package entry would break a working install for a cosmetic gain.
 
-Verified end to end: an MCP client over stdio → gateway → host → 29 real groups listed
-with names, topics and counts. That is the whole chain the MCP server exists for.
+Three things this turned up that a file move alone would have missed:
 
-docs/MCP.md documents the wiring for Claude Code, CodeBuddy and Cursor, states that
-MCP has no UI by protocol, and notes the one real behavioural difference: MCP cannot
-push, so a client reads with a2a_group_read instead of receiving.
+- `lib/mcp-server.js` loaded its deps through `await import('./mcp-deps.js')`, a DYNAMIC
+  import no static rewrite can see. The MCP probe timed out; the server had crashed on a
+  path that no longer existed. Dynamic imports are the blind spot of any import rewrite.
+
+- `docs/CONTRACT.md` named 13 paths that no longer existed, and its ownership table listed
+  the old flat names. Fixed by the same mapping, then a new §2.0 documents the boundary and
+  the grep that checks it.
+
+- `core/server.js` still exported `resolveBoundSessionId`, dead code nothing imported
+  (lib/dsh/sessions.js owns that now, and owns the binding too). It was the only real `ctx`
+  code left outside lib/dsh/, so removing it is what makes the boundary true rather than
+  nearly true — a rule with an exception nobody remembers is worse than no rule.
+
+Also added README.md: `package.json` listed it under `files` but it had never existed.
+
+Verified: 321 tests unchanged, MCP probe OK, standalone host OK, and the documented
+self-check greps clean.

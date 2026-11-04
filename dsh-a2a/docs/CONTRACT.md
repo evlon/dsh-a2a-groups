@@ -85,7 +85,47 @@
 
 ## 2. 模块职责与导出
 
-### 2.1 `lib/wire.js`（分支 A）
+### 2.0 目录边界：一句话判断一个文件属于哪个宿主
+
+```
+lib/
+├── core/     零 DSH 依赖，任何宿主可复用
+├── dsh/      唯一读 ctx 的地方
+├── shared/   两个宿主共用，谁也不属于
+├── mcp/      唯一读 MCP 协议的地方
+├── index.js      DSH 插件入口（包 main）
+└── mcp-server.js MCP 入口（bin: agent-groups-mcp）
+```
+
+| 目录 | 文件 | 判据 |
+|---|---|---|
+| `core/` | groups, memberships, invite, card, wire, server, bridge, registry, skills, skills-group, skills-session, probe, config | 不 import `ctx`，只用 `node:*` 和彼此 |
+| `dsh/` | deliver, sessions, inbox, tools, toolkit, profile, prompt | 读 `ctx` |
+| `shared/` | tool-specs, tool-runtime | 纯数据 + 纯逻辑，两个宿主都调 |
+| `mcp/` | mcp-deps | 为"没有 DSH 的进程"接线 |
+
+**这条边界是可检查的，不是口号**：
+
+```bash
+# 除 index.js 外，lib/dsh/ 之外不应出现"真实"的 ctx 代码（注释不算）
+grep -rn '\bctx\b' lib/ --include='*.js' | grep -v '^lib/dsh/' | grep -v '^lib/index.js'
+```
+
+目前只剩 `lib/core/server.js` 的 3 处，全部是**可选注入**：
+
+```js
+createServer({ ctx, registrar = ctx?.webServer, ... })   // 有 ctx 就用，没有就靠 registrar
+function originProvider() { const webServer = ctx?.webServer; ... }   // 拿不到就返回 undefined
+```
+
+这正是 `core/` 能同时服务两种宿主的机制：DSH 传 `ctx`，独立宿主传 `registrar`，
+同一个文件两种用法。`ctx?.` 的可选链是让"没有 DSH"成为一种正常情况，而不是异常路径。
+
+**为什么 `index.js` 和 `mcp-server.js` 留在 `lib/` 而不是搬进子目录**：它们是
+`package.json` 的入口。插件是通过 junction 装进 DSH profile 的，改包入口会破坏一个
+正在运行的安装，而收益只是路径好看一点。
+
+### 2.1 `lib/core/wire.js`（分支 A）
 
 纯粹的 A2A 1.0 编解码 + 任务存储。**不含任何 DSH 概念**。
 
@@ -120,7 +160,7 @@ store.onChange(fn)                       // → dispose；fn(task)，供订阅�
 store.flush()                            // 落盘（best-effort，不抛）
 ```
 
-### 2.2 `lib/deliver.js`（分支 A）
+### 2.2 `lib/dsh/deliver.js`（分支 A）
 
 把「一段外部文本」变成「目标会话里真实的一轮」，是 session-bus 语义的最小复用。
 
@@ -138,7 +178,7 @@ export function createDeliverer({ ctx, logger, config });
 - **幂等**：同 `messageId` 已在本会话 inbox/日志里就不重复投（按 `source.busMessageId` 或 `source.a2aMessageId` 查）。
 - 失败要回滚：投递抛错就不要留下任何副作用。
 
-### 2.3 `lib/server.js`（分支 A）
+### 2.3 `lib/core/server.js`（分支 A）
 
 ```js
 export function createServer({ ctx, logger, config, deliverer, tasks, skills });
@@ -166,7 +206,7 @@ export function createServer({ ctx, logger, config, deliverer, tasks, skills });
 // run 返回: { text, artifacts?: [artifact], finalState? }
 ```
 
-### 2.4 `lib/bridge.js`（分支 B）
+### 2.4 `lib/core/bridge.js`（分支 B）
 
 A2A **客户端**。零依赖，用全局 `fetch`。
 
@@ -191,7 +231,7 @@ export function createBridge({ logger, config, clock });
 - 错误分类：`{kind:'auth'|'permission'|'version'|'network'|'rpc', code?, message}`，抛 `A2aClientError`。
 - 卡片 `url` 的 scheme 若是 `https` 但 `baseUrl` 是 `http` 且端口不同 → 直接用 `baseUrl`（`X-Forwarded-Proto` 缺失导致的可预期偏差），只记 warn。
 
-### 2.5 `lib/registry.js`（分支 B）
+### 2.5 `lib/core/registry.js`（分支 B）
 
 对端登记簿，落盘 `<DSH_HOME>/a2a/agents.json`。
 
@@ -201,7 +241,7 @@ export function createRegistry({ home, logger });
 // entry: { name, description?, baseUrl, agent?, protocolVersion?, apiKey?, enabled }
 ```
 
-### 2.6 `lib/groups.js`（分支 C）
+### 2.6 `lib/core/groups.js`（分支 C）
 
 群状态机 + 加密 + 邀请 + feed。**纯逻辑，不碰网络、不碰 DSH**。
 
@@ -270,7 +310,7 @@ agent-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupI
 永不过期时最后一行改为：
 `（此邀请长期有效；群主可以随时撤销这条链接。）`
 
-### 2.7 `lib/config.js` / `lib/index.js` / `lib/tools.js` / `lib/prompt.js`（Lead）
+### 2.7 `lib/core/config.js` / `lib/index.js` / `lib/dsh/tools.js` / `lib/dsh/prompt.js`（Lead）
 
 - `config.js`：`normalizeConfig(raw)` → 完整默认值（见 §3）。
 - `index.js`：`apply(ctx, config)` —— 装配 store/registry/deliverer/server/tools/prompt。
@@ -290,7 +330,7 @@ agent-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupI
 `a2a_group_create` 在 `groups.embedded: false`（默认）时**通过 A2A 在远端宿主上建群**，
 这现在是常态；`embedded: true` 时才在本机建。
 
-### 2.7b `lib/memberships.js`（成员账本）
+### 2.7b `lib/core/memberships.js`（成员账本）
 
 **键是 `(sessionId, groupId)`，不是 `groupId`。** 这是本次最重要的模型变更。
 
@@ -325,7 +365,7 @@ createMembershipLedger({ home, logger, clock })
 5. 缓存的群视图（`groupName` / `memberCount` / `feed` 等）由 `a2a_group_info` 填充。
    面板从账本渲染而非从网络取数，没有缓存就只能显示裸 id 和"0 人"。
 
-### 2.7c `lib/inbox.js` 的投递路由
+### 2.7c `lib/dsh/inbox.js` 的投递路由
 
 订阅**按群**（一个群一条 SSE，两个会话在同一个群不需要两条连接），投递**按 membership**：
 
@@ -474,10 +514,9 @@ createServer({ registrar, where, logger, config, deliverer, tasks, skills, onFlu
 
 | 分支 | 可写 |
 |---|---|
-| A `wire-server` | `lib/wire.js` `lib/server.js` `lib/deliver.js` `lib/card.js` `test/wire.test.mjs` `test/server.test.mjs` `test/deliver.test.mjs` |
-| B `bridge-client` | `lib/bridge.js` `lib/registry.js` `lib/skills-client.js` `test/bridge.test.mjs` `test/registry.test.mjs` |
-| C `groups-core` | `lib/groups.js` `lib/invite.js` `test/groups.test.mjs` `test/invite.test.mjs` |
-| D `group-ui` | `client.js` `lib/types/client.d.ts` `README-ui.md` |
-| Lead | `lib/index.js` `lib/config.js` `lib/tools.js` `lib/prompt.js` `lib/skills/*.js` `package.json` `README.md` `scripts/` `docs/` `PLAN.md` |
-
+| A `wire-server` | `lib/core/wire.js` `lib/core/server.js` `lib/dsh/deliver.js` | 协议与投递 |
+| B `bridge-client` | `lib/core/bridge.js` `lib/core/registry.js` `lib/core/skills-session.js` | 出站调用 |
+| C `groups-core` | `lib/core/groups.js` `lib/core/invite.js` `lib/core/memberships.js` `lib/core/skills-group.js` | 群状态机 |
+| D `ui` | `client.js` | 浏览器面板 |
+| Lead | `lib/index.js` `lib/core/config.js` `lib/shared/*` `lib/mcp/*` `lib/dsh/tools.js` | 装配与适配 |
 > 需要改别人文件的接口时：**先发消息**，改 `docs/CONTRACT.md` 的对应段落，再动代码。

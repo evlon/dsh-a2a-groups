@@ -14,9 +14,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { HEALTH_PATH } from '../lib/server.js';
-import { createServer } from '../lib/server.js';
-import { TaskStore } from '../lib/wire.js';
+import { HEALTH_PATH } from '../lib/core/server.js';
+import { createServer } from '../lib/core/server.js';
+import { TaskStore } from '../lib/core/wire.js';
 
 /** A webserver stand-in that records routes so they can be invoked as HTTP does. */
 function fakeWebServer() {

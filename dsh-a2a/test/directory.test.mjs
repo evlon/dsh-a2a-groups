@@ -23,8 +23,8 @@ import {
   createGroupStore,
   DIRECTORY_DEFAULT_LIMIT,
   DIRECTORY_MAX_LIMIT,
-} from '../lib/groups.js';
-import { normalizeConfig } from '../lib/config.js';
+} from '../lib/core/groups.js';
+import { normalizeConfig } from '../lib/core/config.js';
 
 /** A store with its own temp directory, removed when the test ends. */
 function makeStore(t) {

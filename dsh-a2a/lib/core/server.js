@@ -9,8 +9,8 @@
  * wrong.
  *
  * Boundaries:
- * - It never imports DSH. Host capability arrives as `ctx`, and only
- *   `ctx.webServer` is touched, only to register routes.
+ * - It never imports DSH. Host capability arrives as an injected `registrar`, so the same
+ *   code serves a DSH plugin and a standalone Node host — see `createServer`'s doc.
  * - It never formats a reply. Skills produce `{text, artifacts, finalState}`;
  *   `wire.js` turns that into 1.0 envelopes. A handler that hand-built JSON here
  *   would be the first place a protocol field could drift.
@@ -849,45 +849,6 @@ export function createServer({
   return { attach, detach, card, info };
 }
 
-/**
- * Resolve the local Session an incoming A2A message is delivered to.
- *
- * `config.server.bindSessionId: 'self'` means "whichever Session owns this
- * plugin instance"; the Host exposes that through one of several properties
- * depending on generation. Returning `undefined` is a valid answer — the caller
- * decides whether that is a configuration error — so this never throws.
- *
- * @param {object} input - resolution inputs.
- * @param {object} input.ctx - Host context.
- * @param {object} input.config - normalized config.
- * @returns {string|undefined} the bound Session id.
- */
-export function resolveBoundSessionId({ ctx, config } = {}) {
-  const configured = typeof config?.server?.bindSessionId === 'string' ? config.server.bindSessionId.trim() : '';
-  if (configured !== '' && configured !== 'self') return configured;
-  // Every probe is guarded: Cordis throws on a bare read of a service the plugin
-  // did not `inject`, and "which Session is this" is a best-effort question that
-  // must not be able to fail a mount. A Host that exposes none of these simply has
-  // no self-binding, which the caller then reports as a configuration error.
-  const probe = (read) => {
-    try {
-      return read();
-    } catch {
-      return undefined;
-    }
-  };
-  const controller = ctx?.get?.('sessionController');
-  const candidates = [
-    probe(() => ctx?.session?.id),
-    probe(() => ctx?.agent?.id),
-    probe(() => ctx?.currentSessionId),
-    probe(() => (typeof controller?.currentSessionId === 'function' ? controller.currentSessionId() : undefined)),
-  ];
-  for (const candidate of candidates) {
-    if (typeof candidate === 'string' && candidate !== '') return candidate;
-  }
-  return undefined;
-}
 
 /**
  * Read the request body up to a hard byte ceiling.

@@ -44,7 +44,7 @@ import {
   sha256Hex,
   verifyPassword,
   writeFileAtomic,
-} from '../lib/groups.js';
+} from '../lib/core/groups.js';
 
 const START = Date.parse('2026-11-03T09:00:00.000Z');
 const HOUR = 3_600_000;

@@ -28,19 +28,19 @@ import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { normalizeConfig } from '../lib/config.js';
-import { createSkillRegistry } from '../lib/skills.js';
-import { createPingSkill, createSessionAskSkill } from '../lib/skills-session.js';
-import { createGroupSkills } from '../lib/skills-group.js';
-import { createServer } from '../lib/server.js';
-import { createBridge } from '../lib/bridge.js';
-import { createRegistry } from '../lib/registry.js';
-import { createGroupStore } from '../lib/groups.js';
-import { createMembershipLedger } from '../lib/memberships.js';
-import { createDeliverer } from '../lib/deliver.js';
-import { createSessions } from '../lib/sessions.js';
-import { createInbox } from '../lib/inbox.js';
-import { TaskStore } from '../lib/wire.js';
+import { normalizeConfig } from '../lib/core/config.js';
+import { createSkillRegistry } from '../lib/core/skills.js';
+import { createPingSkill, createSessionAskSkill } from '../lib/core/skills-session.js';
+import { createGroupSkills } from '../lib/core/skills-group.js';
+import { createServer } from '../lib/core/server.js';
+import { createBridge } from '../lib/core/bridge.js';
+import { createRegistry } from '../lib/core/registry.js';
+import { createGroupStore } from '../lib/core/groups.js';
+import { createMembershipLedger } from '../lib/core/memberships.js';
+import { createDeliverer } from '../lib/dsh/deliver.js';
+import { createSessions } from '../lib/dsh/sessions.js';
+import { createInbox } from '../lib/dsh/inbox.js';
+import { TaskStore } from '../lib/core/wire.js';
 
 /** Temporary directories created by this file, removed when it finishes. */
 const created = [];

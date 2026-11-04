@@ -30,10 +30,13 @@
     },
     "./mcp": "./lib/mcp-server.js",
     "./host": "./bin/agent-groups.js",
-    "./specs": "./lib/tool-specs.js",
-    "./runtime": "./lib/tool-runtime.js",
+    "./specs": "./lib/shared/tool-specs.js",
+    "./runtime": "./lib/shared/tool-runtime.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./core/groups": "./lib/core/groups.js",
+    "./core/memberships": "./lib/core/memberships.js",
+    "./core/wire": "./lib/core/wire.js"
   },
   "files": [
     "bin",

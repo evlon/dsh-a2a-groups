@@ -12,9 +12,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildProfile, profileField } from '../lib/profile.js';
-import { buildCard } from '../lib/card.js';
-import { normalizeConfig } from '../lib/config.js';
+import { buildProfile, profileField } from '../lib/dsh/profile.js';
+import { buildCard } from '../lib/core/card.js';
+import { normalizeConfig } from '../lib/core/config.js';
 
 /** A fake group store answering `has` and `memberView`. */
 function fakeStore(views) {

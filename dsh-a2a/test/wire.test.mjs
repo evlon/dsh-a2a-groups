@@ -34,7 +34,7 @@ import {
   writeComment,
   writeSse,
   writeSseHead,
-} from '../lib/wire.js';
+} from '../lib/core/wire.js';
 
 /** A response double that records exactly what the SSE writers emitted. */
 function fakeResponse() {

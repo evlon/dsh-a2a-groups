@@ -35,8 +35,8 @@
 
 import { createInterface } from 'node:readline';
 
-import { allSpecs, specOf } from './tool-specs.js';
-import { createToolRuntime } from './tool-runtime.js';
+import { allSpecs, specOf } from './shared/tool-specs.js';
+import { createToolRuntime } from './shared/tool-runtime.js';
 
 /** The MCP revision this server implements. */
 export const MCP_PROTOCOL_VERSION = '2024-11-05';
@@ -240,7 +240,9 @@ if (invokedDirectly) {
   // The dependencies a real run needs. `deps` is intentionally empty here: the group tools
   // reach a REMOTE host over A2A, so the only state this process needs is its own
   // configuration, which arrives through the environment.
-  const { createHostDepsFromEnv } = await import('./mcp-deps.js');
+  // Dynamic because importing the deps would construct a bridge, a registry and a ledger
+  // at module load — side effects a test that only wants the handler must not inherit.
+  const { createHostDepsFromEnv } = await import('./mcp/mcp-deps.js');
   serveStdio({ deps: createHostDepsFromEnv(process.env) }).catch((error) => {
     process.stderr.write(`agent-groups-mcp: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

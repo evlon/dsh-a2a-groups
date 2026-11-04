@@ -21,7 +21,7 @@ import {
   parseLink,
   randomPassword,
   randomToken,
-} from '../lib/invite.js';
+} from '../lib/core/invite.js';
 
 const EXPIRES = Date.parse('2026-11-10T09:00:00.000Z');
 const EXPIRES_ISO = '2026-11-10T09:00:00.000Z';

@@ -16,7 +16,7 @@ import { test } from 'node:test';
 
 import { createMcpHandler, MCP_PROTOCOL_VERSION } from '../lib/mcp-server.js';
 import { createMcpHandler as handlerFactory } from '../lib/mcp-server.js';
-import { allSpecs } from '../lib/tool-specs.js';
+import { allSpecs } from '../lib/shared/tool-specs.js';
 
 /** A handler with dependencies that answer without touching the network. */
 function handlerWith(overrides = {}) {

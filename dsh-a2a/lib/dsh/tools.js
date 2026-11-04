@@ -16,8 +16,8 @@
  */
 
 import { defineTool } from './toolkit.js';
-import { allSpecs } from './tool-specs.js';
-import { createToolRuntime } from './tool-runtime.js';
+import { allSpecs } from '../shared/tool-specs.js';
+import { createToolRuntime } from '../shared/tool-runtime.js';
 
 /**
  * Register every tool on the Host.

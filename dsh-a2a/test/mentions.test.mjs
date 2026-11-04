@@ -20,7 +20,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createGroupStore, MENTION_ALL, MAX_MENTIONS_PER_POST } from '../lib/groups.js';
+import { createGroupStore, MENTION_ALL, MAX_MENTIONS_PER_POST } from '../lib/core/groups.js';
 
 /** A store in a throwaway directory, torn down after the test. */
 function harness() {

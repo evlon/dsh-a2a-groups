@@ -13,7 +13,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { gradeOf } from '../lib/inbox.js';
+import { gradeOf } from '../lib/dsh/inbox.js';
 
 const membership = { sessionId: 's-1', groupId: 'g-1', memberId: 'm-me' };
 const other = 'm-other';

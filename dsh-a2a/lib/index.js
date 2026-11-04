@@ -29,22 +29,22 @@
 
 import { readFileSync } from 'node:fs';
 
-import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './config.js';
-import { createServer } from './server.js';
-import { createBridge } from './bridge.js';
-import { createRegistry } from './registry.js';
-import { createDeliverer } from './deliver.js';
-import { createGroupStore } from './groups.js';
-import { createMembershipLedger } from './memberships.js';
-import { createSessions } from './sessions.js';
-import { createSkillRegistry } from './skills.js';
-import { buildProfile } from './profile.js';
-import { createPingSkill, createSessionAskSkill } from './skills-session.js';
-import { createGroupSkills } from './skills-group.js';
-import { createInbox } from './inbox.js';
-import { registerTools } from './tools.js';
-import { PROMPT_SECTION, PROMPT_SECTION_NAME, PROMPT_SECTION_ORDER } from './prompt.js';
-import { TaskStore } from './wire.js';
+import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './core/config.js';
+import { createServer } from './core/server.js';
+import { createBridge } from './core/bridge.js';
+import { createRegistry } from './core/registry.js';
+import { createDeliverer } from './dsh/deliver.js';
+import { createGroupStore } from './core/groups.js';
+import { createMembershipLedger } from './core/memberships.js';
+import { createSessions } from './dsh/sessions.js';
+import { createSkillRegistry } from './core/skills.js';
+import { buildProfile } from './dsh/profile.js';
+import { createPingSkill, createSessionAskSkill } from './core/skills-session.js';
+import { createGroupSkills } from './core/skills-group.js';
+import { createInbox } from './dsh/inbox.js';
+import { registerTools } from './dsh/tools.js';
+import { PROMPT_SECTION, PROMPT_SECTION_NAME, PROMPT_SECTION_ORDER } from './dsh/prompt.js';
+import { TaskStore } from './core/wire.js';
 
 /** Cordis plugin name. */
 export const name = 'a2a';

@@ -16,7 +16,7 @@ import { mkdtempSync, readFileSync, writeFileSync, statSync, rmSync, mkdirSync }
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { createRegistry } from '../lib/registry.js';
+import { createRegistry } from '../lib/core/registry.js';
 
 /** 造一个马上就能删的临时目录。 */
 function tempHome() {
