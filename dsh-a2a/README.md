@@ -62,6 +62,39 @@ lib/
 grep -rn '\bctx\b' lib/ --include='*.js' | grep -v '^lib/dsh/' | grep -v '^lib/index.js'
 ```
 
+## 安装
+
+```bash
+npm install -g dsh-a2a-groups     # 可选：需要 agent-groups / agent-groups-mcp 两个命令时
+```
+
+也可以完全不装，用 `npx dsh-a2a-groups <command>`。**Node 20+**，零依赖（不拉数据库、不拉模型）。
+
+### 三个入口，装一次全都有
+
+| 命令 / 入口 | 干什么 | 需要 DSH 吗 |
+|---|---|---|
+| `agent-groups` | 跑群宿主（独立 Node 进程，存群和消息） | 否 |
+| `agent-groups-mcp` | MCP server，给 CodeBuddy / Claude Code / Cursor 用 | 否 |
+| DSH 插件 | 侧边栏面板、成员栏、同事名片 | **是** |
+
+**注意**：`npm install` 只是把代码装到磁盘。要在 DSH 里看到「协作群」按钮，还得在 profile 里启用插件 ——
+见下面的「在 DSH 里加入群」。
+
+### 装完先自检
+
+```bash
+# 宿主能起来吗
+agent-groups --port 3095 --data /tmp/ag &
+curl -s http://127.0.0.1:3095/a2a/.well-known/agent-card.json | head -3
+
+# MCP 能应答吗（应打印 serverInfo）
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
+  | agent-groups-mcp 2>/dev/null | head -1
+```
+
+---
+
 ## 快速开始
 
 ### 在服务器上跑群宿主
