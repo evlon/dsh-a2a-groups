@@ -32,6 +32,7 @@
  * behind a gateway it needs no TLS of its own, and in front of one it does.
  */
 
+import { randomUUID } from 'node:crypto';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdirSync, readFileSync, existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
@@ -41,6 +42,7 @@ import { normalizeConfig } from '../lib/core/config.js';
 import { createGroupStore } from '../lib/core/groups.js';
 import { createSkillRegistry } from '../lib/core/skills.js';
 import { createGroupSkills } from '../lib/core/skills-group.js';
+import { createJoinTokenStore } from '../lib/core/join-page.js';
 import { createServer } from '../lib/core/server.js';
 import { TaskStore } from '../lib/core/wire.js';
 
@@ -305,8 +307,17 @@ async function main() {
     config,
   });
 
+  // One store for both sides: the invite skill mints a token, the join page consumes it. Two stores would
+  // mean every printed link is rejected — a bug that reads as "the page does not work".
+  const joinTokens = createJoinTokenStore({
+    newToken: () => randomUUID().replace(/-/gu, ''),
+    now: () => Date.now(),
+  });
+
   const registry = createSkillRegistry();
   for (const skill of createGroupSkills({
+    mintJoinToken: () => joinTokens.mint(),
+    
     store,
     // A host has no memberships of its own. The ledger is never read here; passing a
     // stub that refuses loudly stops a future edit from quietly reintroducing the
@@ -342,6 +353,8 @@ async function main() {
   });
   const { registrar, handle, routes } = createHttpRegistrar(logger);
   const server = createServer({
+    joinTokens,
+    
     registrar,
     where: 'standalone agent-groups',
     logger,
@@ -358,6 +371,29 @@ async function main() {
     profileProvider: undefined,
     // Lets an operator force a flush over HTTP before copying groups.json.
     onFlush: () => store.flush(),
+    // Content for the join page. The first listed group is the example: a page that demands a group id before
+    // showing anything cannot be opened by the person who needs it.
+    joinContext: async () => {
+      const listed = (store.listDirectory({}).groups ?? []).filter((group) => group.archived !== true);
+      const first = listed[0];
+      if (first === undefined) {
+        // No group yet means there is nothing to join. The page says so rather than printing an empty
+        // invitation a colleague would paste and then wonder about.
+        throw new Error('no group exists yet, so there is nothing to join');
+      }
+      return {
+        groupName: first.name ?? first.groupId,
+        groupId: first.groupId,
+        gatewayBase: config.groups.gatewayBase ?? '',
+        agentName: config.groups.agentName ?? '',
+        apiKey: config.client.apiKey ?? '',
+        // The member chooses these, not the host: the page cannot know the colleague's port or token. A
+        // placeholder is used rather than omitting the key, because a missing key in a YAML block is a silent
+        // hole while an obvious placeholder is a question the assistant will ask.
+        publicUrl: 'http://<your-machine>:3091/a2a',
+        serverToken: '<pick-a-long-random-string>',
+      };
+    },
   });
 
   server.attach();

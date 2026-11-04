@@ -38,7 +38,14 @@ import {
   writeSse,
   writeSseHead,
 } from './wire.js';
+import { randomUUID } from 'node:crypto';
 import { A2A_PATH, CARD_ALIAS_PATH, CARD_PATH, buildCard, resolveAgentUrl } from './card.js';
+import {
+  JOIN_PATH,
+  createJoinTokenStore,
+  renderJoinErrorPage,
+  renderJoinPage,
+} from './join-page.js';
 
 /** @typedef {import('./wire.js').TaskRow} TaskRow */
 
@@ -270,12 +277,61 @@ export function createServer({
   skills,
   profileProvider,
   onFlush,
+  // The join page needs to read one group and its invitation. Injected rather than reached for, so this
+  // module keeps its "no ctx" property and stays testable without a store.
+  joinContext,
+  // Shared with the invite skill; see this file's note on why one store is not optional.
+  joinTokens: providedJoinTokens,
 } = {}) {
   const serverConfig = /** @type {any} */ (config)?.server ?? {};
   const maxBodyBytes = positiveInt(serverConfig.maxBodyBytes, DEFAULT_MAX_BODY_BYTES);
   const taskTimeoutMs = positiveInt(serverConfig.taskTimeoutMs, DEFAULT_TASK_TIMEOUT_MS);
   const token = typeof serverConfig.token === 'string' ? serverConfig.token.trim() : '';
   const streaming = serverConfig.streaming !== false;
+
+  // One-time page tokens, in memory only. A join page carries credentials, so it must not survive a restart
+  // and must not be replayable.
+  // Injected by the host so the invite skill mints into the same map; falls back to a private one so this
+  // facade still works when assembled alone.
+  const joinTokens = providedJoinTokens ?? createJoinTokenStore({
+    newToken: () => randomUUID().replace(/-/gu, ''),
+    now: () => Date.now(),
+  });
+
+  /**
+   * Serve the join page, or explain why this token is spent.
+   *
+   * @param {object} req - request.
+   * @param {object} res - response.
+   */
+  async function handleJoin(req, res) {
+    const url = new URL(req.url ?? '/', 'http://placeholder');
+    const token = url.searchParams.get('t') ?? '';
+
+    const outcome = joinTokens.consume(token);
+    if (outcome.ok !== true) {
+      writeHtml(res, 410, renderJoinErrorPage(outcome.reason));
+      return;
+    }
+
+    let detail;
+    try {
+      detail = typeof joinContext === 'function' ? await joinContext() : undefined;
+    } catch (error) {
+      // A page that cannot build its content must say so rather than render half of it: a config paragraph
+      // with missing fields would be pasted and fail somewhere far from here.
+      writeHtml(res, 503, renderJoinErrorPage('unknown'));
+      warn('could not build the join page', error);
+      return;
+    }
+    if (detail === undefined || detail === null) {
+      send(res, 503, 'text/html; charset=utf-8', renderJoinErrorPage('unknown'));
+      return;
+    }
+
+    const fresh = joinTokens.mint();
+    writeHtml(res, 200, renderJoinPage({ ...detail, expiresAt: fresh.expiresAt }));
+  }
 
   /** @type {Array<() => void>} disposers for every registered route. */
   let disposers = [];
@@ -315,6 +371,9 @@ export function createServer({
       // the file". Both are authenticated — a flush is a write and must not be
       // triggerable by anyone who can reach the port.
       register.call(registrar, { kind: 'exact', path: HEALTH_PATH, handler: handleHealth }),
+      // Unauthenticated on purpose: the token in the query string IS the authentication, and requiring the
+      // A2A bearer on top would mean a colleague cannot open this until they are already configured.
+      register.call(registrar, { kind: 'exact', path: JOIN_PATH, handler: handleJoin }),
     ];
     attached = true;
     info();
@@ -1046,6 +1105,38 @@ async function readBody(req, limit) {
  * @param {object} [headers] - extra headers.
  * @returns {void}
  */
+/**
+ * Write an HTML response.
+ *
+ * Separate from `writeJson` rather than parameterised, because the two disagree on everything that matters here:
+ * the content type, the caching policy, and the fact that a page is already a string. `no-store` is not a
+ * default to inherit — the join page carries credentials, and a cached copy outlives the token that authorised it.
+ *
+ * @param {A2aResponse} res - `node:http` response.
+ * @param {number} status - HTTP status.
+ * @param {string} html - the document.
+ * @returns {void}
+ */
+function writeHtml(res, status, html) {
+  if (res === null || typeof res !== 'object') return;
+  if (res.writableEnded === true || res.destroyed === true) return;
+  try {
+    if (res.headersSent !== true) {
+      res.statusCode = status;
+      res.setHeader?.('Content-Type', 'text/html; charset=utf-8');
+      // The page carries an API key and a server token. Nothing may keep a copy.
+      res.setHeader?.('Cache-Control', 'no-store, no-cache, must-revalidate');
+      res.setHeader?.('Pragma', 'no-cache');
+      // A page rendered from host state must not run script from elsewhere, and it needs no referrer.
+      res.setHeader?.('Referrer-Policy', 'no-referrer');
+      res.setHeader?.('X-Content-Type-Options', 'nosniff');
+    }
+    res.end(html);
+  } catch {
+    // A response that cannot be written is already a lost cause, and throwing here would mask the caller's error.
+  }
+}
+
 function writeJson(res, status, payload, headers) {
   if (res === null || typeof res !== 'object') return;
   if (res.writableEnded === true || res.destroyed === true) return;

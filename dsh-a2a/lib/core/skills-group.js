@@ -76,7 +76,17 @@ const MAX_READ_LIMIT = 200;
  *   which is how a local member proves itself without a network round trip.
  * @returns {object[]} the skill definitions, in card order.
  */
-export function createGroupSkills({ store, identities, config, logger, clock = () => Date.now() }) {
+export function createGroupSkills({
+  store,
+  identities,
+  config,
+  logger,
+  clock = () => Date.now(),
+  // Mints a one-time join-page token. Injected because the token store lives in the server facade, and a skill
+  // must not reach into a sibling module's state. Absent on a host with no page, in which case `group/invite`
+  // simply returns no URL rather than a broken one.
+  mintJoinToken,
+}) {
   const settings = config.groups;
 
   /**
@@ -402,12 +412,26 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             gatewayBase: settings.gatewayBase === '' ? undefined : settings.gatewayBase,
             agent: settings.agentName === '' ? undefined : settings.agentName,
           });
-          return {
+                  // One message carries both halves: the A2A link for the assistant, and a page for the human who has not
+        // configured anything yet. Absent when this host serves no page.
+        const joinPageUrl = typeof mintJoinToken === 'function'
+          ? (() => {
+              try {
+                const token = mintJoinToken();
+                return token === undefined ? undefined : `${settings.publicUrl ?? ''}/join?t=${token.token}`;
+              } catch {
+                return undefined;
+              }
+            })()
+          : undefined;
+
+return {
             text: issued.prompt,
             meta: {
               groupId,
               token: issued.token,
               link: issued.link,
+            joinPageUrl,
               prompt: issued.prompt,
               expiresAt: issued.expiresAt === null ? '' : new Date(issued.expiresAt).toISOString(),
               neverExpires: issued.expiresAt === null,

@@ -852,8 +852,8 @@ test('server: attach is idempotent and detach removes every route it added', asy
   const webServer = fakeWebServer();
   const server = await startServer({ webServer });
   try {
-    // card, alias, /a2a, and the operator's /__health
-    assert.equal(webServer.routes.exact.size, 4, 'card, alias, /a2a and /__health');
+    // card, alias, /a2a, the operator's /__health, and the join page
+    assert.equal(webServer.routes.exact.size, 5, 'card, alias, /a2a, /__health and /join');
     assert.equal(webServer.routes.prefixes.size, 1);
   } finally {
     await server.close();
