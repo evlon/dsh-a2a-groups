@@ -501,7 +501,10 @@ test("real data renders name, member count, unread badge and last message", () =
 	// row; the accessible label carries it (asserted separately below).
 	assert.ok(text.includes("53"), `member count 3 missing next to the badge: ${text}`);
 	assert.ok(text.includes("5"), `unread badge missing: ${text}`);
-	assert.ok(text.includes("收到，我这边回归"), `last message missing: ${text}`);
+	// The card must say something happened, and must NOT quote it: the body used to be written into the
+	// page HTML, which leaked message content into every render (and across Sessions).
+	assert.ok(text.includes("发来一条消息"), `the summary must say somebody spoke: ${text}`);
+	assert.ok(!text.includes("收到，我这边回归"), `the message body must not reach the card: ${text}`);
 	assert.ok(text.includes("协作群"), `panel title missing: ${text}`);
 
 	// The icon must be a real element (glyph), not a text stand-in, and the count must keep a
@@ -608,8 +611,9 @@ test("snapshot normalization accepts seconds, ISO strings and aliases", () => {
 	assert.equal(group.name, "t");
 	assert.equal(group.unreadCount, 4);
 	assert.equal(group.memberCount, 2);
-	assert.equal(group.lastMessage.senderName, "阿强");
-	assert.equal(group.lastMessage.text, "hi");
+	assert.equal(group.lastMessage.senderName, "阿强", "the author is kept");
+	// The body is deliberately not carried: it used to be written into the page HTML.
+	assert.ok(!group.lastMessage.text.includes("hi"), "the body must not reach the summary");
 	assert.equal(group.lastTime, Date.parse(iso));
 	assert.equal(snapshot.unreadTotal, 4);
 	// Feed keeps only the feed array, normalized and sorted oldest -> newest.
@@ -695,14 +699,17 @@ test("normalizes the exact shape lib/groups.js snapshot() produces", () => {
 	assert.equal(group.feed[1].id, "uuid-7", "msgId must be picked up");
 	assert.equal(group.feed[1].senderName, "小美", "from.displayName must be picked up");
 	assert.equal(group.feed[1].time, now - 60000, "at must be picked up as epoch ms");
-	assert.equal(group.lastMessage.text, "收到，我这边回归", "lastPost must be picked up");
+	// The author is kept, the words are not: the body used to be written into the page HTML.
+	assert.equal(group.lastMessage.from, "小美", "lastPost must contribute its author");
+	assert.ok(!group.lastMessage.text.includes("收到，我这边回归"), "the body must not reach the summary");
 	assert.equal(group.lastTime, now - 60000);
 
 	// And it renders once injected into the Host slot.
 	harness.setGlobal([raw]);
 	const text = textOf(exportsObject.GroupsPanel({}));
 	assert.ok(text.includes("内网部署协作群"), text);
-	assert.ok(text.includes("收到，我这边回归"), text);
+	// The body is deliberately absent from the rendered card.
+	assert.ok(!text.includes("收到，我这边回归"), "the message body must not reach the card");
 });
 
 test("a counts-only summary (no member credential) renders without a feed", () => {

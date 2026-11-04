@@ -193,19 +193,25 @@ const PANEL_FEED_TAIL = 8;
         const summary = hostedHere ? groups.snapshot({ groupId: record.groupId }) : undefined;
         const lastSeq = summary?.lastSeq ?? record.lastSeq ?? 0;
 
-        // The feed tail is available only for a group this instance hosts: that data
-        // never leaves the process, so publishing it here leaks nothing that a member
-        // of the group could not read anyway. For a group reached over A2A with no
-        // local copy, there is nothing to show and the panel says so.
-        const feed = summary === undefined
-          ? (Array.isArray(record.feed) ? record.feed : []).slice(-PANEL_FEED_TAIL)
-          : (summary.feedTail ?? []).slice(-PANEL_FEED_TAIL).map((entry) => ({
-            seq: entry.seq,
-            at: entry.at,
-            from: entry.from?.displayName ?? '',
-            text: entry.text ?? '',
-            system: entry.kind === 'system',
-          }));
+        // Only the routing facts of the last entry, never its words.
+        //
+        // This snapshot goes into the page HTML, which a proxy may cache, a screenshot may capture and
+        // an extension may read. A member is entitled to read the group; that is not the same as the
+        // body being written into every page render. It also used to leak ACROSS conversations: the
+        // snapshot is global while groups are bound per Session, so one conversation's messages showed
+        // up in another's page.
+        //
+        // What remains answers "should I open this?": who spoke, when, and how much is unread. Reading
+        // the actual feed is a deliberate act — `a2a_group_read` with a member credential — which is a
+        // different thing from every page load carrying the content.
+        const tail = summary === undefined
+          ? (Array.isArray(record.feed) ? record.feed : [])
+          : (summary.feedTail ?? []);
+        const lastEntry = tail.length === 0 ? undefined : tail[tail.length - 1];
+        const lastFromName = lastEntry === undefined
+          ? ''
+          : (typeof lastEntry.from === 'string' ? lastEntry.from : (lastEntry.from?.displayName ?? ''));
+        const lastIsSystem = lastEntry !== undefined && lastEntry.kind === 'system';
 
         rows.push({
           id: record.groupId,
@@ -250,7 +256,10 @@ const PANEL_FEED_TAIL = 8;
           // Kept for the card's hint: with a cached roster the panel draws people, without
           // one it points at the Session rather than implying the group is empty.
           rosterInSession: !Array.isArray(record.members) || record.members.length === 0,
-          feed,
+          // No `feed` array: the panel does not need one, and carrying it wrote message bodies into
+          // the page. See the note above the tail extraction.
+          lastFromName,
+          lastIsSystem,
         });
       }
       // Groups hosted here that this instance is not a member of: these are exactly what
@@ -277,7 +286,8 @@ const PANEL_FEED_TAIL = 8;
             sessionId: '',
             local: true,
             rosterInSession: true,
-            feed: [],
+            lastFromName: '',
+          lastIsSystem: false,
           });
         }
       } catch (error) {

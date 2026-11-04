@@ -340,16 +340,85 @@ window.__ModuleLoader__.load({
 			feed.sort((left, right) => left.time - right.time || left.seq - right.seq);
 			const recentFeed = feed.length > FEED_LIMIT ? feed.slice(feed.length - FEED_LIMIT) : feed;
 
-			// `lastPost` is lib/groups.js `snapshot()`; `lastMessage`/`last` are conveniences.
-			const lastCandidate = firstDefined(raw, ["lastMessage", "lastPost", "last"]);
-			const lastRaw = lastCandidate !== null && typeof lastCandidate === "object" ? lastCandidate : undefined;
-			let lastMessage = lastRaw === undefined ? undefined : normalizeEntry(lastRaw, 0);
-			if (lastMessage === undefined && recentFeed.length > 0) lastMessage = recentFeed[recentFeed.length - 1];
-			// `lastPostAt` carries the timestamp even when only counts are readable.
-			if (lastMessage !== undefined && lastMessage.time === 0) {
-				const fallbackAt = pickTime(firstDefined(raw, ["lastPostAt", "lastMessageAt"]));
-				if (fallbackAt > 0) lastMessage = { ...lastMessage, time: fallbackAt };
-			}
+			// The Host no longer sends message bodies — deliberately: the snapshot is written into the page
+			// HTML, and a group member reading the group is not the same as the body appearing in every
+			// page render. So the summary is assembled from routing facts.
+			//
+			// `lastFromName` names who spoke without quoting them. A system line has no author, which is
+			// why it is carried as its own flag rather than inferred from an empty name — "nobody said
+			// anything" and "the system said something" are different statements.
+			const lastFrom = pickString(firstDefined(raw, ["lastFromName", "lastFrom"]));
+			const lastIsSystem = raw.lastIsSystem === true;
+			const lastAt = pickTime(firstDefined(raw, ["lastTime", "lastPostAt", "lastMessageAt"]));
+
+			// An older Host (or a fixture written against one) sends a whole `lastPost` object including
+			// `text`. Its author and time are useful; its body must be dropped here rather than carried
+			// into the summary, or the leak returns through the compatibility path where nobody looks.
+			// The oldest explicit form: a whole `lastMessage` object. Its `from`/`at` are useful and its
+			// `body`/`text` are dropped on the way in.
+			const legacyExplicit = raw.lastMessage !== null && typeof raw.lastMessage === "object"
+				? raw.lastMessage
+				: undefined;
+			const legacyLast = raw.lastPost !== null && typeof raw.lastPost === "object" ? raw.lastPost : undefined;
+			const legacyFrom = legacyLast === undefined
+				? ""
+				: pickString(firstDefined(legacyLast, ["from", "senderName", "displayName"]))
+					|| (legacyLast.from !== null && typeof legacyLast.from === "object"
+						? pickString(legacyLast.from.displayName)
+						: "");
+			const legacyAt = legacyLast === undefined ? 0 : pickTime(firstDefined(legacyLast, ["at", "time"]));
+
+			// The oldest shape: a feed array. Its last entry names an author and a time, and its `text` is
+			// dropped — a compatibility path that forwards the body is the same leak in a place nobody
+			// audits.
+			const feedTailAuthor = (() => {
+				if (lastFrom !== "" && lastAt > 0) return { from: "", at: 0 };
+				if (!Array.isArray(raw.feed) || raw.feed.length === 0) return { from: "", at: 0 };
+				const last = raw.feed[raw.feed.length - 1];
+				if (last === null || typeof last !== "object") return { from: "", at: 0 };
+				const name = pickString(firstDefined(last, ["senderName", "fromName"]))
+					|| (last.from !== null && typeof last.from === "object" ? pickString(last.from.displayName) : "")
+					|| (typeof last.from === "string" ? pickString(last.from) : "");
+				return { from: name, at: pickTime(firstDefined(last, ["at", "time"])) };
+			})();
+
+			const explicitFrom = legacyExplicit === undefined
+				? ""
+				: pickString(firstDefined(legacyExplicit, ["senderName", "fromName"]))
+					|| (legacyExplicit.from !== null && typeof legacyExplicit.from === "object"
+						? pickString(legacyExplicit.from.displayName)
+						: pickString(legacyExplicit.from));
+			const explicitAt = legacyExplicit === undefined ? 0 : pickTime(firstDefined(legacyExplicit, ["at", "time"]));
+
+			const effectiveFrom = lastFrom !== "" ? lastFrom
+				: (legacyFrom !== "" ? legacyFrom
+					: (explicitFrom !== "" ? explicitFrom : feedTailAuthor.from));
+			const effectiveAt = lastAt > 0 ? lastAt
+				: (legacyAt > 0 ? legacyAt
+					: (explicitAt > 0 ? explicitAt : feedTailAuthor.at));
+
+			// Kept as an object so every existing renderer keeps working; `text` is intentionally
+			// absent, and `from` carries the author instead.
+			// An author or a system marker is required. A timestamp on its own is not evidence of a message:
+			// it may be a settings change, and rendering "有新消息" for it would invent a line the group never
+			// had. Ordering reads `lastTime` separately, so nothing is lost.
+			const hasSummary = effectiveFrom !== "" || lastIsSystem === true;
+			let lastMessage = hasSummary === false
+				? undefined
+				: {
+					id: "",
+					seq: 0,
+					time: effectiveAt,
+					from: effectiveFrom,
+					// `senderName` is the name other renderers read; kept because the card, the feed rows and
+					// the tests all address an author by it.
+					senderName: effectiveFrom,
+					// Never the message body. This string is the whole summary the card shows.
+					text: lastIsSystem === true
+						? "群里有新消息"
+						: (effectiveFrom === "" ? "有新消息" : effectiveFrom + " 发来一条消息"),
+					system: lastIsSystem
+				};
 
 			const declaredMemberCount = pickNumber(firstDefined(raw, ["memberCount", "membersCount", "memberTotal"]));
 			const unreadCount = Math.max(0, Math.round(pickNumber(firstDefined(raw, ["unreadCount", "unread", "unreadTotal"]))));
@@ -364,7 +433,9 @@ window.__ModuleLoader__.load({
 				lastMessage: lastMessage,
 				lastTime: lastMessage === undefined ? 0 : lastMessage.time,
 				members: members,
-				feed: recentFeed,
+				// No feed array: the Host does not send one any more, and keeping an always-empty field invites
+			// a future renderer to depend on it.
+			feed: recentFeed,
 				// `role` is the permission bit (owner | member). It decides which section
 				// the group belongs to, because the ACTIONS differ: an owner approves and
 				// invites, a member only reads and posts.
