@@ -139,12 +139,14 @@ MCP 配置（stdio）：
 ## 文档
 
 | 文件 | 讲什么 |
-|---|---|
-| [DESIGN.md](docs/DESIGN.md) | 架构决策与依据 |
+| [PRODUCT.md](docs/PRODUCT.md) | **产品说明**：解决什么问题、三个场景、不做什么 |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | **架构**：目录边界、核心模块、两条数据流 |
+| [DESIGN.md](docs/DESIGN.md) | 设计决策与依据 |
 | [CONTRACT.md](docs/CONTRACT.md) | 模块职责、协议、目录边界 |
 | [RUNBOOK.md](docs/RUNBOOK.md) | 落地实录、踩过的坑、复跑清单 |
 | [DEPLOY.md](docs/DEPLOY.md) | 生产部署 |
 | [MCP.md](docs/MCP.md) | MCP 接入 |
+| [BACKLOG.md](docs/BACKLOG.md) | 需求池：想过但暂不做的事 |
 
 ## 验证
 

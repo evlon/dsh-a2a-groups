@@ -1,38 +1,41 @@
-docs: state the MCP polling limit honestly, and fix every stale tool count
+docs: product and architecture docs, plus the gaps in the existing five
 
-Two corrections, both the kind that erode trust in a doc once a reader checks them.
+Two documents were missing, and four claims in the existing ones were wrong. Both halves matter — a wrong
+number in a doc costs a reader's trust in the rest of the page, so this pass verified rather than asserted.
 
-THE POLLING STORY WAS WRONG IN A SUBTLE WAY
+NEW
 
-The old text said "MCP 的 Server 不能主动向 Client 发消息" — that is false. The protocol carries
-`notifications/message` and `notifications/resources/updated`, and the transport supports SSE. What is true is
-that no mainstream client turns a notification into a model turn.
+`docs/PRODUCT.md` — what this is for, not how it works. Three concrete scenarios (adding a colleague mid-
+project, knowing who to ask, letting the assistant find people), the four product boundaries with the reason
+for each (no auto-dispatch, no persistent DMs, no admin reading content, no group password), and a comparison
+against using a group chat. The boundaries matter most: each one is a decision that a plausible "obvious"
+feature was deliberately not built.
 
-The difference matters. "Impossible" tells a reader not to look; "supported but unused by clients" tells them
-where the actual obstacle is. So MCP.md now says the second thing, with what was measured:
+`docs/ARCHITECTURE.md` — the system as built. Directory boundary with the one-line test for where a file
+belongs, the core modules with their real sizes, the two data flows (group messages arrive by outbound SSE;
+direct messages by poll-and-ack), the identity model, and the panel's write channel.
 
-    instructions        CodeBuddy drops it entirely — asked whether a sentence from it was present, "没有"
-    prompts/list        exposed as a slash command only; never enters context automatically
-    tools               land in <available_deferred_tools> with the NAME only, no description, no schema
+CORRECTED — each one measured, not estimated
 
-And the practical advice follows from that: ask for the poll in the prompt, because nothing else will.
+1. **"Only 3 `ctx` references outside `lib/dsh/`"** → there are **2**, both optional injections in
+   `server.js`. Found by running the grep the doc itself recommends; the number in the text had been guessed.
+2. **Skill count** said 19 `group/*` + 4 `person/*`; the real split is **18 + 4 = 22**.
+3. **Tool count** appeared as 19 in seven places; it is **26**. Earlier commits fixed the docs but this
+   verified nothing was left.
+4. **`CONTRACT.md` had no entry for four modules that exist** — `endpoint.js`, `colleague-cards.js`,
+   `person/profile`, `announceJoin` — plus the two behaviour changes (`setProfile` announcing only real
+   changes, and `group/read` returning `from` as an object). A contract that omits them invites somebody to
+   re-implement them.
 
-    codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<任务>"
+`CONTRACT.md` also gained the reasoning behind the ones that were bugs, because the *reason* is what stops a
+future edit from reintroducing them: the host must not compute its own endpoint for a member, an announcement
+cannot be signed by its own recipient, and the invite token must not travel in a notice.
 
-The alternative — having the host invoke the client's non-interactive mode when a message arrives — is
-described and explicitly marked as not built, with its costs: a cold process per wake, and per-client
-adaptation.
+ADDED
 
-STALE COUNTS, FIXED EVERYWHERE
+`DEPLOY.md` §六之二 — MCP deployment. Server-side needs no change at all (same gateway, same path), which is
+the point worth stating; and `AGENT_GROUPS_TOKEN` means the gateway key here, not the host token — the two
+share a name and nothing else, which is the likeliest misconfiguration.
 
-Seven places said 19 tools. The real number is 26. A reader who checks `tools/list` and finds a mismatch stops
-believing the rest of the page, so the count is now taken from the spec by `scripts/sync-tool-count.mjs` rather
-than typed.
-
-The first run of that script reported 23 — its regex assumed four spaces of indentation where the file uses
-six. Caught by comparing against `TOOL_SPECS.length`, which is exactly why the script counts instead of me.
-
-Also completed the tool table in MCP.md: it was missing six entries, including `a2a_pending`, the one tool the
-new instructions tell a model to call first.
-
-Verified: 427 tests, MCP probe OK, and `docs` now references all 26 tools with no stale count anywhere.
+Verified: every module line count in ARCHITECTURE.md matches the file; every internal doc link resolves; 427
+tests, MCP probe OK, standalone probe OK.

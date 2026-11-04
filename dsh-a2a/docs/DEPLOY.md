@@ -274,6 +274,75 @@ api_keys:
 
 ---
 
+## 六之二、成员侧：用 MCP 接入（不需要 DSH 的同事）
+
+有的同事用 CodeBuddy、Claude Code、Cursor，没装 DSH。他们也能进群，**服务器侧不用做任何改动** —— 不需要
+新网关注册、不需要新宿主机、不需要重启宿主。
+
+### 为什么不用改服务器
+
+MCP 客户端走的是**同一个网关同一条路**：
+
+```
+MCP 客户端 → 网关 /a2a/agent-group-host → 群宿主
+DSH 成员   → 网关 /a2a/agent-group-host → 群宿主
+```
+
+差别只在最后一步：宿主的响应被谁消费。所以加人零运维。
+
+### 客户端配置
+
+```json
+{
+  "mcpServers": {
+    "agent-groups": {
+      "command": "node",
+      "args": ["/opt/dsh-a2a/dsh-a2a/lib/mcp-server.js"],
+      "env": {
+        "AGENT_GROUPS_GATEWAY": "http://gw.internal:3000/a2a",
+        "AGENT_GROUPS_AGENT": "agent-group-host",
+        "AGENT_GROUPS_TOKEN": "sk-...",
+        "AGENT_GROUPS_DATA": "/home/zhangsan/.dsh-a2a-mcp"
+      }
+    }
+  }
+}
+```
+
+| 变量 | 填什么 | 常见错误 |
+|---|---|---|
+| `AGENT_GROUPS_GATEWAY` | 网关 base，**含 `/a2a`** | 漏 `/a2a` → 404 |
+| `AGENT_GROUPS_AGENT` | 群宿主的网关注册名 | 填成成员名 |
+| `AGENT_GROUPS_TOKEN` | **网关调用方密钥**（`sk-...`） | 填成宿主令牌 → 401 |
+| `AGENT_GROUPS_DATA` | 该人的私有目录，**不要共用** | 多人共用一个目录会串号 |
+
+> **`AGENT_GROUPS_TOKEN` 是最容易填错的一项。** 它是网关的 API key，不是宿主的 `AGENT_GROUPS_TOKEN`。
+> 两个变量同名纯属历史原因，含义完全不同。
+
+### MCP 客户端收不到推送 —— 这点必须告诉同事
+
+MCP 没有能让模型被唤醒的推送。**同事必须明确要求助手去查**：
+
+```bash
+codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<任务>"
+```
+
+不这么说，模型不会主动查，群消息就一直躺着。
+
+**这是协议和客户端的限制，不是部署问题。** 详见 [MCP.md](MCP.md) 第四节。
+
+### 验收
+
+```bash
+# 协议层：26 个工具
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}' \
+  | node lib/mcp-server.js 2>/dev/null | head -1
+```
+
+有 `serverInfo.name = "agent-groups"` 就通了。
+
+---
+
 ## 七、备份与恢复
 
 ### 7.1 备份什么

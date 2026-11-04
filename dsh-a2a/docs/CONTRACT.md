@@ -445,6 +445,76 @@ createServer({ registrar, where, logger, config, deliverer, tasks, skills, onFlu
 技能里那几处"把自己登记为成员"的调用在宿主上按设计**静默跳过**——
 群主本来就是所建群的一员，这个语义由群自身满足。
 
+### 2.7e 后加的四个模块与两处行为
+
+名字带 `2.7e` 而不是新章节，是因为它们仍然属于「宿主与账本这一层」，插在这里比另起一节更容易被找到。
+
+#### `lib/core/endpoint.js` —— 谁的地址
+
+```js
+ownEndpointFromConfig(config)  // 从 groups.gatewayBase + groups.agentName 拼出本实例地址
+normalizeEndpoint(value)       // 校验并规范化外部传入的地址
+```
+
+**存在理由**：`group/join` 跑在**宿主进程里**，如果在宿主里调 `ownEndpointFromConfig(config)`，得到的是
+**宿主自己的地址**，会被写到每个成员身上。所以宿主只用调用方送来的地址；只有成员侧才调这个函数。
+
+这条曾经是真实缺陷：所有成员的地址都被写成了宿主的，导致「看起来注册了，但谁也收不到」。
+
+#### `lib/core/colleague-cards.js` —— 名片汇编
+
+```js
+buildColleagueCards({ persons, memberships })  // → [{ personId, displayName, headline, tags, groups, online }]
+```
+
+**为什么不是直接读 `persons[]`**：名片要回答「这个人**和我**有什么关系」，所以需要当前实例的 memberships
+才能算出「在哪些共同的群里」「在这个群里负责什么」。纯 persons 表做不到。
+
+#### `lib/core/skills-group.js` 的 `person/profile`
+
+**新 skill，第 22 个。** `group/role` 写的是**某个群内的** `about`/`tags`；`headline` 是**跨群的**人属性，
+存在 `persons[]` 里。两者不能合并 —— 一个人可以在 A 群「负责对账」、在 B 群「兼产品」，同时名片上写「后端工程师」。
+
+```js
+{ skill: 'person/profile', data: { groupId, personId, personKey, headline } }
+```
+
+带 `groupId` 不是因为它属于群，而是因为**凭证挂在群成员身份上** —— 有了凭证才知道写哪个人的行。
+
+#### `announceJoin(group, joiner)`（`skills-group.js` 内部函数）
+
+入群后发两条一对一消息：给群主 `join-notice`，给新人 `welcome`。
+
+三条约束：
+
+1. **欢迎不能由被欢迎者签名** —— `sendPersonMessage` 拒绝自发消息。有群主用群主，没有用保留 id `system`。
+2. **两条消息都不带邀请令牌** —— 否则令牌进群主收件箱，正是转发截图的来源。
+3. **通知失败不能让入群失败** —— 成员已经落盘了。
+
+#### 行为变更一：`setProfile` 只在真变化时写系统条目
+
+旧版无条件 `appendSystem('X 更新了本群角色')`，导致每次保存都广播 —— 成员观察到的现象是「同一条通知反复刷屏，
+间隔从两小时缩到 100 秒」，并合理怀疑「有客户端在循环调用」。
+
+现在比较前后值（tags 两边排序后比较），无变化直接返回 `{ changed: false }`，**且不更新 `profileUpdatedAt`**
+（那个字段的含义是「最后修改时间」，空存一次就刷新等于说谎）。
+
+#### 行为变更二：`group/read` 的 `from` 是对象
+
+```js
+// 错过的写法（曾存在）
+from: entry.from.displayName,
+personId: entry.from.personId,
+
+// 正确
+from: { personId: entry.from.personId, displayName: entry.from.displayName },
+```
+
+`publicEntry` 约定 `from: { personId, displayName }`。降级成字符串后，所有读 `from.displayName` 的消费者拿到
+`undefined` —— 而测试只断言了 `from.personId` 和面板文本，所以一直是绿的。
+
+**这条值得记住**：断言「渲染出来的文本」不能代替断言「结构」。
+
 ### 2.8 `client.js`（分支 D，UI）
 
 左侧群面板。DSH 客户端插件规范：
