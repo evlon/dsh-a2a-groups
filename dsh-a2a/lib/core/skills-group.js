@@ -697,6 +697,99 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
       },
     },
     {
+      id: 'group/remove',
+      name: 'Remove a member',
+      description:
+        'Remove another member from a group. OWNER ONLY. Their messages stay in the feed — history is not theirs to erase and deleting it would make the conversation read as if people answered someone who never spoke. A system line records the removal, because the remaining members will notice. The owner cannot remove themselves; that is group/leave, which hands ownership on.',
+      examples: ['Remove 王五 from the invoice group'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const removed = store.removeMember({
+            groupId,
+            member,
+            targetMemberId: required(data.targetMemberId, 'targetMemberId'),
+            reason: typeof data.reason === 'string' ? data.reason : undefined,
+          });
+          return {
+            text: `已把 ${removed.displayName} 移出群。\n\n`
+              + '他之前的消息都保留着，feed 里记了一条系统记录。'
+              + '\n对方下次发帖会得到「不是成员」，客户端应当据此清掉本机记录。',
+            meta: {
+              groupId,
+              memberId: removed.memberId,
+              displayName: removed.displayName,
+              feedSeq: removed.feedSeq ?? 0,
+            },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/rename',
+      name: 'Rename a group',
+      description:
+        'Change a group name, its topic, or both. OWNER ONLY. Renaming is the ordinary maintenance act in a long-lived group; the alternative used to be creating a new group and losing the history, which nobody would do, so groups kept wrong names.',
+      examples: ['Rename the invoice group to 发票与对账', 'Clear the topic of this group'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const renamed = store.renameGroup({
+            groupId,
+            member,
+            name: data.name,
+            topic: data.topic,
+          });
+          return {
+            text: renamed.changed.length === 0
+              ? '名字和主题都没变，所以没有改动。'
+              : `已修改${renamed.changed.map((field) => (field === 'name' ? '群名' : '群主题')).join(' 和 ')}。\n\n`
+                + `群名：${renamed.name}`
+                + (renamed.topic === '' ? '' : `\n主题：${renamed.topic}`),
+            meta: {
+              groupId,
+              name: renamed.name,
+              topic: renamed.topic,
+              changed: renamed.changed,
+            },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/archive',
+      name: 'Archive or reopen a group',
+      description:
+        'Retire a group, or bring it back. OWNER ONLY. Archived means readable but not writable, and absent from the directory — deliberately not a delete, because a finished project conversation is worth keeping and re-opening by mistake must be possible.',
+      examples: ['Archive the invoice group, we shipped it'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.archiveGroup({
+            groupId,
+            member,
+            // Defaults to archiving: the common call is "we are done", not "reopen".
+            archived: data.archived !== false,
+          });
+          return {
+            text: result.archived
+              ? '这个群已归档：还能读，但不能发言，也不会出现在频道目录里。让群主再调一次并传 archived=false 可以恢复。'
+              : '这个群已恢复：可以继续发言，也会重新出现在频道目录里。',
+            meta: { groupId, archived: result.archived },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
       id: 'group/leave',
       name: 'Leave a group',
       description: 'Remove a member from a group. Anyone may remove themselves; only the owner may remove someone else.',

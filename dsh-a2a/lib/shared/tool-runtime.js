@@ -813,6 +813,78 @@ function requireSession(sessionId, tool) {
       displayName: decided.displayName,
     };
   },
+  'a2a_group_remove': async function a2a_group_remove(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const targetMemberId = requireText(args.targetMemberId, 'targetMemberId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_remove');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    if (membership.local === true) {
+      const removed = store.removeMember({
+        groupId,
+        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        targetMemberId,
+        reason: args.reason,
+      });
+      await store.flush();
+      return { groupId, memberId: removed.memberId, displayName: removed.displayName };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/remove',
+      text: `remove ${targetMemberId}`,
+      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, targetMemberId, reason: args.reason },
+      timeoutMs: config.client.timeoutMs,
+    });
+    const meta = result.data ?? {};
+    return { groupId, memberId: meta.memberId ?? targetMemberId, displayName: meta.displayName ?? targetMemberId };
+  },
+
+  'a2a_group_rename': async function a2a_group_rename(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_rename');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    if (membership.local === true) {
+      const renamed = store.renameGroup({
+        groupId,
+        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        name: args.name,
+        topic: args.topic,
+      });
+      await store.flush();
+      return { groupId, name: renamed.name, topic: renamed.topic, changed: renamed.changed };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/rename',
+      text: 'rename',
+      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, name: args.name, topic: args.topic },
+      timeoutMs: config.client.timeoutMs,
+    });
+    const meta = result.data ?? {};
+    return { groupId, name: meta.name ?? '', topic: meta.topic ?? '', changed: Array.isArray(meta.changed) ? meta.changed : [] };
+  },
+
+  'a2a_group_archive': async function a2a_group_archive(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_archive');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    if (membership.local === true) {
+      const result = store.archiveGroup({
+        groupId,
+        member: { memberId: membership.memberId, memberKey: membership.memberKey },
+        archived: args.archived !== false,
+      });
+      await store.flush();
+      return { groupId, archived: result.archived };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/archive',
+      text: 'archive',
+      data: { groupId, memberId: membership.memberId, memberKey: membership.memberKey, archived: args.archived !== false },
+      timeoutMs: config.client.timeoutMs,
+    });
+    const meta = result.data ?? {};
+    return { groupId, archived: meta.archived === true };
+  },
+
   'a2a_group_claim': async function a2a_group_claim(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const requestId = requireText(args.requestId, 'requestId');

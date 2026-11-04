@@ -796,6 +796,108 @@ export const TOOL_SPECS = Object.freeze([
   runtime: 'a2a_group_claim',
   },
   {
+    name: 'a2a_group_remove',
+    description:
+      'Remove another member from a group. Owner only. Their messages stay in the feed: deleting them would rewrite the conversation, and history is the group record rather than the leaver property. A system line records the removal so the remaining members know what happened. To leave yourself, use a2a_group_leave instead — that hands ownership on.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        targetMemberId: { type: 'string', description: 'memberId of the person to remove.' },
+        reason: { type: 'string', description: 'Optional one-liner for the system entry, e.g. "转岗".' },
+      },
+      required: ['groupId', 'targetMemberId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          memberId: { type: 'string' },
+          displayName: { type: 'string' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `Removed ${value.displayName} (${value.memberId}) from the group.
+
+`
+          + 'Their messages remain. They will get "not a member" on their next post, which is how their client '
+          + 'learns to drop its local record.',
+      }],
+    },
+  runtime: 'a2a_group_remove',
+  },
+  {
+    name: 'a2a_group_rename',
+    description:
+      'Rename a group, change its topic, or both. Owner only. This is ordinary maintenance for a long-lived group; before it existed the only fix for a wrong name was to create a new group and lose the history.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        name: { type: 'string', description: 'New display name. Omit to leave it unchanged.' },
+        topic: { type: 'string', description: 'New topic. An empty string clears it. Omit to leave it unchanged.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          name: { type: 'string' },
+          topic: { type: 'string' },
+          changed: { type: 'array', items: { type: 'string' } },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: (value.changed ?? []).length === 0
+          ? 'Nothing changed: those are the current values.'
+          : `Updated ${value.changed.join(' and ')}.
+` + `name : ${value.name}` + (value.topic === '' ? '' : `
+topic: ${value.topic}`),
+      }],
+    },
+  runtime: 'a2a_group_rename',
+  },
+  {
+    name: 'a2a_group_archive',
+    description:
+      'Archive a group (or reopen it). Owner only. Archived means readable but not writable, and absent from the directory. Deliberately not a delete: a finished project conversation is worth keeping, and reopening an archive by mistake must be possible.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        archived: { type: 'boolean', description: 'true to archive (default), false to reopen.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          archived: { type: 'boolean' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: value.archived === true
+          ? 'Archived: still readable, no longer writable, hidden from the directory. Call again with archived=false to reopen.'
+          : 'Reopened: writable again and listed in the directory.',
+      }],
+    },
+  runtime: 'a2a_group_archive',
+  },
+  {
   
     name: 'a2a_serve',
     description:

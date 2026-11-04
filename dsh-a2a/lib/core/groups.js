@@ -189,6 +189,7 @@ export const GROUP_ERROR_CODES = Object.freeze([
   'too_long',
   'empty_message',
   'group_full',
+  'group_archived',
   'not_owner',
   'missing_gateway',
   'storage_unreadable',
@@ -758,6 +759,12 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       });
     }
 
+    if (group.settings?.archived === true) {
+      // An archived group is a record, not a place to talk. Refusing the write is the whole
+      // meaning of archive; allowing it would make the flag decorative.
+      throw new GroupError('group_archived', '这个群已归档，不能再发言。需要继续讨论请让群主恢复它。');
+    }
+
     consume(group, member);
 
     const at = now();
@@ -995,6 +1002,149 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       tags: [...member.tags],
       updatedAt: at,
     };
+  }
+
+  /**
+   * Remove another member. Owner only.
+   *
+   * Their messages stay. Deleting them would rewrite the conversation — a reader would see
+   * people answering somebody who no longer appears to have spoken — and history is the
+   * group's product, not the leaver's property to erase.
+   *
+   * A system entry records the removal, because the remaining members will notice that a
+   * person disappeared. Silence would leave them guessing, and guessing in a group about
+   * people is how rumours start.
+   *
+   * The owner cannot remove themselves: that is `leave`, which transfers ownership. Doing
+   * it here would leave a group with an owner who is not in it.
+   *
+   * @param {object} input
+   * @param {string} input.groupId
+   * @param {object} input.member owner credential
+   * @param {string} input.targetMemberId who to remove
+   * @param {string} [input.reason] one line for the system entry
+   * @returns {{removed: boolean, memberId: string, feedSeq: number|undefined}}
+   */
+  function removeMember(input = {}) {
+    const group = requireGroup(input.groupId);
+    const owner = resolveMember(group, input.member);
+    if (owner.memberId !== group.ownerMemberId) {
+      throw new GroupError('not_owner', '只有群主可以移除成员。');
+    }
+    const targetId = typeof input.targetMemberId === 'string' ? input.targetMemberId.trim() : '';
+    if (targetId === '') throw new GroupError('bad_argument', '缺少 targetMemberId。');
+    if (targetId === owner.memberId) {
+      throw new GroupError(
+        'bad_argument',
+        '群主不能用移除操作离开：请用 group/leave，它会把群主身份交给下一位成员。',
+      );
+    }
+    const index = group.members.findIndex((entry) => entry.memberId === targetId);
+    if (index < 0) throw new GroupError('not_member', '要移除的人不在这个群里。');
+
+    const target = group.members[index];
+    group.members.splice(index, 1);
+    // The rate-limit bucket is keyed by group+member; leaving it behind would leak one
+    // entry per removal for the life of the process.
+    for (const key of buckets.keys()) {
+      if (key === `${group.groupId}\u0000${target.memberId}`) buckets.delete(key);
+    }
+
+    const reason = optionalText(input.reason, MAX_REQUEST_REASON_CHARS, '原因');
+    appendSystem(
+      group,
+      `${owner.displayName} 将 ${target.displayName} 移出了群${reason === undefined ? '' : `（${reason}）`}`,
+    );
+    persist();
+    log.info('member removed', { groupId: group.groupId, memberId: target.memberId, by: owner.memberId });
+    return {
+      removed: true,
+      memberId: target.memberId,
+      displayName: target.displayName,
+      feedSeq: group.nextSeq - 1,
+    };
+  }
+
+  /**
+   * Rename a group, or change its topic, or both. Owner only.
+   *
+   * The most frequent maintenance act in a real group, and until now the only remedy for a
+   * wrong name was to create a new group and lose its history — which nobody would do, so
+   * groups kept wrong names.
+   *
+   * @param {object} input
+   * @param {string} input.groupId
+   * @param {object} input.member owner credential
+   * @param {string} [input.name] new display name
+   * @param {string} [input.topic] new topic; an empty string clears it
+   * @returns {{name: string, topic: string, changed: string[]}}
+   */
+  function renameGroup(input = {}) {
+    const group = requireGroup(input.groupId);
+    const owner = resolveMember(group, input.member);
+    if (owner.memberId !== group.ownerMemberId) {
+      throw new GroupError('not_owner', '只有群主可以改群名或主题。');
+    }
+
+    const changed = [];
+    if (input.name !== undefined) {
+      const name = requireText(input.name, 'name', MAX_NAME_CHARS, '群名');
+      if (name !== group.name) {
+        group.name = name;
+        changed.push('name');
+      }
+    }
+    if (input.topic !== undefined) {
+      const topic = optionalText(input.topic, MAX_TOPIC_CHARS, '群主题') ?? '';
+      if (topic !== group.topic) {
+        group.topic = topic;
+        changed.push('topic');
+      }
+    }
+    if (changed.length === 0) {
+      // Not an error: a caller that sends the current values is asking "did anything
+      // change", and the honest answer is no. Reporting it beats a silent no-op.
+      return { name: group.name, topic: group.topic, changed: [] };
+    }
+
+    appendSystem(group, `${owner.displayName} 修改了${changed.map((field) => (field === 'name' ? '群名' : '群主题')).join(' 和 ')}`);
+    persist();
+    log.info('group renamed', { groupId: group.groupId, changed });
+    return { name: group.name, topic: group.topic, changed };
+  }
+
+  /**
+   * Archive or unarchive a group. Owner only.
+   *
+   * Archived means readable but not writable, and absent from the directory. That is
+   * deliberately NOT a delete: a finished project's conversation is worth keeping, and
+   * re-opening an archive by mistake must be possible — a delete is not reversible.
+   *
+   * Read is still allowed because the most common reason to archive is "we are done" and
+   * the second most common is "let me check what we decided". Refusing to read an archive
+   * would make the feature useless.
+   *
+   * @param {object} input
+   * @param {string} input.groupId
+   * @param {object} input.member owner credential
+   * @param {boolean} [input.archived] defaults to true
+   * @returns {{archived: boolean}}
+   */
+  function archiveGroup(input = {}) {
+    const group = requireGroup(input.groupId);
+    const owner = resolveMember(group, input.member);
+    if (owner.memberId !== group.ownerMemberId) {
+      throw new GroupError('not_owner', '只有群主可以归档或恢复群。');
+    }
+    const archived = input.archived !== false;
+    if (archived === (group.settings.archived === true)) {
+      return { archived };
+    }
+    group.settings.archived = archived;
+    appendSystem(group, `${owner.displayName} ${archived ? '归档' : '恢复'}了这个群`);
+    persist();
+    log.info('group archived', { groupId: group.groupId, archived });
+    return { archived };
   }
 
   /**
@@ -1475,6 +1625,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const visible = state.groups
       // `unlisted` never appears: see the doc comment for why a flag is not enough.
       .filter((group) => (group.settings?.visibility ?? 'public') !== 'unlisted')
+      // An archived group is not on offer: it accepts no new members, so listing it would
+      // invite a request nobody can act on.
+      .filter((group) => group.settings?.archived !== true)
       .filter((group) => needle === ''
         || group.name.toLowerCase().includes(needle)
         || (typeof group.topic === 'string' && group.topic.toLowerCase().includes(needle)))
@@ -1540,6 +1693,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Layer A: re-declare what I am in this group. Only ever applies to the
     // caller's own membership — never another member's.
     setProfile,
+    // Owner-only group administration. `remove` keeps the target's messages, `rename`
+    // fixes a name without losing history, and `archive` retires a group reversibly.
+    removeMember,
+    renameGroup,
+    archiveGroup,
     leave,
     revokeInvite,
     subscribe,
@@ -2022,6 +2180,13 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
        * creation time.
        */
       visibility: source.visibility === 'unlisted' ? 'unlisted' : 'public',
+      /**
+       * Whether the group is archived: readable, not writable, absent from the directory.
+       *
+       * Not a delete. A finished project's conversation is worth keeping, and re-opening
+       * an archive by mistake must be possible — a delete is not.
+       */
+      archived: source.archived === true,
     };
   }
 
