@@ -107,6 +107,58 @@ npx dsh-a2a-groups agent-groups --port 3095 --data /var/lib/agent-groups
 
 零依赖，不需要数据库、不需要模型。[部署文档](docs/DEPLOY.md)
 
+### 在 DSH 里启用（两步，第二步容易漏）
+
+```bash
+# 1. 装包
+dsh plugin --profile web add dsh-a2a-groups@latest
+
+# 2. 让 profile 挂载它 —— 漏了这步，UI 里什么都不会出现，也不报错
+#    编辑 <$DSH_HOME>/profiles/web/package.json，把包名加进 dsh.profile.bundles
+```
+
+```json
+{
+  "dsh": {
+    "profile": {
+      "bundles": [
+        "@deepseek-ai/dsh-base",
+        "@deepseek-ai/dsh-web-app",
+        "dsh-a2a-groups"
+      ]
+    }
+  }
+}
+```
+
+然后重启 DSH，左上角会出现「协作群」。
+
+> **为什么这步不会自动做**：`dsh plugin` 只是把参数转发给 pnpm，它负责「装包」，不负责「启用」。
+> 一个包装进 `node_modules` 和 profile 是否挂载它，是两件事。**实测：只做第 1 步，UI 里完全看不到，
+> `err.log` 也不会有任何提示** —— 所以这一步单独写出来。
+
+### 配置（可选，不配也能开面板）
+
+不配置时插件能启动、面板能开，只是没有群可看。要真正连上协作群，在同一个 profile 的
+`cordis.patch.yml` 里加：
+
+```yaml
+- id: a2a
+  name: dsh-a2a-groups
+  config:
+    groups:
+      enabled: true
+      gatewayBase: http://your-gateway:3000/a2a
+      agentName: agent-person-you
+    client:
+      enabled: true
+      apiKey: <网关调用方密钥>
+      gatewayBase: http://your-gateway:3000/a2a
+    tools: true
+```
+
+`agentName` 是你自己在网关注册的名字。[部署文档](docs/DEPLOY.md) 有完整说明。
+
 ### 在 DSH 里加入群
 
 插件设置里填三项：

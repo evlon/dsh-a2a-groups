@@ -19,7 +19,8 @@ const HOMES = {
   '3093': 'C:/Users/niukl/.dsh-a2a-dev2',
   '3096': 'C:/Users/niukl/.dsh-a2a-dev3',
 };
-const home = HOMES[port] ?? 'C:/Users/niukl/.agent-groups';
+const home = process.env.SHOT_PAGE_HOME ?? HOMES[port] ?? 'C:/Users/niukl/.agent-groups';
+// SHOT_PAGE_HOME lets a throwaway instance (an npm-install test, say) be driven without editing this table.
 
 const log = readFileSync(`${home}/out.log`, 'utf8');
 const token = /token=([A-Za-z0-9_-]+)/.exec(log)?.[1];
