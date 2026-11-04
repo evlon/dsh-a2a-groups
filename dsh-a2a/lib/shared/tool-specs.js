@@ -296,6 +296,47 @@ export const TOOL_SPECS = Object.freeze([
       runtime: 'a2a_person_ack',
     },
   {
+    name: 'a2a_pending',
+    description:
+      'Is anything waiting for me? One call that answers it: unread group messages plus one-to-one invitations and notices, with counts and a one-line summary each. Call this at the START of a turn, or every few minutes while working — this server cannot push to you, so polling this is how you notice a colleague. Say "nothing waiting" when it returns empty rather than silently moving on.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        includeGroups: {
+          type: 'boolean',
+          description: 'Also report groups with unread messages. Defaults to true; pass false for direct messages only.',
+        },
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          total: { type: 'number' },
+          directMessages: { type: 'array', items: { type: 'object' } },
+          groups: { type: 'array', items: { type: 'object' } },
+          summary: { type: 'string' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: value.total === 0
+          ? 'Nothing waiting.'
+          : (value.directMessages.length > 0
+              ? `${value.directMessages.length} direct message(s):\n`
+                + value.directMessages.map((entry) => `  - [${entry.kind}] ${entry.text}`).join('\n')
+              : '')
+            + (value.groups.length > 0
+              ? `\n${value.groups.length} group(s) with unread messages:\n`
+                + value.groups.map((entry) => `  - ${entry.name}: ${entry.unread} new`).join('\n')
+              : ''),
+      }],
+    },
+    runtime: 'a2a_pending',
+  },
+  {
   
     name: 'a2a_group_create',
     description:

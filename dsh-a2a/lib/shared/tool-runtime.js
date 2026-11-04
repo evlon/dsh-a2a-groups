@@ -507,6 +507,77 @@ function requireSession(sessionId, tool) {
     };
   },
 
+  'a2a_pending': async function a2a_pending(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_pending');
+    const includeGroups = args.includeGroups !== false;
+
+    // Direct messages first: an invitation blocks progress, a group message does not.
+    const directMessages = [];
+    const memberships = identities.list({ sessionId });
+    if (memberships.length > 0) {
+      const first = memberships[0];
+      try {
+        if (first.local === true) {
+          for (const message of store.listPersonMessages({ personId: first.personId })) {
+            // Only unconfirmed ones count as pending: a message already acked has been delivered and read.
+            if (message.deliveredAt !== undefined) continue;
+            directMessages.push({ dmId: message.dmId, kind: message.kind, text: message.text });
+          }
+        } else {
+          const result = await bridge.send(targetOf(first, config), {
+            skill: 'person/inbox',
+            text: 'inbox',
+            data: { personId: first.personId },
+            timeoutMs: config.client.timeoutMs,
+          });
+          const list = Array.isArray(result?.data?.messages) ? result.data.messages : [];
+          for (const message of list) {
+            if (message.deliveredAt !== undefined) continue;
+            directMessages.push({ dmId: message.dmId, kind: message.kind, text: message.text });
+          }
+        }
+      } catch {
+        // An unreachable host must not make this probe throw: the whole point is that it is cheap and safe to
+        // call often. An empty result is honest — it says nothing about pending count, and the caller can
+        // still act on groups.
+      }
+    }
+
+    // Then groups with unread messages. Unread is "the host's head minus what this Session last read", which
+    // is already how the panel counts it — computed the same way here so the two agree.
+    const groups = [];
+    if (includeGroups === true) {
+      for (const record of memberships) {
+        if (record.local !== true) {
+          // A remote group's head is only known after a read; without one there is no honest unread count, and
+          // inventing zero would hide new messages. Reported as unknown rather than as zero.
+          continue;
+        }
+        let head = 0;
+        let name = record.groupName ?? record.groupId;
+        try {
+          const summary = store.snapshot({ groupId: record.groupId, member: { personId: record.personId, personKey: record.personKey } });
+          head = summary.lastSeq ?? 0;
+          name = summary.name ?? name;
+        } catch {
+          continue;
+        }
+        const seen = Number.isFinite(record.lastSeq) ? record.lastSeq : 0;
+        const unread = Math.max(0, head - seen);
+        if (unread > 0) groups.push({ groupId: record.groupId, name, unread });
+      }
+    }
+
+    return {
+      total: directMessages.length + groups.reduce((sum, entry) => sum + entry.unread, 0),
+      directMessages,
+      groups,
+      summary: directMessages.length === 0 && groups.length === 0
+        ? 'Nothing waiting.'
+        : `${directMessages.length} direct message(s), ${groups.length} group(s) with unread.`,
+    };
+  },
+
   'a2a_group_create': async function a2a_group_create(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_create');
     const name = requireText(args.name, 'name');

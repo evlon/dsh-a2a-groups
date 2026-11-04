@@ -1,39 +1,38 @@
-fix: a group created through MCP could not be invited to
+feat(mcp): one call that answers "is anything waiting for me?"
 
-The MCP walkthrough — CodeBuddy in non-interactive mode calling this server over stdio — found it on the
-second real task:
+MCP cannot push to a model. Notifications reach the CLIENT PROGRAM, and no mainstream client turns one into
+a turn, so an agent using this server is never woken by a colleague. If it does not ask, it never learns — the
+protocol has no path around that.
 
-    cbc -p "对群 g-c728b019 做两件事：生成邀请；发一条消息"
+Asking needs one place to ask. Before this there were three overlapping answers and no entry point:
+`a2a_person_inbox` covers one-to-one messages, `a2a_group_read` needs a group id the caller may not have, and
+nothing computed an unread count at all. A model told "check your groups" had to guess.
 
-    消息已发出（seq 2）。但邀请没有生成：
-    "g-c728b019" is hosted elsewhere; only this instance's own groups can be administered here
+`a2a_pending` returns, in one call:
 
-`a2a_group_create` accepts an `agent` and creates the group on a remote host, which is the NORMAL case
-(the host is a standalone server). But `a2a_group_invite` gated on `local === true`. So a client could
-create a group it could not invite anybody to — and MCP always hits this path, because an MCP client has
-no hosted groups of its own.
+    direct messages   unconfirmed only — an invitation blocks progress
+    groups            name and unread count, computed the same way the panel does
+    nothing           said plainly, so a poll that finds nothing is cheap and unambiguous
 
-WHY THE HOST MUST MINT
+Designed to be called at the start of every turn, so it cannot throw when nothing is joined and never invents
+an unread count for a remote group whose head it has not read — an unknown reported as zero would hide new
+messages.
 
-The invite token is stored (hashed) on the host that owns the group. Only that process can create a link
-the same process will accept, so `a2a_group_invite` now branches: in-process for a local group, and over
-`bridge.send` to `group/invite` for a remote one. The caller sends its own owner credential and the host
-verifies it — this instance never gains authority it does not have.
+THE INSTRUCTIONS WERE REWRITTEN TO TEACH THE POLL
 
-VERIFIED THROUGH THE SAME CLIENT THAT FOUND IT
+The old preamble described browsing and posting and never said "check for messages". A tool nobody is told to
+call is a tool that does not exist. The new one states the WHEN (start of a turn), the WHY (this server cannot
+reach you), the consequence of skipping it, and what to do with an empty answer.
 
-    cbc -p "用 a2a_group_invite 给群 g-c728b019 生成邀请链接"
-    -> agent-a2a://group?v=1&gw=http://127.0.0.1:3000/a2a&agent=agent-group-h...
-       有效期到 2026-11-11T09:09:29Z
+MEASURED, AND IT DOES NOT WORK YET
 
-ALSO ESTABLISHED
+CodeBuddy drops `instructions` entirely — asked directly whether a sentence from it was present, the answer was
+"没有". It also puts MCP tools in a deferred list where only the NAME is visible:
 
-MCP exposes all 25 tools with complete schemas — verified by a raw stdio handshake, not only through the
-model — and `cbc` drives them: it created `g-c728b019`, read it back with the right name and owner role,
-and posted to it. Reports live in `.shots/mcp/`.
+    mcp__agent-groups__a2a_pending      (no description, no schema)
 
-Two limits are protocol, not implementation: MCP has no server push, so a client cannot be woken by a
-group message and has to read on its own initiative; and it has no UI, so everything is described in
-conversation.
+so a model would have to `ToolSearch` before calling anything. That is a client-side decision this server
+cannot influence, and it means the poll has to be asked for by the user until a client honours instructions.
 
-Verified: 427 tests, and the three MCP interactions above.
+Verified: 427 tests, 26 tools aligned, and a direct `tools/call` returns
+`{"total":0,"summary":"Nothing waiting."}`.

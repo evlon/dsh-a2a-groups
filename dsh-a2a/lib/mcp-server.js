@@ -135,10 +135,21 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
               protocolVersion: MCP_PROTOCOL_VERSION,
               capabilities: { tools: { listChanged: false } },
               serverInfo: { name: 'agent-groups', version },
+              // This preamble is the only place a model learns that it has to ASK. MCP notifications cannot reach
+              // it — they land in the client program, and no mainstream client turns one into a turn — so without
+              // this sentence a colleague's message sits unread forever and the model has no reason to suspect it
+              // exists.
               instructions:
-                'Collaboration groups. Use a2a_group_directory to see what exists, a2a_group_request to ask '
-                + 'to join, and a2a_group_post with `mentions` to address specific people. A post without '
-                + 'mentions only raises an unread count; a mention wakes the person.',
+                'Collaboration groups for this machine. THIS SERVER CANNOT REACH YOU: it cannot notify you when '
+                + 'a colleague posts or invites you, so checking is your job.\n\n'
+                + 'Call a2a_pending at the START of a turn, and again every few minutes during long work. It '
+                + 'returns unread group messages plus one-to-one invitations in one call. If it reports nothing, '
+                + 'say so briefly and carry on — do not silently skip it.\n\n'
+                + 'An invitation blocks progress: join with a2a_group_join (the message carries a ready link) or '
+                + 'decline it, then a2a_person_ack so the sender learns it arrived.\n\n'
+                + 'Find groups with a2a_group_directory; join without an invite via a2a_group_request then '
+                + 'a2a_group_claim once approved. Speak with a2a_group_post — add \`mentions\` to summon specific '
+                + 'people, omit it for ordinary progress that only raises an unread count.',
             },
           };
         case 'notifications/initialized':
