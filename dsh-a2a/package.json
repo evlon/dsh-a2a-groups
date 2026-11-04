@@ -1,5 +1,5 @@
 {
-  "name": "dsh-a2a",
+  "name": "@evlon/dsh-a2a",
   "version": "0.1.0",
   "description": "A2A protocol for DSH: expose a DSH Session as a standard A2A agent, call remote A2A agents, and run invite-only collaboration groups where a group is itself an A2A agent behind a gateway.",
   "keywords": [
@@ -69,5 +69,18 @@
   "devDependencies": {
     "@types/node": "^26.6.6",
     "typescript": "^7.0.2"
-  }
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/evlon/dsh-a2a.git",
+    "directory": "dsh-a2a"
+  },
+  "bugs": {
+    "url": "https://github.com/evlon/dsh-a2a/issues"
+  },
+  "homepage": "https://github.com/evlon/dsh-a2a#readme",
+  "author": "evlon"
 }

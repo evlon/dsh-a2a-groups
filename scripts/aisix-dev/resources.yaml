@@ -13,8 +13,8 @@
 # plaintext key, and `allowed_agents` decides which group they may reach. The
 # plaintext below is DEV ONLY — the hash is what is stored.
 #
-#   plaintext : sk-dev-niukl-2026
-#   sha256    : c60c4fcb4f33322be5dcc08d7c09fc982b84f8755d41243104ab9d96d0b6a0d7
+#   plaintext : (set AISIX_DEV_CALLER_KEY; not committed)
+#   sha256    : regenerate for your own key — see scripts/aisix-dev/aisix-dev.sh
 
 _format_version: "1"
 
@@ -41,7 +41,9 @@ api_keys:
     # `agent-group*` also keeps the older single-group name working; `group-*` is kept for the
     # A2A convention of addressing a group directly.
     allowed_agents: ["mock-a2a", "agent-group-host", "agent-group*", "group-*", "agent-person-*"]
-    key_hash: "c60c4fcb4f33322be5dcc08d7c09fc982b84f8755d41243104ab9d96d0b6a0d7"
+    # Generate this for your own key — never commit a real one:
+    #   printf %s "your-caller-key" | sha256sum
+    key_hash: "0000000000000000000000000000000000000000000000000000000000000000"
 
 a2a_agents:
   - name: "mock-a2a"
@@ -72,7 +74,7 @@ a2a_agents:
     url: "http://127.0.0.1:3095/a2a"
     protocol_version: "1.0"
     auth_type: "api_key"
-    secret: "agent-groups-host-token-2026"
+    secret: "dev-host-token-not-a-secret"
     timeout_ms: 600000
     enabled: true
 
@@ -90,7 +92,7 @@ a2a_agents:
     protocol_version: "1.0"
     auth_type: "api_key"
     # The credential the gateway holds for DSH; it never reaches a caller.
-    secret: "dsh-a2a-dev-token-2026"
+    secret: "dev-member-token-not-a-secret"
     timeout_ms: 600000
     enabled: true
 
@@ -106,7 +108,7 @@ a2a_agents:
     url: "http://127.0.0.1:3093/a2a"
     protocol_version: "1.0"
     auth_type: "api_key"
-    secret: "dsh-a2a-dev-token-3093"
+    secret: "dev-member-token-3093-not-a-secret"
     timeout_ms: 600000
     enabled: true
 

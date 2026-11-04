@@ -16,7 +16,7 @@
 ```powershell
 # 群宿主：独立进程，不是 DSH
 cd E:\dsh-a2a-bus\dsh-a2a
-$env:AGENT_GROUPS_TOKEN="agent-groups-host-token-2026"
+$env:AGENT_GROUPS_TOKEN="<your-host-token>"
 node bin\agent-groups.js --port 3095 `
   --data "C:\Users\niukl\.agent-groups\a2a" `
   --gateway "http://127.0.0.1:3000/a2a" `
@@ -36,7 +36,7 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 ## 1. 独立宿主已验证（不需要 DSH）
 
 ```powershell
-node scripts\standalone-probe.mjs --port 3095 --token agent-groups-host-token-2026
+node scripts\standalone-probe.mjs --port 3095 --token <your-host-token>
 # → standalone: OK   （24 条断言）
 ```
 
@@ -292,12 +292,12 @@ cookie，所以 `opencli browser open "http://…/?token=…"` 会落在鉴权�
 ```sh
 # 0) 独立宿主（不需要 DSH，先起它）
 cd E:\dsh-a2a-bus\dsh-a2a
-$env:AGENT_GROUPS_TOKEN="agent-groups-host-token-2026"
+$env:AGENT_GROUPS_TOKEN="<your-host-token>"
 node bin\agent-groups.js --port 3095 --data "C:\Users\niukl\.agent-groups\a2a" `
   --gateway "http://127.0.0.1:3000/a2a" --agent "agent-groups"
 
 # 1) 独立宿主端到端（24 条断言，全程无 DSH）
-node scripts\standalone-probe.mjs --port 3095 --token agent-groups-host-token-2026
+node scripts\standalone-probe.mjs --port 3095 --token <your-host-token>
 
 # 2) 网关（WSL）
 /mnt/e/dsh-a2a-bus/scripts/aisix-dev/aisix-dev.sh up

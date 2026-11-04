@@ -13,7 +13,7 @@ if ([sessionId, groupId, personId, personKey].some((value) => value === undefine
 }
 
 const HOST = 'http://127.0.0.1:3095/a2a';
-const TOKEN = process.env.AGENT_GROUPS_TOKEN ?? 'agent-groups-host-token-2026';
+const TOKEN = process.env.AGENT_GROUPS_TOKEN ?? 'dev-host-token-not-a-secret';
 
 /** Call one skill on the host. */
 async function call(skill, data) {

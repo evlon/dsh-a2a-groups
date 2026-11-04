@@ -8,7 +8,7 @@
 
 const base = process.argv[2] ?? 'http://127.0.0.1:3000';
 const agent = process.argv[3] ?? 'mock-a2a';
-const key = process.argv[4] ?? 'sk-dev-niukl-2026';
+const key = process.argv[4] ?? (process.env.A2A_KEY ?? 'dev-caller-key-not-a-secret');
 const scheme = process.env.X_FORWARDED_PROTO;
 
 const url = `${base}/a2a/${agent}/.well-known/agent-card.json`;

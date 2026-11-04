@@ -13,7 +13,7 @@
  */
 
 const GATEWAY = process.env.A2A_GATEWAY ?? 'http://127.0.0.1:3000/a2a';
-const KEY = process.env.A2A_KEY ?? 'sk-dev-niukl-2026';
+const KEY = process.env.A2A_KEY ?? 'dev-caller-key-not-a-secret';
 const HOST = process.env.A2A_HOST_AGENT ?? 'dsh-groups';
 
 const headers = {

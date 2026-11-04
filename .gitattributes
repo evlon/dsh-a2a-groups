@@ -1,0 +1,16 @@
+# Normalise line endings so a Windows checkout and a Linux CI runner produce the same bytes.
+#
+# Without this, Git converts LF to CRLF on checkout under Windows and back on commit, which is noisy but
+# survivable — except for the shell scripts, where a CRLF makes bash fail with `bad interpreter` and the error
+# says nothing about line endings.
+* text=auto eol=lf
+
+# Windows-only helpers keep CRLF so they open correctly in Notepad and cmd.
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+
+# Binary — never touched.
+*.png binary
+*.jpg binary
+*.zst binary

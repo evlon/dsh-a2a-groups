@@ -18,3 +18,10 @@ desktop.ini
 # A separate repository cloned alongside this one; not part of this tree.
 dsh-session-bus/
 
+
+# My own commit-message scratch file; not part of the project.
+.git-msg.txt
+
+# Local verification reports are written to .shots/ (already ignored) — but keep this
+# pattern in case one is ever copied out.
+*-REPORT.md

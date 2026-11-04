@@ -30,7 +30,7 @@ METRICS_PORT=9090
 MOCK_PORT=3092
 
 # DEV credentials — see resources.yaml for the matching hashes.
-CALLER_KEY="${AISIX_DEV_CALLER_KEY:-sk-dev-niukl-2026}"
+CALLER_KEY="${AISIX_DEV_CALLER_KEY:-dev-caller-key-not-a-secret}"
 UPSTREAM_TOKEN="${AISIX_DEV_UPSTREAM_TOKEN:-mock-upstream-token-2026}"
 
 log() { printf '%s\n' "$*"; }

@@ -9,7 +9,7 @@
 
 const base = process.argv[2] ?? 'http://127.0.0.1:3000';
 const agent = process.argv[3] ?? 'dsh-group';
-const key = process.argv[4] ?? 'sk-dev-niukl-2026';
+const key = process.argv[4] ?? (process.env.A2A_KEY ?? 'dev-caller-key-not-a-secret');
 
 let failed = 0;
 const check = (label, ok, detail = '') => {
