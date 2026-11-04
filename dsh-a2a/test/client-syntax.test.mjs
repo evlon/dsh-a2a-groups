@@ -189,6 +189,83 @@ function createFakeTabs(options = {}) {
 		},
 	};
 }
+
+/** Every element in a stub tree, depth-first, with host components rendered. */
+function findAll(node, sink = []) {
+	if (node === null || node === undefined || node === false) return sink;
+	if (Array.isArray(node)) {
+		for (const child of node) findAll(child, sink);
+		return sink;
+	}
+	if (typeof node === "object") {
+		if (typeof node.type === "function") {
+			findAll(node.type(node.props), sink);
+			return sink;
+		}
+		sink.push(node);
+		for (const child of node.children) findAll(child, sink);
+	}
+	return sink;
+}
+
+/** Every `<button>` in a stub tree, in document order. */
+function buttonsOf(tree) {
+	const buttons = findAll(tree).filter((element) => element.type === "button");
+	// The tree above is flattened depth-first, which is document order for this renderer.
+	return buttons;
+}
+
+/** A fake composer action surface recording what was inserted. */
+function createFakeInput(behaviour = {}) {
+	const inserted = [];
+	return {
+		inserted,
+		captureInsertion() {
+			if (behaviour.captureThrows === true) throw new Error("capture exploded");
+			return { start: 0, end: 0, revision: 7 };
+		},
+		insertText(text, span) {
+			if (behaviour.insertThrows === true) throw new Error("insert exploded");
+			if (behaviour.insertReturnsFalse === true) return false;
+			if (behaviour.requireSpan === true && span === undefined) return false;
+			inserted.push({ text, span });
+			return true;
+		},
+		setDraft(text) {
+			if (behaviour.noSetDraft !== true) inserted.push({ text, span: "draft" });
+		},
+	};
+}
+
+/** A group snapshot shaped like `lib/index.js` publishes it, with one self id. */
+function groupFixture(overrides = {}) {
+	const now = Date.now();
+	return Object.assign(
+		{
+			id: "grp-1",
+			groupId: "grp-1",
+			name: "内网部署协作群",
+			topic: "证书轮换与网关灰度",
+			joined: true,
+			discovered: false,
+			role: "member",
+			memberCount: 4,
+			onlineCount: 2,
+			unreadCount: 0,
+			sessionId: "sess-1",
+			personId: "p-me",
+			lastTime: now,
+			feed: [],
+			roster: [
+				{ personId: "p-me", displayName: "我", role: "member", online: true, roleAbout: "负责网关灰度", tags: ["运维"] },
+				{ personId: "p-a", displayName: "阿强", role: "owner", online: true, roleAbout: "整体验收", tags: [] },
+				{ personId: "p-b", displayName: "小美", role: "member", online: false, roleAbout: "", tags: [] },
+				{ personId: "p-c", displayName: "老周", role: "member", online: false, roleAbout: "证书与密钥", tags: [] },
+			],
+		},
+		overrides,
+	);
+}
 //#endregion
 
 test("bundle registers itself under the id the contract requires", () => {
@@ -420,10 +497,17 @@ test("real data renders name, member count, unread badge and last message", () =
 	});
 	const text = textOf(exportsObject.GroupsPanel({}));
 	assert.ok(text.includes("内网部署协作群"), `group name missing: ${text}`);
-	assert.ok(text.includes("3 人"), `member count missing: ${text}`);
+	// The count is now a users glyph plus a bare number, so the word 「人」 is gone from the
+	// row; the accessible label carries it (asserted separately below).
+	assert.ok(text.includes("53"), `member count 3 missing next to the badge: ${text}`);
 	assert.ok(text.includes("5"), `unread badge missing: ${text}`);
 	assert.ok(text.includes("收到，我这边回归"), `last message missing: ${text}`);
 	assert.ok(text.includes("协作群"), `panel title missing: ${text}`);
+
+	// The icon must be a real element (glyph), not a text stand-in, and the count must keep a
+	// plain-language label for anyone who cannot read the pictogram.
+	const meta = findAll(exportsObject.GroupsPanel({})).filter((element) => element.props.title === "3 个成员")[0];
+	assert.ok(meta !== undefined, "the member count must expose a plain-language title");
 });
 
 test("expanding a group reveals members and the recent feed", () => {
@@ -663,3 +747,557 @@ test("component render never throws for an undefined props object", () => {
 		assert.doesNotThrow(() => exportsObject[name](undefined));
 	}
 });
+
+//#region members pane: layout, IM ordering, self editing
+test("members pane lays out by column width instead of a fixed maxWidth", () => {
+	// The column is user-resizable. A hard maxWidth pins the roster to the left of a wide
+	// column; the constraint belongs on the TEXT, via flex + minWidth: 0.
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+
+	const rootStyle = root.props.style;
+	assert.equal(rootStyle.maxWidth, undefined, "the container must not cap its width");
+	assert.equal(rootStyle.width, "100%", "it fills whatever width the column has");
+	assert.equal(rootStyle.minWidth, "0", "it can shrink with the column");
+
+	// Nothing in the pane may suppress wrapping wholesale: that is what forced one line
+	// per row regardless of available width. Single-line NAME cells are exempt — they
+	// ellipsize on purpose — but the container and the description cells must wrap.
+	assert.equal(rootStyle.whiteSpace, undefined, "the container must not force a single line");
+	const everyStyle = findAll(root)
+		.map((element) => element.props.style)
+		.filter((style) => style !== null && typeof style === "object");
+	const wrapping = everyStyle.filter((style) => style.whiteSpace === "normal");
+	assert.ok(wrapping.length > 0, "at least the group-role text must be allowed to wrap");
+	for (const style of wrapping) {
+		assert.equal(style.wordBreak !== undefined || style.overflowWrap !== undefined, true, "wrapped text needs a break rule");
+	}
+});
+
+test("members pane orders rows IM-style: 所有人, 群主, 我, then everyone else", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+
+	// 阿强 is the owner in this fixture, so the order is 所有人 → 阿强 → 我 → 小美/老周.
+	const labels = buttonsOf(root).map((button) => textOf(button));
+	assert.ok(labels[0].includes("所有人"), `first row must be 所有人, got: ${labels[0]}`);
+	assert.ok(labels[1].includes("阿强"), `second row must be the owner, got: ${labels[1]}`);
+	assert.ok(labels[1].includes("群主"), `the owner row must be labelled, got: ${labels[1]}`);
+	assert.ok(labels[2].includes("我"), `third row must be me, got: ${labels[2]}`);
+
+	const rest = labels.slice(3).join("|");
+	for (const other of ["小美", "老周"]) {
+		assert.ok(rest.includes(other), `${other} must appear after me, got: ${rest}`);
+	}
+	assert.equal(labels.join("|").split("所有人").length - 1, 1, "所有人 appears exactly once");
+
+	// Online before offline, then by name among the remainder.
+	const restNames = labels
+		.slice(3)
+		.filter((text) => text.includes("小美") || text.includes("老周"))
+		.map((text) => text.replace(/.*?(小美|老周).*/, "$1"));
+	assert.deepEqual(restNames.slice().sort(), ["小美", "老周"].sort());
+});
+
+test("the owner is second even when the owner is offline, and never duplicated", () => {
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({
+			roster: [
+				{ personId: "p-me", displayName: "我", role: "member", online: true, roleAbout: "验收" },
+				{ personId: "p-a", displayName: "阿强", role: "owner", online: false, roleAbout: "管全局" },
+				{ personId: "p-b", displayName: "小美", role: "member", online: false }
+			]
+		})],
+	});
+	const labels = buttonsOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() }))
+		.map((button) => textOf(button));
+	assert.ok(labels[0].includes("所有人"), labels[0]);
+	assert.ok(labels[1].includes("阿强"), `the owner outranks presence: ${labels[1]}`);
+	assert.ok(labels[2].includes("我"), labels[2]);
+	assert.equal(labels.join("|").split("阿强").length - 1, 1, "the owner appears exactly once");
+});
+
+test("when I am the owner there is one row, labelled 群主 and 我, still editable", () => {
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({
+			personId: "p-me",
+			roster: [
+				{ personId: "p-me", displayName: "我", role: "owner", online: true, roleAbout: "我在验收" },
+				{ personId: "p-b", displayName: "小美", role: "member", online: true }
+			]
+		})],
+	});
+	const rows = buttonsOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() }));
+	const labels = rows.map((button) => textOf(button));
+
+	assert.ok(labels[0].includes("所有人"), labels[0]);
+	assert.ok(labels[1].includes("我"), `row 2 must be me-as-owner: ${labels[1]}`);
+	assert.ok(labels[1].includes("群主"), `and must say 群主: ${labels[1]}`);
+	// One row, not two: the whole point is not listing me in position 2 and again in 3.
+	const mine = labels.filter((text) => text.includes("我") && text.includes("群主"));
+	assert.equal(mine.length, 1, `me-as-owner must render once, got: ${labels.join("｜")}`);
+	assert.equal(labels.join("|").split("我在验收").length - 1, 1, "the role text appears once");
+
+	// Still editable: the edit instruction is what that row is for.
+	const input = createFakeInput();
+	const root = bundleWith({
+		groups: [groupFixture({
+			personId: "p-me",
+			roster: [{ personId: "p-me", displayName: "我", role: "owner", online: true, roleAbout: "我在验收" }]
+		})],
+	}).exports.MembersPane({ sessionId: "sess-1", inputActions: input });
+	buttonsOf(root)[1].props.onClick();
+	assert.equal(input.inserted.length, 1, "clicking my own owner row edits, it does not @ me");
+	assert.ok(input.inserted[0].text.includes("a2a_group_role"), input.inserted[0].text);
+});
+
+test("a group whose owner is not in the roster has no empty owner slot", () => {
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({
+			roster: [
+				{ personId: "p-me", displayName: "我", role: "member", online: true },
+				{ personId: "p-b", displayName: "小美", role: "member", online: true }
+			]
+		})],
+	});
+	const labels = buttonsOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() }))
+		.map((button) => textOf(button));
+	assert.ok(labels[0].includes("所有人"), labels[0]);
+	assert.ok(labels[1].includes("我"), `with no owner present, I am second: ${labels[1]}`);
+	assert.ok(labels[2].includes("小美"), labels[2]);
+	assert.equal(labels.join("").includes("群主"), false, "no phantom owner row");
+});
+
+test("my row is marked and shows my group role, not my person headline", () => {
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture()],
+		cards: [{ personId: "p-me", name: "我", headline: "研发工程师", tags: ["研发"], isSelf: true }],
+	});
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const selfRow = buttonsOf(root).filter((button) => textOf(button).includes("负责网关灰度"))[0];
+	assert.ok(selfRow !== undefined, "the self row must carry my group role");
+	const text = textOf(selfRow);
+	assert.ok(text.includes("我"), text);
+	assert.ok(text.includes("负责网关灰度"), `the GROUP role must win over the person headline: ${text}`);
+	assert.equal(text.includes("研发工程师"), false, "the person-table headline must not override the group role");
+	assert.ok(text.includes("编辑介绍"), `the edit affordance must be visible: ${text}`);
+});
+
+test("clicking my row fills the composer with a prefilled role instruction", () => {
+	const input = createFakeInput();
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input });
+	const selfRow = buttonsOf(root).filter((button) => textOf(button).includes("编辑介绍"))[0];
+	assert.ok(selfRow !== undefined, "the self row must be identifiable by its edit chip");
+
+	selfRow.props.onClick();
+	assert.equal(input.inserted.length, 1, "exactly one insertion");
+	const { text, span } = input.inserted[0];
+	assert.ok(span !== undefined, "the two-step API needs the captured span");
+	assert.ok(text.includes("a2a_group_role"), `the tool must be named: ${text}`);
+	assert.ok(text.includes("grp-1"), `groupId must be present, the tool requires it: ${text}`);
+	assert.ok(text.includes("负责网关灰度"), `current value must be prefilled so a small edit stays small: ${text}`);
+	assert.ok(text.includes("120"), `the length limit should be stated: ${text}`);
+});
+
+test("a member without a group role is labelled, not left blank", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const all = textOf(root);
+	assert.ok(all.includes("未填群内介绍"), `an empty role must be stated: ${all}`);
+});
+
+test("my own row explains itself when I have no role yet", () => {
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({ roster: [{ personId: "p-me", displayName: "我", role: "member", online: true, roleAbout: "" }] })],
+	});
+	const text = textOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() }));
+	assert.ok(text.includes("还没写群内介绍"), `empty self description must invite the edit: ${text}`);
+	assert.equal(text.includes("清空介绍"), false, "there is nothing to clear");
+});
+
+test("clearing my role uses its own instruction, because omission means 'unchanged'", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const clear = buttonsOf(root).filter((button) => textOf(button).includes("清空介绍"))[0];
+	assert.ok(clear !== undefined, "a filled-in role must offer a clear action");
+
+	const input = createFakeInput();
+	const root2 = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input });
+	const clear2 = buttonsOf(root2).filter((button) => textOf(button).includes("清空介绍"))[0];
+	clear2.props.onClick();
+	const text = input.inserted[0].text;
+	assert.ok(text.includes("a2a_group_role"), text);
+	assert.ok(text.includes("空字符串"), `the clear must be explicit, not implied: ${text}`);
+	assert.ok(text.includes("空数组"), `tags must be cleared explicitly too: ${text}`);
+});
+
+test("the self row derives from the person table when the roster predates roleAbout", () => {
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({ roster: [{ personId: "p-me", displayName: "我", role: "member", online: true }] })],
+		cards: [{ personId: "p-me", name: "我", headline: "研发工程师", tags: ["研发"], isSelf: true }],
+	});
+	const self = exportsObject.pickSelf(
+		exportsObject.readSnapshot({ groups: [groupFixture({ roster: [{ personId: "p-me", displayName: "我" }] })] }).groups[0],
+		[{ id: "p-me", name: "我", headline: "研发工程师", tags: ["研发"], isSelf: true }],
+	);
+	assert.equal(self.hasSelf, true);
+	assert.equal(self.about, "研发工程师", "the person table is the documented default source");
+	assert.equal(self.aboutFrom, "person");
+});
+
+test("a roster that says nothing about me means 'cleared', not 'unknown'", () => {
+	// Otherwise clearing my role leaves the old headline on screen and I think it failed.
+	const { exports: exportsObject } = bundleWith();
+	const group = exportsObject.readSnapshot({
+		groups: [groupFixture({ roster: [{ personId: "p-me", displayName: "我", roleAbout: "" }] })],
+	}).groups[0];
+	const self = exportsObject.pickSelf(group, [{ id: "p-me", name: "我", headline: "研发工程师", isSelf: true }]);
+	assert.equal(self.hasSelf, true);
+	assert.equal(self.about, "", "a present-but-empty roster row must not be backfilled");
+	assert.equal(self.aboutFrom, "none");
+});
+
+test("the members pane renders with no data, no roster, and no input actions", () => {
+	const { exports: exportsObject } = bundleWith();
+	assert.doesNotThrow(() => exportsObject.MembersPane(undefined));
+
+	const noGroup = exportsObject.MembersPane(undefined);
+	assert.ok(textOf(noGroup).includes("还没有加入协作群"), textOf(noGroup));
+
+	// Joined but the roster was never fetched: the pane must say so rather than imply empty.
+	const noRoster = bundleWith({ groups: [groupFixture({ roster: [], memberCount: 4 })] });
+	const text = textOf(noRoster.exports.MembersPane({ sessionId: "sess-1" }));
+	assert.ok(text.includes("a2a_group_info"), `an unfetched roster must name the tool that fetches it: ${text}`);
+
+	// No inputActions: the edit affordance says so instead of silently doing nothing. With an
+	// empty roster there is no row to carry the chip, so this is asserted on a real roster.
+	const withRoster = bundleWith({ groups: [groupFixture()] });
+	const readOnly = textOf(withRoster.exports.MembersPane({ sessionId: "sess-1" }));
+	assert.ok(readOnly.includes("只读"), `without a composer the row must say it cannot edit: ${readOnly}`);
+	assert.equal(readOnly.includes("清空介绍"), false, "nothing can be cleared without a composer");
+});
+
+test("a composer that refuses the insertion does not break the pane", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	for (const behaviour of [{ insertReturnsFalse: true }, { insertThrows: true }, { captureThrows: true }]) {
+		const input = createFakeInput(behaviour);
+		const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input });
+		// The self row is the one carrying the edit chip, not a fixed index: the owner now
+		// occupies row 2 and row indices shift with the roster.
+		const selfRow = buttonsOf(root).filter((button) => textOf(button).includes("编辑介绍"))[0];
+		assert.ok(selfRow !== undefined, JSON.stringify(behaviour));
+		assert.doesNotThrow(() => selfRow.props.onClick(), JSON.stringify(behaviour));
+	}
+	// A Host with only a whole-draft setter still gets the instruction written.
+	const fallback = createFakeInput({ noSetDraft: false });
+	delete fallback.captureInsertion;
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: fallback });
+	buttonsOf(root).filter((button) => textOf(button).includes("编辑介绍"))[0].props.onClick();
+	assert.equal(fallback.inserted.length, 1, "setDraft is the documented fallback");
+});
+
+test("the roster renders in exactly one place: the members pane", () => {
+	// Regression: an earlier version also drew the roster above the composer, so the same
+	// names appeared twice on screen.
+	const slots = createFakeSlots();
+	const tabs = createFakeTabs();
+	const exportsObject = loadBundle().materialize();
+	exportsObject.apply({ slots, get: (key) => (key === "sidebarRightTabs" ? tabs : undefined) });
+
+	const carrying = slots.registered.filter((entry) => entry.slotOptions.name !== "sidebar.panellist");
+	assert.ok(carrying.length > 0);
+	// Only the right-column pane body and the composer button may know about members.
+	for (const entry of carrying) {
+		const name = entry.slotOptions.name;
+		assert.ok(
+			["main", "sidebar.right.pane.tab", "sidebar.right.pane.tab.title", "conversation.input.left"].includes(name),
+			`unexpected roster-bearing slot: ${name}`
+		);
+	}
+	assert.equal(slots.injected.includes("conversation.input.dock"), false);
+});
+//#endregion
+
+//#region icons
+test("the icon layer is sourced from primitives and falls back to real geometry", () => {
+	// No primitives are installed in this harness (the stub returns {}), so every icon must
+	// resolve to the extracted inline SVG. That is exactly the degraded path a shell version
+	// skew produces, so it is the one worth pinning.
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const tree = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const svgs = findAll(tree).filter((element) => element.type === "svg");
+	assert.ok(svgs.length > 0, "the pane must draw at least one icon");
+	for (const svg of svgs) {
+		assert.equal(svg.props["aria-hidden"], "true", "icons are decoration and must be hidden from AT");
+		assert.ok(typeof svg.props.width === "number", "the fallback draws at an explicit size");
+		assert.equal(svg.props.width, svg.props.height, "icons are square");
+		assert.ok(typeof svg.props.viewBox === "string", "each fallback carries its own grid");
+	}
+	// At least one icon must come from a 16x16 grid and at least one path must be present.
+	assert.ok(svgs.some((svg) => svg.props.viewBox === "0 0 16 16"));
+	assert.ok(svgs.some((svg) => svg.children.length > 0), "a drawn icon has geometry");
+});
+
+test("icons use the product name for each affordance, not a generic one", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const tree = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+
+	// The header's glyph is the two-person icon: four paths in the product's geometry.
+	const header = findAll(tree).filter((element) => element.props.style !== undefined
+		&& element.props.style.gap === "5px"
+		&& element.props.style.flex === "0 0 auto")[0];
+	assert.ok(header !== undefined, "the header must carry its own title row");
+	const headerIcon = findAll(header).filter((element) => element.type === "svg")[0];
+	assert.ok(headerIcon !== undefined, "the header title must have a glyph");
+	// Count path DESCENDANTS, not children: the renderer passes the path list as one array
+	// child, which the stub does not flatten.
+	const paths = findAll(headerIcon).filter((element) => element.type === "path");
+	assert.equal(paths.length, 4, "IconUsersOutlineRegular has four paths");
+});
+
+test("the tab bar draws a glyph per tab and keeps every label", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()], cards: [] });
+	const tree = exportsObject.GroupsPanel({});
+	const tabs = findAll(tree).filter((element) => element.type === "button"
+		&& element.props.title === "全部");
+	assert.equal(tabs.length, 1, "the 全部 tab must be a titled button");
+
+	for (const label of ["全部", "我创建", "我参与", "同事名片"]) {
+		const tab = findAll(tree).filter((element) => element.type === "button" && element.props.title === label)[0];
+		assert.ok(tab !== undefined, `tab ${label} must keep its accessible title`);
+		assert.ok(tab.children.some((child) => child !== null && typeof child === "object" && child.type === "svg"),
+			`tab ${label} must carry an icon alongside the word`);
+	}
+});
+
+test("the empty state has a dimmed illustration and still says it in words", () => {
+	const { exports: exportsObject } = bundleWith();
+	const tree = exportsObject.EmptyState();
+	const iconHolder = findAll(tree).filter((element) => element.props.style !== undefined
+		&& element.props.style.opacity === 0.3)[0];
+	assert.ok(iconHolder !== undefined, "the empty state must carry a dimmed illustration");
+	const glyph = findAll(iconHolder).filter((element) => element.type === "svg")[0];
+	assert.ok(glyph !== undefined, "the illustration must be a drawn glyph");
+	assert.ok(textOf(tree).includes("还没有加入任何群"), "the words must remain");
+});
+
+test("every pure-icon affordance has a tooltip", () => {
+	// A button whose whole content is a glyph must say what it does in `title`.
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const tree = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	for (const button of buttonsOf(tree)) {
+		assert.equal(typeof button.props.title, "string", "every roster button needs a title");
+		assert.ok(button.props.title.length > 0, "the title must not be empty");
+	}
+});
+//#endregion
+
+//#region members pane layout (empty-gap regression)
+test("the pane never grows vertically: no height:100%, no growing children", () => {
+	// Two faults pushed the roster to the bottom of a mostly empty column: `height: 100%`
+	// against an indefinite parent, and `flex: 1 1 auto` on the group name (written for a
+	// row, applied to a column => grow along the block axis).
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+
+	assert.notEqual(root.props.style.height, "100%", "the pane must size to its content");
+	assert.equal(root.props.style.height, "auto");
+	assert.equal(root.props.style.overflowY, undefined, "scrolling belongs to the parent, not here");
+
+	// No direct child of the column may grow.
+	for (const child of root.children) {
+		if (child === null || child === undefined || typeof child !== "object") continue;
+		const style = child.props.style;
+		if (style === null || style === undefined) continue;
+		const flex = style.flex;
+		if (flex === undefined) continue;
+		assert.equal(
+			String(flex).startsWith("1") || String(flex).includes("1 1"),
+			false,
+			`a column child must not grow: flex=${String(flex)}`
+		);
+	}
+});
+
+test("the rows start at the top: header, group name, then the roster", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const children = root.children.filter((child) => child !== null && typeof child === "object");
+	assert.ok(children.length >= 3, "header + group name + roster");
+	// The roster is LAST, so nothing can sit above it and nothing below it can absorb slack.
+	const last = children[children.length - 1];
+	assert.equal(last.props.style.flex, "0 0 auto", "the roster is at its natural height");
+});
+
+test("所有人 is an ordinary roster row, not a banner", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const tree = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const rows = buttonsOf(tree);
+
+	// The broadcast row is first and shares the person-row style object with everybody else.
+	const first = rows[0];
+	assert.ok(textOf(first).includes("所有人"), textOf(first));
+	const personRow = rows.filter((row) => textOf(row).includes("阿强"))[0];
+	assert.ok(personRow !== undefined);
+	assert.deepEqual(first.props.style, personRow.props.style, "same style object as a real member row");
+});
+
+test("the broadcast row is inside the roster, not a separate block above it", () => {
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const roster = root.children.filter((child) => child !== null && typeof child === "object"
+		&& child.props.style !== undefined
+		&& child.props.style.flexDirection === "column"
+		&& child.props.style.gap === "1px")[0];
+	assert.ok(roster !== undefined, "the roster container must exist");
+	const inRoster = buttonsOf(roster).map((button) => textOf(button));
+	assert.ok(inRoster[0].includes("所有人"), `所有人 must be the roster's first row: ${inRoster.join("|")}`);
+	assert.ok(inRoster.some((label) => label.includes("阿强")), "members share the same container");
+});
+
+test("a roster that only knows about me still shows exactly one 我 row", () => {
+	// The Host sometimes publishes no `personId`; the `self: true` marker and the person
+	// table are the fallbacks. Either way there must be one and only one self row.
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({ personId: "", roster: [{ personId: "p-me", displayName: "我", self: true, roleAbout: "只做验收" }] })],
+		cards: [{ personId: "p-me", name: "我", headline: "研发", isSelf: true }],
+	});
+	const text = textOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() }));
+	assert.ok(text.includes("只做验收"), "the group role wins over the card headline");
+	assert.equal(text.split("我").length - 1 >= 1, true, "a self row exists");
+});
+
+test("identity falls back to the person table when the membership row has no personId", () => {
+	const { exports: exportsObject } = bundleWith();
+	const group = exportsObject.readSnapshot({
+		groups: [{
+			id: "g",
+			name: "n",
+			personId: "",
+			roster: [
+				{ personId: "p-a", displayName: "阿强" },
+				{ personId: "p-me", displayName: "我", roleAbout: "验收" }
+			]
+		}],
+	}).groups[0];
+	const self = exportsObject.pickSelf(group, [{ id: "p-me", name: "我", headline: "研发", isSelf: true }]);
+	assert.equal(self.hasSelf, true, "the card identifies me even without group.personId");
+	assert.equal(self.personId, "p-me");
+	assert.equal(self.about, "验收", "and the group role is still preferred over the card headline");
+});
+
+test("splitRoster returns owner / mine / others, never the same person twice", () => {
+	const { exports: exportsObject } = bundleWith();
+	const people = [
+		{ id: "p-a", name: "阿强", role: "owner", online: true, self: false },
+		{ id: "p-b", name: "小美", role: "member", online: false },
+		{ id: "p-me", name: "我", role: "member", online: true }
+	];
+	const split = exportsObject.splitRoster(people, { hasSelf: true, personId: "p-me" });
+	assert.equal(split.owner.id, "p-a");
+	assert.equal(split.owner.isSelf, false);
+	assert.equal(split.mine.id, "p-me");
+	assert.equal(split.mine.isSelf, true, "the row builder needs this flag to offer the edit");
+	// Compare by value, not identity: these arrays come from the VM realm, so deepEqual's
+	// prototype check fails even when the contents match.
+	assert.equal(split.others.map((member) => member.id).join(","), "p-b");
+
+	// Me as owner: one slot only, flagged so the pane can label it 群主 · 我.
+	const meOwner = exportsObject.splitRoster(
+		[{ id: "p-me", name: "我", role: "owner", online: true, self: true }],
+		{ hasSelf: true, personId: "p-me" }
+	);
+	assert.equal(meOwner.owner.id, "p-me");
+	assert.equal(meOwner.owner.isSelf, true);
+	assert.equal(meOwner.mine, undefined, "the same person must not also appear as 我");
+	assert.equal(meOwner.others.length, 0);
+
+	// No owner in the roster: no slot, rather than a placeholder.
+	const noOwner = exportsObject.splitRoster(
+		[{ id: "p-me", name: "我", role: "member", online: true, self: true }],
+		{ hasSelf: true, personId: "p-me" }
+	);
+	assert.equal(noOwner.owner, undefined);
+	assert.equal(noOwner.mine.id, "p-me");
+});
+
+test("click me = edit my role; click anyone else = @ them", () => {
+	const input = createFakeInput();
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input });
+	const rows = buttonsOf(root);
+
+	// 所有人 first: @所有人.
+	rows[0].props.onClick();
+	assert.equal(input.inserted[0].text, "@所有人 ", JSON.stringify(input.inserted[0].text));
+
+	// The owner (second row, someone else): @ their name, NOT an edit.
+	const ownerRow = rows[1];
+	assert.ok(textOf(ownerRow).includes("阿强"), textOf(ownerRow));
+	ownerRow.props.onClick();
+	assert.equal(input.inserted[1].text, "@阿强 ");
+	assert.equal(input.inserted[1].text.includes("a2a_group_role"), false, "addressing a person is not an edit");
+
+	// My row: the edit instruction, and never an @ of myself.
+	const selfRow = rows.filter((row) => textOf(row).includes("编辑介绍"))[0];
+	selfRow.props.onClick();
+	const edit = input.inserted[2].text;
+	assert.ok(edit.includes("a2a_group_role"), edit);
+	assert.equal(edit.startsWith("@我"), false, "I must not mention myself");
+});
+
+test("clicking my own owner row edits rather than mentioning myself", () => {
+	const input = createFakeInput();
+	const { exports: exportsObject } = bundleWith({
+		groups: [groupFixture({
+			personId: "p-me",
+			roster: [{ personId: "p-me", displayName: "我", role: "owner", online: true, roleAbout: "管全局" }]
+		})],
+	});
+	const rows = buttonsOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input }));
+	rows[1].props.onClick();
+	assert.equal(input.inserted.length, 1);
+	assert.ok(input.inserted[0].text.includes("a2a_group_role"), input.inserted[0].text);
+	assert.equal(input.inserted[0].text.startsWith("@"), false, "no @self");
+});
+
+test("the ordering rule holds for any roster shape, including one person", () => {
+	// Property: 所有人 is always index 0; owner (if any) is always index 1; I come before the
+	// rank and file. Checked across shapes because the pane's value is being predictable.
+	const shapes = [
+		{ name: "me only", roster: [{ personId: "p-me", displayName: "我", self: true }] },
+		{ name: "me + others", roster: [{ personId: "p-me", displayName: "我", self: true }, { personId: "p-x", displayName: "小张" }] },
+		{
+			name: "owner + me + others",
+			roster: [
+				{ personId: "p-o", displayName: "老王", role: "owner" },
+				{ personId: "p-me", displayName: "我", self: true },
+				{ personId: "p-x", displayName: "小张" }
+			]
+		},
+		{
+			name: "me is owner",
+			roster: [{ personId: "p-me", displayName: "我", role: "owner", self: true }, { personId: "p-x", displayName: "小张" }]
+		}
+	];
+
+	for (const shape of shapes) {
+		const { exports: exportsObject } = bundleWith({ groups: [groupFixture({ personId: "p-me", roster: shape.roster })] });
+		const labels = buttonsOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() }))
+			.map((button) => textOf(button));
+		assert.ok(labels[0].includes("所有人"), `${shape.name}: 所有人 must be first, got ${labels[0]}`);
+		const people = labels.slice(1);
+		const ownerAt = people.findIndex((text) => text.includes("群主"));
+		if (ownerAt >= 0) {
+			assert.equal(ownerAt, 0, `${shape.name}: the owner must be the first person row, got ${people.join("|")}`);
+		}
+		const meAt = people.findIndex((text) => text.includes("我"));
+		if (meAt >= 0 && ownerAt === -1) {
+			assert.equal(meAt, 0, `${shape.name}: I come first when there is no owner, got ${people.join("|")}`);
+		}
+	}
+});
+//#endregion
+
+

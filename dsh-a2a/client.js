@@ -81,12 +81,20 @@ window.__ModuleLoader__.load({
 		 */
 		const services = { sidebarRight: undefined, sidebarRightTabs: undefined };
 
-		/** The panel's tabs, in the order a person scans them. */
+		/**
+		 * The panel's tabs, in the order a person scans them.
+		 *
+		 * `icon` names are resolved through {@link icon}, which prefers the product's own
+		 * primitives export and falls back to geometry extracted from the shipped shell.
+		 * Each tab keeps its text label: an icon-only tab bar in a 280px column makes the
+		 * reader hover to find out what 「我参与」 means, and these four words are short
+		 * enough that the glyph is a scanning aid rather than a replacement.
+		 */
 		const PANEL_TABS = [
-			{ id: "all", label: "全部" },
-			{ id: "mine", label: "我创建" },
-			{ id: "joined", label: "我参与" },
-			{ id: "cards", label: "同事名片" }
+			{ id: "all", label: "全部", icon: "list" },
+			{ id: "mine", label: "我创建", icon: "plus" },
+			{ id: "joined", label: "我参与", icon: "users" },
+			{ id: "cards", label: "同事名片", icon: "user" }
 		];
 
 		//#endregion
@@ -241,17 +249,34 @@ window.__ModuleLoader__.load({
 			return undefined;
 		}
 
-		/** One roster member. `personId`/`displayName` are lib/groups.js `publicMember`. */
+		/**
+		 * One roster member. `personId`/`displayName` are lib/groups.js `publicMember`.
+		 *
+		 * `about` is that member's `roleAbout` — what they do IN THIS GROUP. It is read
+		 * here rather than from the person table because it is per-group by design: the
+		 * same person is "研发" in one group and "产品" in another, and the members pane
+		 * shows one group, so it must show that group's answer.
+		 */
 		function normalizeMember(raw, index) {
 			if (!raw || typeof raw !== "object") return undefined;
 			const name = pickString(firstDefined(raw, ["displayName", "name", "title", "label"]));
 			// Both names are accepted: this bundle is cached by the page and may talk to a Host
-			// that still sends the older field.
+			// that still sends the older field. Do not drop the old one — a cached bundle and a
+			// fresh Host are a normal pairing for a few navigations after an upgrade.
 			const id = pickString(firstDefined(raw, ["personId", "memberId", "id", "sessionId", "key"])) || "member-" + String(index);
+			// "present but empty" and "absent" mean different things: the tool leaves a field
+			// alone when it is omitted, so empty == cleared. Losing that distinction would let
+			// a cleared description be silently re-filled from the person table.
+			const aboutRaw = firstDefined(raw, ["roleAbout", "about", "headline"]);
 			return {
 				id: id,
 				name: name !== "" ? name : id,
 				role: pickString(firstDefined(raw, ["role", "kind"])),
+				roleAbout: pickString(aboutRaw),
+				roleAboutKnown: aboutRaw !== undefined,
+				tags: (Array.isArray(raw.tags) ? raw.tags : []).filter(function (tag) {
+					return typeof tag === "string" && tag !== "";
+				}),
 				online: raw.online === true,
 				self: raw.self === true || raw.isSelf === true
 			};
@@ -349,6 +374,10 @@ window.__ModuleLoader__.load({
 				discovered: raw.discovered === true || raw.joined === false,
 				// Which Session this membership belongs to, when the Host says.
 				sessionId: pickString(firstDefined(raw, ["sessionId", "session"])),
+				// My own person id IN THIS GROUP, when the Host puts it on the membership row
+				// (`lib/index.js` does). It is what lets the pane say "这是你" before any
+				// roster has been fetched, which is the normal state on first open.
+				personId: pickString(firstDefined(raw, ["personId", "memberId"])),
 				muted: raw.muted === true || raw.mute === true
 			};
 		}
@@ -484,6 +513,16 @@ window.__ModuleLoader__.load({
 				fontWeight: "600",
 				margin: 0
 			},
+			/* Dimmed illustration for the empty state: present enough to soften the panel,
+			   faint enough that it never competes with the sentence under it. */
+			emptyIcon: {
+				display: "inline-flex",
+				alignItems: "center",
+				justifyContent: "center",
+				marginBottom: "2px",
+				opacity: 0.3,
+				color: "var(--dsh-color-text-secondary, inherit)"
+			},
 			emptyBody: {
 				fontSize: "12px",
 				opacity: 0.6,
@@ -510,9 +549,10 @@ window.__ModuleLoader__.load({
 			},
 			chevron: {
 				flex: "none",
-				width: "12px",
-				opacity: 0.6,
-				fontSize: "10px"
+				display: "inline-flex",
+				alignItems: "center",
+				opacity: 0.55,
+				color: "inherit"
 			},
 			groupName: {
 				flex: "1 1 auto",
@@ -534,8 +574,22 @@ window.__ModuleLoader__.load({
 				color: "inherit",
 				fontWeight: "600"
 			},
+			/* A count with a glyph instead of a word: 「3 人」 became an icon plus a number,
+			   which is how every IM client shows a roster size and costs one third the width. */
+			metaChip: {
+				flex: "none",
+				display: "inline-flex",
+				alignItems: "center",
+				gap: "3px",
+				fontSize: "11px",
+				opacity: 0.55,
+				lineHeight: "1"
+			},
 			memberCount: {
 				flex: "none",
+				display: "inline-flex",
+				alignItems: "center",
+				gap: "3px",
 				fontSize: "11px",
 				opacity: 0.55
 			},
@@ -738,12 +792,211 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region icons
+		/**
+		 * Icon layer.
+		 *
+		 * ## Where these come from
+		 *
+		 * `@dsh-client-ui-primitives` is a BUILD-TIME VENDORED module in the web shell: it
+		 * is not resolvable from disk (there is no `lib/index.js` anywhere under the `dsh`
+		 * install), but the shell's seed table binds it to the real package, so
+		 * `require("@dsh-client-ui-primitives")` is the only correct way in. It is required
+		 * once at the top of the factory and read through `primitives.IconXxxYyy`.
+		 *
+		 * The bundle's icon components share one contract, verified in the shipped shell:
+		 *
+		 *   ({ size = 16, className, strokeWidth }) => svg{ width: size, height: size,
+		 *     viewBox: "0 0 16 16", fill: "none", "aria-hidden": "true", strokeWidth, ... }
+		 *
+		 * Two consequences for the code below:
+		 *  - every icon is already 16x16 and `aria-hidden`, so we pass `size` and nothing else
+		 *    decorative;
+		 *  - the variant suffix is weight, not shape: `...Regular` is 1px and `...Medium` is
+		 *    1.3px. The geometry is identical, so a fallback drawn at 1px matches Regular.
+		 *
+		 * ## Why every icon has an inline-SVG fallback
+		 *
+		 * The primitives package is versioned with the shell. A profile whose shell predates
+		 * an icon, or a future rename, would otherwise render a blank square where an
+		 * affordance used to be — the worst failure mode for a clickable row. Each fallback
+		 * below is not invented: its geometry was extracted from the shipped shell bundle
+		 * with `scripts/extract-icon-paths.mjs`, so a fallback is pixel-identical to the
+		 * product icon it stands in for. Every icon in this table is on the 16x16 grid, but
+		 * each fallback still carries its own `viewBox` because the product is not uniformly
+		 * 16x16 in general (`IconCheckCircleFillRegular` is 36x36).
+		 *
+		 * ## Icons used, and what each one means here
+		 *
+		 * | export                          | drawn as | used for                              |
+		 * |---------------------------------|----------|---------------------------------------|
+		 * | IconFlatListOutlineRegular      | list     | tab 「全部」                           |
+		 * | IconPlusOutlineRegular          | plus     | tab 「我创建」                         |
+		 * | IconUsersOutlineRegular         | 2 people | tab 「我参与」/ members header / count |
+		 * | IconUserOutlineRegular          | 1 person | tab 「同事名片」                       |
+		 * | IconChevronDownOutlineRegular   | ⌄        | expanded group card                   |
+		 * | IconChevronRightOutlineRegular  | ›        | collapsed group card                  |
+		 * | IconNewChatOutlineRegular       | speech   | empty state 「还没有加入任何群」         |
+		 *
+		 * `IconEditOutlineRegular` is mapped for the 「改我的名片」 / edit affordances; the
+		 * members rows use a text chip (`编辑介绍`) instead, because a 12px pencil next to a
+		 * name reads as "rename this person" rather than "describe yourself".
+		 *
+		 * `@所有人` deliberately has **no** icon: it renders a literal `@`, which is the
+		 * universal broadcast marker and is exactly the character the click inserts.
+		 */
+		const ICONS = {
+			list: "IconFlatListOutlineRegular",
+			plus: "IconPlusOutlineRegular",
+			users: "IconUsersOutlineRegular",
+			user: "IconUserOutlineRegular",
+			chevronDown: "IconChevronDownOutlineRegular",
+			chevronRight: "IconChevronRightOutlineRegular",
+			edit: "IconEditOutlineRegular",
+			chat: "IconNewChatOutlineRegular"
+		};
+
+		/**
+		 * Fallback geometry, copied out of the shipped shell bundle.
+		 *
+		 * `paths` are attribute maps; `attrs` are the values the shell's shared base svg
+		 * puts on the <svg> element and its children inherit (`stroke`, `strokeLinecap`).
+		 * `viewBox` is per icon because not all of them use the 16x16 grid.
+		 */
+		const ICON_FALLBACKS = {
+			IconFlatListOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor", strokeLinecap: "round" },
+				paths: [{ d: "M6 3.5h7.5M6 8h7.5M6 12.5h7.5" }, { d: "M2.6 3.5h.01M2.6 8h.01M2.6 12.5h.01" }]
+			},
+			IconPlusOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [{ d: "M8 2V14", stroke: "currentColor" }, { d: "M2 8H14", stroke: "currentColor" }]
+			},
+			IconUsersOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [
+					{ d: "M6 8.25C7.51878 8.25 8.75 7.01878 8.75 5.5C8.75 3.98122 7.51878 2.75 6 2.75C4.48122 2.75 3.25 3.98122 3.25 5.5C3.25 7.01878 4.48122 8.25 6 8.25Z", stroke: "currentColor" },
+					{ d: "M1 14.5C1 11.5 3.5 10.25 6 10.25C8.5 10.25 11 11.5 11 14.5", stroke: "currentColor" },
+					{ d: "M10.5 2.9C11.65 3.35 12.45 4.35 12.45 5.5C12.45 6.65 11.65 7.65 10.5 8.1", stroke: "currentColor" },
+					{ d: "M12.4 10.6C13.9 11.3 15 12.6 15 14.5", stroke: "currentColor" }
+				]
+			},
+			IconUserOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [
+					{ d: "M8 8.25C9.51878 8.25 10.75 7.01878 10.75 5.5C10.75 3.98122 9.51878 2.75 8 2.75C6.48122 2.75 5.25 3.98122 5.25 5.5C5.25 7.01878 6.48122 8.25 8 8.25Z", stroke: "currentColor" },
+					{ d: "M2.5 14.5C2.5 11.5 5.25 10.25 8 10.25C10.75 10.25 13.5 11.5 13.5 14.5", stroke: "currentColor" }
+				]
+			},
+			IconChevronDownOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [{ d: "M4 6L7.29289 9.29289C7.68342 9.68342 8.31658 9.68342 8.70711 9.29289L12 6", stroke: "currentColor" }]
+			},
+			IconChevronRightOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [{ d: "M6 12L9.29289 8.70711C9.68342 8.31658 9.68342 7.68342 9.29289 7.29289L6 4", stroke: "currentColor" }]
+			},
+			IconEditOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [
+					{ d: "M8.85596 2.69971H4.19971C3.37141 2.69971 2.69992 3.37146 2.69971 4.19971V11.8003C2.69992 12.6285 3.37141 13.3003 4.19971 13.3003H11.8003C12.6283 13.2999 13.3001 12.6283 13.3003 11.8003V7.89893H14.3003V11.8003C14.3001 13.1806 13.1806 14.2999 11.8003 14.3003H4.19971C2.81913 14.3003 1.69992 13.1808 1.69971 11.8003V4.19971C1.69992 2.81918 2.81913 1.69971 4.19971 1.69971H8.85596V2.69971Z", fill: "currentColor" },
+					{ d: "M7.7849 8.23878L13.888 2.13574", stroke: "currentColor" }
+				]
+			},
+			IconNewChatOutlineRegular: {
+				viewBox: "0 0 16 16",
+				attrs: { fill: "none", stroke: "currentColor" },
+				paths: [
+					{ d: "M2.37091 11.2501C1.58745 9.89288 1.32067 8.29835 1.61969 6.76006C1.91872 5.22177 2.76342 3.8433 3.99826 2.87846C5.2331 1.91362 6.77494 1.42737 8.33988 1.50925C9.90482 1.59113 11.3875 2.23562 12.5149 3.32406C13.6425 4.41269 14.3387 5.87206 14.4754 7.4334C14.612 8.99474 14.18 10.5529 13.2587 11.8209C12.3375 13.0888 10.9891 13.9813 9.46194 14.3337C8.18691 14.628 6.85895 14.5294 5.64989 14.0605C5.1712 13.8748 4.76962 13.4932 4.26534 13.3967C3.67413 13.2835 2.95257 13.5598 2.03794 14.3337", stroke: "currentColor" },
+					{ d: "M8 5V11", stroke: "currentColor" },
+					{ d: "M5 8H11", stroke: "currentColor" }
+				]
+			},
+		};
+
+		/** Narrow a primitives export to something callable as a component. */
+		function isRenderable(value) {
+			return value !== null && value !== undefined && (typeof value === "function" || typeof value === "object");
+		}
+
+		/**
+		 * Draw one icon.
+		 *
+		 * Resolves, in order: the primitives export for `name`, then the extracted
+		 * fallback geometry, then nothing (`null`). It never throws: an icon is decoration,
+		 * and a missing one must cost the glyph, not the row that carries the action.
+		 *
+		 * @param {string} name - key into {@link ICONS}, or a raw `Icon*` export name.
+		 * @param {number} [size] - pixel size; the product default is 16.
+		 * @returns {object|null} a vnode, or null when neither source has the icon.
+		 */
+		function icon(name, size) {
+			const exportName = ICONS[name] === undefined ? name : ICONS[name];
+			const px = typeof size === "number" && size > 0 ? size : 14;
+			try {
+				const component = primitives[exportName];
+				if (isRenderable(component)) return h(component, { size: px });
+			} catch (error) {
+				/* a throwing getter must fall through to the drawn fallback */
+			}
+			const shape = ICON_FALLBACKS[exportName];
+			if (shape === undefined) return null;
+			const attrs = Object.assign(
+				{
+					width: px,
+					height: px,
+					viewBox: shape.viewBox,
+					strokeWidth: 1,
+					strokeLinecap: shape.attrs.strokeLinecap === undefined ? "round" : shape.attrs.strokeLinecap,
+					strokeLinejoin: "round",
+					// Per the product contract: icons are decoration. The accessible label lives on
+					// the button's `title`, never on the glyph.
+					"aria-hidden": "true",
+					focusable: "false",
+					style: { flex: "0 0 auto", display: "block", color: "var(--dsh-color-icon, currentColor)" }
+				},
+				shape.attrs
+			);
+			return h(
+				"svg",
+				attrs,
+				shape.paths.map(function (shapeSpec, index) {
+					const tag = shapeSpec.circle === undefined ? "path" : "circle";
+					const spec = shapeSpec.circle === undefined ? shapeSpec : shapeSpec.circle;
+					return h(tag, Object.assign({ key: "p" + String(index) }, spec));
+				})
+			);
+		}
+
+		/** `icon()` sized and styled for a text-sized inline slot. */
+		function inlineIcon(name, size) {
+			const drawn = icon(name, typeof size === "number" && size > 0 ? size : 12);
+			return drawn;
+		}
+		//#endregion
+
 		//#region components
-		/** Empty state required by the contract: never an error, never a spinner. */
+		/**
+		 * Empty state required by the contract: never an error, never a spinner.
+		 *
+		 * The illustration is a single dimmed speech-bubble glyph, not a paragraph of
+		 * explanation: a reader who has joined nothing needs one glanceable signal plus one
+		 * sentence, and an empty panel is where a wall of text is least likely to be read.
+		 * Both the glyph and the copy still say the same thing in words, so nothing is
+		 * carried by the picture alone.
+		 */
 		function EmptyState() {
 			return h(
 				"div",
 				{ style: S.empty },
+				h("span", { style: S.emptyIcon, "aria-hidden": "true" }, icon("chat", 28)),
 				h("p", { style: S.emptyTitle }, "还没有加入任何群"),
 				h("p", { style: S.emptyBody }, "在会话里让助手用 a2a_group_join 加入一个协作群，或接受别人发来的邀请链接。")
 			);
@@ -777,10 +1030,26 @@ window.__ModuleLoader__.load({
 					"aria-expanded": open,
 					title: group.topic !== "" ? group.name + " · " + group.topic : group.name
 				},
-				h("span", { style: S.chevron }, open ? "▾" : "▸"),
+				h("span", { style: S.chevron }, icon(open ? "chevronDown" : "chevronRight", 12)),
 				h("span", { style: S.groupName }, group.name),
-				group.unreadCount > 0 ? h("span", { style: S.badge }, group.unreadCount > 99 ? "99+" : String(group.unreadCount)) : null,
-				h("span", { style: S.memberCount }, String(group.memberCount) + " 人")
+				group.unreadCount > 0
+					? h(
+						"span",
+						{
+							style: S.badge,
+							// The dot is the count; the word 「未读」 lives in the tooltip, so the
+							// row stays readable at a glance without losing the accessible label.
+							title: String(group.unreadCount) + " 条未读"
+						},
+						group.unreadCount > 99 ? "99+" : String(group.unreadCount)
+					)
+					: null,
+				h(
+					"span",
+					{ style: S.memberCount, title: String(group.memberCount) + " 个成员" },
+					icon("users", 12),
+					String(group.memberCount)
+				)
 			);
 
 			const summary =
@@ -868,7 +1137,7 @@ window.__ModuleLoader__.load({
 				cards.push({
 					id: pickString(firstDefined(entry, [ "personId", "memberId", "id", "name" ])) || name,
 					name: name,
-					headline: pickString(firstDefined(entry, [ "headline", "role", "about" ])),
+					headline: pickString(firstDefined(entry, [ "headline", "roleAbout", "role", "about" ])),
 					tags: (Array.isArray(entry.tags) ? entry.tags : []).filter(function (tag) {
 						return typeof tag === "string" && tag !== "";
 					}),
@@ -882,10 +1151,185 @@ window.__ModuleLoader__.load({
 					// My own card: the only one the reader can change, so the only one styled as
 					// editable. The Host decides this by member id, not by name.
 					isSelf: entry.isSelf === true,
-					online: entry.online === true
+					online: entry.online === true,
+					// Their A2A address, when the host knows one. Editable from the card, and the
+					// basis for a future "reach them directly" action.
+					endpoint: pickString(firstDefined(entry, [ "endpoint", "baseUrl", "url" ]))
 				});
 			}
 			return cards;
+		}
+
+		/**
+		 * The Self view the members pane needs: who "I" am, and what I wrote in this group.
+		 *
+		 * THREE SOURCES, deliberately ranked, because no single one is complete:
+		 *
+		 *  1. the roster row the Host marked `isSelf` — authoritative for the display name
+		 *     and for `roleAbout` IN THIS GROUP;
+		 *  2. the person table (`snapshot.cards`) entry with `isSelf` — carries the default
+		 *     `headline` and the tags, so a member whose roster row predates the
+		 *     `roleAbout` field still shows something rather than an empty line;
+		 *  3. the membership row's own display name / personId, when neither list arrived.
+		 *
+		 * The fallback ORDER matters for exactly one case: after I clear my own about, the
+		 * roster carries nothing but the person table still remembers the last headline I
+		 * ever declared. Showing it would tell me I still have a description I just deleted.
+		 * So a roster that arrived but says nothing about me is taken at its word —
+		 * `roleAbout === ""` with `hasSelf === true` means "cleared", not "unknown".
+		 *
+		 * @param {object|undefined} group - normalized group.
+		 * @param {Array} cards - normalized person table.
+		 * @returns {{hasSelf: boolean, personId: string, name: string, about: string, aboutFrom: string, online: boolean, tags: string[]}}
+		 *   `aboutFrom` is "group" | "person" | "none", which the pane uses to tell a
+		 *   cleared description from an unset one.
+		 */
+		function pickSelf(group, cards) {
+			const result = {
+				hasSelf: false,
+				personId: "",
+				name: "",
+				about: "",
+				aboutFrom: "none",
+				online: false,
+				tags: []
+			};
+
+			const roster = group !== undefined && Array.isArray(group.members) ? group.members : [];
+			// Identity is matched by person id, never by display name: two members of one
+			// group may both be called 我 (or a display name may be edited to match someone
+			// else's), and the wrong match would offer an edit of the wrong profile.
+			const ownId = group !== undefined ? pickString(group.personId) : "";
+			let own = roster.filter(function (member) {
+				return member.self === true;
+			})[0];
+			if (own === undefined && ownId !== "") {
+				own = roster.filter(function (member) {
+					return member.id === ownId;
+				})[0];
+			}
+
+			const selfCard = (Array.isArray(cards) ? cards : []).filter(function (card) {
+				return card.isSelf === true;
+			})[0];
+
+			// Last identity resort, for a Host that ships neither `group.personId` nor a
+			// `self` marker on the roster but does mark its own card: match the roster row
+			// against the card's person id. Still id-based, so it cannot pick the wrong
+			// person the way a name match would.
+			if (own === undefined && selfCard !== undefined && selfCard.id !== "") {
+				own = roster.filter(function (member) {
+					return member.id === selfCard.id;
+				})[0];
+			}
+
+			if (own !== undefined) {
+				result.hasSelf = true;
+				result.personId = own.id;
+				result.name = own.name;
+				result.online = own.online;
+				result.tags = own.tags;
+				if (own.roleAbout !== "") {
+					result.about = own.roleAbout;
+					result.aboutFrom = "group";
+				} else if (own.roleAboutKnown !== true && selfCard !== undefined && selfCard.headline !== "") {
+					// The roster row has no about field at all — it predates `roleAbout`, or
+					// this Host sends it only in the table. The table is the documented default.
+					result.about = selfCard.headline;
+					result.aboutFrom = "person";
+				}
+				// `roleAboutKnown === true` with an empty value means I cleared it. Leaving
+				// `about` empty is the point: backfilling the old headline would tell me the
+				// clear had failed.
+				if (result.name === "" && selfCard !== undefined) result.name = selfCard.name;
+				return result;
+			}
+
+			if (selfCard !== undefined) {
+				result.hasSelf = true;
+				result.personId = selfCard.id;
+				result.name = selfCard.name;
+				result.about = selfCard.headline;
+				result.aboutFrom = selfCard.headline === "" ? "none" : "person";
+				result.online = selfCard.online;
+				result.tags = selfCard.tags;
+				return result;
+			}
+
+			// No roster and no table: the membership row still knows who I am, which is
+			// enough to draw the row and to name the group in the edit instruction.
+			if (group !== undefined && ownId !== "") {
+				result.hasSelf = true;
+				result.personId = ownId;
+				result.name = ownId;
+			}
+			return result;
+		}
+
+		/**
+		 * Split a roster into the row order the pane renders.
+		 *
+		 * ## The order, and why
+		 *
+		 *   1. 「所有人」 — added by the pane, not part of this function: it is an address, not
+		 *      a person, and it is always first regardless of who is in the group.
+		 *   2. 群主      — the person who can approve and invite. In a collaboration group the
+		 *      owner is the one you address when something is stuck, so they outrank everyone.
+		 *   3. 我        — where am I, and the only row with a second action (edit).
+		 *   4. everyone else — online first, then by name.
+		 *
+		 * Alphabetical order is right only for strangers. In a group you share with eight
+		 * people, "who runs this", "where am I" and "who is around" are the questions that
+		 * actually get asked.
+		 *
+		 * ## When I am the owner
+		 *
+		 * `mine` and `owner` are then the SAME person, and rendering both would show me twice
+		 * in a list whose whole purpose is telling me who is here. The row is returned once,
+		 * in `owner`, flagged `isSelf` so the pane can label it 「群主 · 我」 and keep the edit
+		 * action. When the owner is somebody else, `mine` is me and `owner` is them.
+		 *
+		 * A group whose owner is not in the roster yields `owner: undefined` — an empty slot
+		 * at position 2 would read as a missing person rather than as absent data.
+		 *
+		 * @param {Array} members - normalized roster.
+		 * @param {object} self - output of {@link pickSelf}.
+		 * @returns {{owner: object|undefined, mine: object|undefined, others: Array}}
+		 *   `owner` carries `isSelf` when I run this group. Never returns the same person twice.
+		 */
+		function splitRoster(members, self) {
+			const list = Array.isArray(members) ? members : [];
+			const mineId = self !== undefined && self.hasSelf === true ? self.personId : "";
+			const byDefault = function (left, right) {
+				if (left.online !== right.online) return left.online ? -1 : 1;
+				return left.name.localeCompare(right.name, "zh-Hans-CN");
+			};
+
+			let owner;
+			let mine;
+			const others = [];
+
+			for (const member of list) {
+				const isSelf = member.self === true || (mineId !== "" && member.id === mineId);
+				const isOwner = member.role === "owner";
+				if (isOwner && owner === undefined) {
+					// One row only, even when the owner is me. `isSelf` here is what makes the
+					// pane label it 「群主 · 我」 instead of showing a second row below.
+					owner = Object.assign({}, member, { isSelf: isSelf || member.self === true });
+					continue;
+				}
+				if (isSelf && mine === undefined) {
+					// `isSelf` is the flag the row builder keys its behaviour and badges off.
+					// Without it the row would render as an ordinary member and I would lose the
+					// only edit affordance in the pane.
+					mine = Object.assign({}, member, { isSelf: true });
+					continue;
+				}
+				others.push(member);
+			}
+
+			others.sort(byDefault);
+			return { owner: owner, mine: mine, others: others };
 		}
 
 		function groupByRelationship(groups) {
@@ -936,8 +1380,12 @@ window.__ModuleLoader__.load({
 						{
 							key: tab.id,
 							type: "button",
+							title: tab.label,
 							style: {
-								padding: "6px 10px",
+								display: "inline-flex",
+								alignItems: "center",
+								gap: "4px",
+								padding: "6px 8px",
 								border: "none",
 								borderBottom: active
 									? "2px solid var(--dsh-color-accent, #4c8dff)"
@@ -947,15 +1395,21 @@ window.__ModuleLoader__.load({
 								font: "inherit",
 								fontSize: "12px",
 								fontWeight: active ? 600 : 400,
-								opacity: active ? 1 : 0.7,
-								cursor: "pointer"
+								opacity: active ? 1 : 0.65,
+								cursor: "pointer",
+								whiteSpace: "nowrap"
 							},
 							onClick: function () {
 								props.onSelect(tab.id);
 							}
 						},
+						// Decorative glyph, then the word: the icon speeds up scanning, the
+						// label keeps the tab answerable without hovering.
+						tab.icon === undefined ? null : icon(tab.icon, 12),
 						tab.label,
-						tab.count === undefined ? null : h("span", { style: { opacity: 0.6, marginLeft: "4px" } }, String(tab.count))
+						tab.count === undefined
+							? null
+							: h("span", { style: { opacity: active ? 0.75 : 0.55, marginLeft: "1px" } }, String(tab.count))
 					);
 				})
 			);
@@ -968,6 +1422,104 @@ window.__ModuleLoader__.load({
 		 * the tags rather than with an unread count. Tags are clickable: filtering the
 		 * roster by "测试" is the whole point of having tags at all.
 		 */
+
+		/**
+		 * The instruction that edits a profile, prefilled with the current values.
+		 *
+		 * Written as a sentence a person would say, because that is what the Session turn will
+		 * read: a JSON blob would work but would be something to get wrong rather than something
+		 * to edit.
+		 *
+		 * @param {object} card - the person's card.
+		 * @param {string} groupName - which group to act in (the tool needs one for the credential).
+		 * @returns {string} the text to insert.
+		 */
+		function draftProfileEdit(card, groupName) {
+			const tags = (card.tags ?? []).join("、");
+			const lines = [
+				"帮我更新我在「" + (groupName === "" ? "这个群" : groupName) + "」的名片信息："
+			];
+			if ((card.headline ?? "") !== "") lines.push("简介：" + card.headline);
+			if (tags !== "") lines.push("标签：" + tags);
+			if ((card.endpoint ?? "") !== "") lines.push("A2A 地址：" + card.endpoint);
+			// The last line is the actual ask: the reader edits the values above it and sends.
+			lines.push("");
+			lines.push("（改上面的内容后直接发送即可；留空的项会被清空。）");
+			return lines.join("\n") + " ";
+		}
+
+		/**
+		 * The instruction that edits MY role in ONE group — the members pane's edit action.
+		 *
+		 * ## Why an instruction and not a save button
+		 *
+		 * The browser bundle holds no membership credential. `a2a_group_role` authenticates
+		 * with `{personId, personKey}`, and that key lives in `memberships.json` on the Host
+		 * (0600) and is never published into the page — `lib/index.js` publishes only the
+		 * read-only snapshot. A form that POSTed from here would have to either carry the
+		 * key into the DOM or invent a second write channel to the Host; both are worse than
+		 * the thing they replace. One write path (the Session turn, which already holds the
+		 * credential) is also why the panel and the assistant cannot disagree about what
+		 * was written.
+		 *
+		 * So the click writes a prefilled instruction into the composer. The reader edits
+		 * the sentence and presses Enter; the assistant calls `a2a_group_role` with the
+		 * values that are now visible in the draft. History, validation and error reporting
+		 * are the turn's, which means the failure message ("about is too long") appears in
+		 * the conversation next to the thing that caused it rather than in a toast that
+		 * cannot say what to do about it.
+		 *
+		 * `groupId` is included because the tool requires it and the name alone is ambiguous
+		 * — two groups may share a display name, and the assistant must not have to guess.
+		 * Both are stated as facts the reader can check, not as a JSON payload: an editable
+		 * sentence is something a person can correct, and a payload is something to get wrong.
+		 *
+		 * @param {object} input
+		 * @param {string} input.groupName - display name, for the sentence.
+		 * @param {string} input.groupId - the tool's required key.
+		 * @param {string} [input.about] - current text, prefilled so a small edit stays small.
+		 * @param {string[]} [input.tags] - current tags.
+		 * @returns {string} text to insert into the composer.
+		 */
+		function draftGroupRoleEdit(input) {
+			const given = input === null || input === undefined ? {} : input;
+			const groupName = pickString(given.groupName);
+			const groupId = pickString(given.groupId);
+			const about = pickString(given.about);
+			const tags = (Array.isArray(given.tags) ? given.tags : []).filter(function (tag) {
+				return typeof tag === "string" && tag !== "";
+			}).join("、");
+
+			const lines = [
+				"用 a2a_group_role 更新我在「" + (groupName === "" ? "这个群" : groupName) + "」的群内介绍" + (groupId === "" ? "" : "（groupId: " + groupId + "）") + "："
+			];
+			lines.push("about：" + about);
+			if (tags !== "") lines.push("tags：" + tags);
+			lines.push("");
+			lines.push("（改上面的内容后直接发送即可。about 是一句话、最多 120 字；清空 about 就是删掉这条介绍。）");
+			return lines.join("\n") + " ";
+		}
+
+		/**
+		 * The instruction that removes MY role in one group.
+		 *
+		 * Separate from {@link draftGroupRoleEdit} because "clear" is the one edit a reader
+		 * cannot express by editing text in place: deleting the line `about：` reads as
+		 * "leave it alone" to a careful reader (the tool leaves a field unchanged when it is
+		 * omitted), so the intent has to be stated rather than implied.
+		 *
+		 * @param {{groupName?: string, groupId?: string}} input
+		 * @returns {string} text to insert into the composer.
+		 */
+		function draftGroupRoleClear(input) {
+			const given = input === null || input === undefined ? {} : input;
+			const groupName = pickString(given.groupName);
+			const groupId = pickString(given.groupId);
+			return "用 a2a_group_role 把我在「" + (groupName === "" ? "这个群" : groupName) + "」的群内介绍清空"
+				+ (groupId === "" ? "" : "（groupId: " + groupId + "）")
+				+ "：about 传空字符串，tags 传空数组。发送即可。";
+		}
+
 		function ColleagueCard(props) {
 			const card = props.card;
 			return h(
@@ -1069,14 +1621,48 @@ window.__ModuleLoader__.load({
 									+ (card.groups.length > 3 ? " 等 " + String(card.groups.length) + " 个群" : "")
 							)
 						),
-				// Where the edit happens. Stated on the card because the panel cannot host an
-				// editor: the profile is group-scoped and lives on the host, so the change has to
-				// go through a Session that holds the credential.
+				// The edit affordance. The panel cannot write a profile itself — it renders before
+				// any Session exists and holds no member credential — so it does the part it CAN
+				// do: put a prefilled instruction in the composer, so editing is "change the words
+				// and press enter" rather than "know the incantation".
 				card.isSelf === true
 					? h(
-							"span",
-							{ style: { fontSize: "10px", opacity: 0.55 } },
-							"这是你自己的名片：在会话里说「我在这个群负责 X，标签 A、B」即可更新，或让助手帮你生成"
+							"div",
+							{ style: { display: "flex", alignItems: "center", gap: "6px", marginTop: "2px" } },
+							h(
+								"button",
+								{
+									type: "button",
+									title: "把编辑指令填进输入框，改完发送即可",
+									style: {
+										padding: "2px 8px",
+										border: "1px solid var(--dsh-color-accent, #4c8dff)",
+										borderRadius: "4px",
+										background: "transparent",
+										color: "inherit",
+										font: "inherit",
+										fontSize: "11px",
+										cursor: "pointer"
+									},
+									onClick: function () {
+										// Replace rather than append: the draft is being replaced with an
+										// instruction, and appending to whatever was typed would produce a
+										// sentence nobody wrote.
+										const text = draftProfileEdit(card, props.groupName ?? "");
+										const actions = props.inputActions;
+										if (actions !== null && actions !== undefined
+											&& typeof actions.setDraft === "function") {
+											actions.setDraft(text);
+										} else if (actions !== null && actions !== undefined
+											&& typeof actions.captureInsertion === "function"
+											&& typeof actions.insertText === "function") {
+											actions.insertText(text, actions.captureInsertion());
+										}
+									}
+								},
+								"改我的名片"
+							),
+							h("span", { style: { fontSize: "10px", opacity: 0.5 } }, "点一下把指令填进输入框")
 						)
 					: null
 			);
@@ -1153,46 +1739,134 @@ window.__ModuleLoader__.load({
 		/**
 		 * Layout for the right-column members pane.
 		 *
-		 * Deliberately not `S.root`: that one belongs to the central panel, where 16px of
-		 * padding and full width are correct. In a 280px column the same numbers waste a
-		 * tenth of the width and let a name wrap onto two lines.
+		 * ## Why nothing here sets `maxWidth`
 		 *
-		 * `maxWidth` bounds it on a very wide screen: a roster 900px wide would be all
-		 * whitespace between a name and its role chip.
+		 * The right column is user-resizable. An earlier version bounded the pane at 300px,
+		 * which is correct at the default width and wrong everywhere else: widen the column
+		 * and the roster stays pinned to the left of an ever-larger empty gutter. A pane that
+		 * fills its column is correct at every width, so the constraint moves from the
+		 * container to the *text*: each row is `flex` with `minWidth: 0`, so a name takes the
+		 * space its column has and ellipsizes only when that space genuinely runs out.
+		 *
+		 * ## Why `height` is absent, and why every column child is `flex: 0 0 auto`
+		 *
+		 * Two independent faults pushed the roster to the bottom of a mostly empty column:
+		 *
+		 *  1. `height: 100%` resolved against a parent whose height is not definite (the tab
+		 *     seat between the slot owner and this pane has no fixed height), so the pane
+		 *     became taller than its content and left the slack at the bottom;
+		 *  2. `groupName` carried `flex: 1 1 auto`, written when it was meant to stretch in a
+		 *     ROW. As a direct child of this column container, `flex-grow` applies to the
+		 *     BLOCK axis, so the group name inflated and pushed everything below it down.
+		 *
+		 * The fix is the layout itself, not a tuned height: the pane sizes to its content
+		 * (`height: auto`) and every direct child is `flex: 0 0 auto`, so no child can grow
+		 * and swallow the slack. Scrolling is the parent's job — one scroll container in the
+		 * chain, at the level that actually knows its height.
 		 */
 		const membersLayout = {
 			root: {
 				display: "flex",
 				flexDirection: "column",
-				gap: "2px",
-				padding: "10px 8px",
-				height: "100%",
-				minHeight: "0",
-				maxWidth: "300px",
-				overflowY: "auto",
+				gap: "6px",
+				padding: "10px 10px 14px",
+				width: "100%",
+				minWidth: "0",
+				// No `height`. `auto` is what makes the content start at the top.
+				height: "auto",
 				boxSizing: "border-box",
 				fontSize: "12px"
 			},
 			header: {
 				display: "flex",
-				alignItems: "baseline",
+				alignItems: "center",
 				justifyContent: "space-between",
 				gap: "6px",
+				flex: "0 0 auto",
+				minWidth: "0",
 				paddingBottom: "6px",
-				marginBottom: "2px",
 				borderBottom: "1px solid var(--dsh-color-border, #2a2f3a)"
 			},
-			/* One row: dot, name, role. `minWidth: 0` lets the name truncate instead of
-			   forcing the row wider than the column. */
-			row: {
-				display: "flex",
+			headerTitle: {
+				display: "inline-flex",
 				alignItems: "center",
+				gap: "5px",
+				flex: "0 0 auto",
+				fontSize: "11px",
+				letterSpacing: "0.04em",
+				opacity: 0.6
+			},
+			headerMeta: {
+				flex: "0 1 auto",
+				minWidth: "0",
+				overflow: "hidden",
+				textOverflow: "ellipsis",
+				whiteSpace: "nowrap",
+				fontSize: "11px",
+				opacity: 0.6
+			},
+			/* The group name is a heading, so it truncates rather than wraps: two lines of
+			   group name above a roster costs a row of people for no new information.
+			   `0 0 auto` — it must never grow along the column axis (see root's comment). */
+			groupName: {
+				margin: 0,
+				flex: "0 0 auto",
+				minWidth: "0",
+				overflow: "hidden",
+				textOverflow: "ellipsis",
+				whiteSpace: "nowrap",
+				fontSize: "12px",
+				fontWeight: 600,
+				opacity: 0.9
+			},
+			sectionLabel: {
+				flex: "0 0 auto",
+				fontSize: "11px",
+				letterSpacing: "0.04em",
+				opacity: 0.45,
+				margin: "2px 0 0"
+			},
+			/* The roster list. `flex: 0 0 auto` so it sits at its natural height instead of
+			   absorbing the column's leftover space. */
+			roster: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "1px",
+				flex: "0 0 auto",
+				minWidth: "0"
+			},
+			/*
+			 * 「所有人」 is a member row, not a banner.
+			 *
+			 * It shares {@link personRow} with everybody else — same height, same padding, same
+			 * font — because that is what @所有人 looks like in WeChat / Feishu / Slack: the
+			 * first row of the roster with a special name. An earlier version gave it a dashed
+			 * border, which made it read as a dropdown or a button rather than as a row.
+			 *
+			 * The only difference is the leading glyph: an `@` instead of a presence dot. That
+			 * is enough of a cue, and it says "broadcast" without a second visual language.
+			 */
+			personLead: {
+				flex: "0 0 auto",
+				width: "14px",
+				display: "inline-flex",
+				alignItems: "center",
+				justifyContent: "center",
+				alignSelf: "flex-start",
+				marginTop: "1px",
+				opacity: 0.75
+			},
+			/* A person row: name line on top, group role underneath. Button reset in full so
+			   it inherits the theme's type instead of the platform form-control styling. */
+			personRow: {
+				display: "flex",
+				alignItems: "flex-start",
 				gap: "6px",
 				width: "100%",
 				minWidth: "0",
-				padding: "4px 6px",
-				border: "none",
-				borderRadius: "4px",
+				padding: "5px 6px",
+				border: "1px solid transparent",
+				borderRadius: "5px",
 				background: "transparent",
 				color: "inherit",
 				font: "inherit",
@@ -1200,31 +1874,143 @@ window.__ModuleLoader__.load({
 				textAlign: "left",
 				cursor: "pointer"
 			},
-			/* The name is the only flexible cell, so it absorbs the shrinkage. */
-			name: {
+			/* The row I can edit, marked as such before the pointer arrives. */
+			personRowSelf: {
+				border: "1px solid var(--dsh-color-accent, #4c8dff)",
+				background: "rgba(76, 141, 255, 0.07)"
+			},
+			personBody: {
 				flex: "1 1 auto",
+				minWidth: "0",
+				display: "flex",
+				flexDirection: "column",
+				gap: "1px"
+			},
+			personTop: {
+				display: "flex",
+				alignItems: "baseline",
+				gap: "5px",
+				minWidth: "0",
+				width: "100%"
+			},
+			/* The only cell that shrinks: every sibling is `flex: 0 0 auto`. */
+			personName: {
+				flex: "0 1 auto",
 				minWidth: "0",
 				overflow: "hidden",
 				textOverflow: "ellipsis",
-				whiteSpace: "nowrap"
+				whiteSpace: "nowrap",
+				fontWeight: 600
 			},
-			role: {
+			selfTag: {
 				flex: "0 0 auto",
+				fontSize: "10px",
+				padding: "0 4px",
+				borderRadius: "7px",
+				lineHeight: "14px",
+				background: "var(--dsh-color-accent, #4c8dff)",
+				color: "#fff"
+			},
+			roleChip: {
+				flex: "0 0 auto",
+				fontSize: "10px",
+				opacity: 0.55
+			},
+			editChip: {
+				flex: "0 0 auto",
+				marginLeft: "auto",
+				fontSize: "10px",
+				padding: "0 4px",
+				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				borderRadius: "7px",
+				lineHeight: "14px",
+				opacity: 0.75
+			},
+			/* Wraps and clamps: the group role is content, not decoration. */
+			personAbout: {
+				display: "-webkit-box",
+				WebkitLineClamp: 2,
+				WebkitBoxOrient: "vertical",
+				overflow: "hidden",
+				margin: 0,
 				fontSize: "11px",
-				opacity: 0.6
+				lineHeight: "1.45",
+				opacity: 0.7,
+				whiteSpace: "normal",
+				wordBreak: "break-word",
+				overflowWrap: "anywhere"
+			},
+			/* My own row shows the whole sentence: it is the thing I am about to edit. */
+			personAboutSelf: {
+				display: "block",
+				margin: 0,
+				fontSize: "11px",
+				lineHeight: "1.45",
+				opacity: 0.8,
+				whiteSpace: "normal",
+				wordBreak: "break-word",
+				overflowWrap: "anywhere"
+			},
+			aboutEmpty: {
+				margin: 0,
+				fontSize: "11px",
+				lineHeight: "1.45",
+				opacity: 0.45,
+				fontStyle: "italic"
 			},
 			dot: {
 				width: "6px",
 				height: "6px",
 				borderRadius: "50%",
-				flex: "0 0 auto"
+				flex: "0 0 auto",
+				marginTop: "6px"
 			},
-			footer: {
-				marginTop: "auto",
-				paddingTop: "8px",
-				borderTop: "1px solid var(--dsh-color-border, #2a2f3a)"
+			hint: {
+				margin: 0,
+				fontSize: "11px",
+				lineHeight: "1.5",
+				opacity: 0.55,
+				whiteSpace: "normal",
+				wordBreak: "break-word"
 			}
 		};
+
+		/**
+		 * Write a whole draft sentence into the composer, through the owner's two-step API.
+		 *
+		 * Same contract as {@link insertMention}: `captureInsertion()` snapshots the
+		 * selection and the draft revision, and `insertText(text, span)` is refused if the
+		 * draft changed between the click and the write — which is the behaviour we want,
+		 * because inserting an edit instruction at a stale caret would splice it into
+		 * whatever the reader typed in the meantime.
+		 *
+		 * The one-argument `insertText(text)` form is NOT used: it silently returns false.
+		 *
+		 * @param {object|undefined} inputActions - the composer's action surface.
+		 * @param {string} text - the text to insert.
+		 * @returns {boolean} whether something was actually written.
+		 */
+		function fillDraft(inputActions, text) {
+			try {
+				if (inputActions === null || inputActions === undefined) return false;
+				if (typeof inputActions.captureInsertion === "function"
+					&& typeof inputActions.insertText === "function") {
+					const span = inputActions.captureInsertion();
+					return inputActions.insertText(text, span) === true;
+				}
+				// Last resort for a Host that only offers a whole-draft setter. It replaces
+				// the draft, which is why it is the fallback and not the first choice.
+				if (typeof inputActions.setDraft === "function") {
+					inputActions.setDraft(text);
+					return true;
+				}
+				return false;
+			} catch (error) {
+				reportUnavailable("inputActions.insertText", error);
+				return false;
+			}
+		}
+
 		/**
 		 * Members of the group the current Session belongs to, as a right-hand panel.
 		 *
@@ -1232,10 +2018,24 @@ window.__ModuleLoader__.load({
 		 * this Session is in. The panel therefore shows nothing when the Session has not
 		 * joined a group — which is correct, and says so, rather than listing strangers.
 		 *
+		 * ## The row order is IM order, not alphabetical
+		 *
+		 * 「所有人」 first because it is an address, not a person. 「我」 second and pinned,
+		 * because "where am I in this list" is the question a reader asks on opening it, and
+		 * because my row is the only one with a second action. Then everyone else, online
+		 * before offline, then by name — presence is the fact that changes by the minute.
+		 *
+		 * ## Why the edit is an instruction and not a form
+		 *
+		 * See {@link draftGroupRoleEdit}: this bundle holds no membership credential, so it
+		 * cannot write. Clicking my row fills the composer with a prefilled instruction and
+		 * the Session turn — which does hold the credential — performs the write.
+		 *
 		 * Props provided by the slot owner: `sessionId` and `inputActions`.
 		 */
 		function MembersPane(props) {
 			const snapshot = useSnapshot();
+			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
 			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
 
 			// Which group this Session belongs to. A Session can hold several; the pane shows
@@ -1251,8 +2051,18 @@ window.__ModuleLoader__.load({
 			const group = candidates[0];
 
 			/** Insert `@name ` into the composer through the owner's two-step API. */
-			function address(member) {
-				insertMention(props !== null && props !== undefined ? props.inputActions : undefined, member.name);
+			function address(name) {
+				fillDraft(inputActions, "@" + name + " ");
+			}
+
+			/** Fill the composer with the prefilled role-edit instruction. */
+			function editOwnRole(current) {
+				fillDraft(inputActions, draftGroupRoleEdit({
+					groupName: group === undefined ? "" : group.name,
+					groupId: group === undefined ? "" : group.id,
+					about: current.about,
+					tags: current.tags
+				}));
 			}
 
 			if (group === undefined) {
@@ -1262,16 +2072,228 @@ window.__ModuleLoader__.load({
 					h(
 						"div",
 						{ style: membersLayout.header },
-						h("span", { style: S.sectionLabel }, "群成员")
+						h("span", { style: membersLayout.headerTitle }, icon("users", 12), "群成员")
 					),
 					h("p", { style: S.emptyBody }, "这个会话还没有加入协作群。")
 				);
 			}
 
 			const members = group.members;
+			const self = pickSelf(group, snapshot.cards);
+			const split = splitRoster(members, self);
+			// A roster that arrived without an `isSelf` marker still gets a 「我」 row: the
+			// person table knows who I am even when the cached roster was written by a Host
+			// that predates the marker. This synthesis is why `split.mine` can be absent while
+			// `self.hasSelf` is true.
+			if (split.mine === undefined && split.owner === undefined && self.hasSelf === true && self.personId !== "") {
+				split.mine = {
+					id: self.personId,
+					name: self.name === "" ? "我" : self.name,
+					role: "",
+					roleAbout: self.about,
+					tags: self.tags,
+					online: self.online,
+					self: true,
+					isSelf: true
+				};
+			}
+
 			const countLine = String(group.memberCount || members.length) + " 人"
-				+ (group.onlineCount > 0 ? " · " + String(group.onlineCount) + " 在线" : "")
-				+ (members.length === 0 ? "（名单需在会话里查一次）" : "");
+				+ (group.onlineCount > 0 ? " · " + String(group.onlineCount) + " 在线" : "");
+
+			/**
+			 * The body shared by every roster row, including 「所有人」.
+			 *
+			 * One builder for all of them is the point: the broadcast row differs only in its
+			 * leading glyph and its name, so any future change to row rhythm (padding, chips,
+			 * clamp) lands on it for free instead of drifting into a second visual language.
+			 *
+			 * @param {string} name - display text.
+			 * @param {object} options - `about`, `role`, `badges` (extra chips), `aboutEmpty`.
+			 * @returns {object} vnode for the row's text column.
+			 */
+			function rowBody(name, options) {
+				const given = options === null || options === undefined ? {} : options;
+				const about = pickString(given.about);
+				const badges = Array.isArray(given.badges) ? given.badges : [];
+				const chips = [];
+				for (const badge of badges) {
+					if (badge !== null && badge !== undefined) chips.push(badge);
+				}
+				return h(
+					"span",
+					{ style: membersLayout.personBody },
+					h(
+						"span",
+						{ style: membersLayout.personTop },
+						h("span", { style: membersLayout.personName }, name),
+						chips.length === 0 ? null : chips,
+						given.owner === true ? h("span", { style: membersLayout.roleChip }, "群主") : null,
+						about !== "" || given.showEmptyRole !== true
+							? null
+							: h("span", { style: membersLayout.roleChip }, "未填群内介绍")
+					),
+					about === ""
+						? given.emptyText === undefined
+							? null
+							: h("p", { style: membersLayout.aboutEmpty }, given.emptyText)
+						: h("span", { style: given.full ? membersLayout.personAboutSelf : membersLayout.personAbout }, about)
+				);
+			}
+
+			/**
+			 * One roster row.
+			 *
+			 * There are exactly two behaviours, and which one applies is decided by one fact:
+			 * whether this row is me.
+			 *
+			 *  - **me** → fill the composer with the role-edit instruction. I cannot @ myself,
+			 *    so an @-mention here would be a click that produces nothing useful.
+			 *  - **anyone else** (including the owner) → insert `@name `. That covers the
+			 *    owner row too: addressing the owner is the common reason to click them.
+			 *
+			 * @param {object} member - normalized member, with `isSelf` when I am this row.
+			 * @param {object} options - `lead` (glyph or `@`), `owner`, `editable`, `key`.
+			 * @returns {object} vnode.
+			 */
+			function personRow(member, options) {
+				const given = options === null || options === undefined ? {} : options;
+				const isSelf = member.isSelf === true;
+				const canEdit = isSelf && inputActions !== null && inputActions !== undefined;
+				const about = isSelf ? pickString(self.about) : pickString(member.roleAbout);
+
+				const badges = [];
+				// Suppress the self chip when the display name already says 我: the row would read
+				// 「我 我」, which looks like a bug rather than a label. The row is still marked as
+				// mine by its accent border and its edit chip.
+				if (isSelf && pickString(member.name) !== "我") {
+					badges.push(h("span", { key: "me", style: membersLayout.selfTag }, "我"));
+				}
+				if (given.owner === true) badges.push(h("span", { key: "owner", style: membersLayout.roleChip }, "群主"));
+				if (canEdit) badges.push(h("span", { key: "edit", style: membersLayout.editChip }, "编辑介绍"));
+				if (isSelf && !canEdit) badges.push(h("span", { key: "ro", style: membersLayout.editChip }, "只读"));
+
+				const label = isSelf
+					? (canEdit
+						? "点击修改我在这个群的介绍（会填入输入框，按回车发送）"
+						: "这个面板拿不到输入框，无法发起编辑")
+					: "点击在输入框里 @ " + member.name;
+
+				const button = h(
+					"button",
+					{
+						key: given.key === undefined ? member.id : given.key,
+						type: "button",
+						title: label,
+						style: isSelf
+							? Object.assign({}, membersLayout.personRow, membersLayout.personRowSelf)
+							: membersLayout.personRow,
+						onClick: function () {
+							if (isSelf) editOwnRole(self);
+							else address(member.name);
+						}
+					},
+					given.lead === undefined
+						? h("span", {
+							style: Object.assign({}, membersLayout.dot, {
+								background: member.online === true
+									? "var(--dsh-color-success, #3fb950)"
+									: "var(--dsh-color-border, #555)"
+							}),
+							title: member.online === true ? "在线" : "离线或未知"
+						})
+						: h("span", { style: membersLayout.personLead, "aria-hidden": "true" }, given.lead),
+					rowBody(member.name, {
+						about: about,
+						owner: false,
+						full: isSelf,
+						showEmptyRole: !isSelf,
+						emptyText: isSelf ? (canEdit ? "还没写群内介绍，点这一行添加" : "还没写群内介绍") : undefined,
+						badges: badges
+					})
+				);
+
+				// Only my own row can be cleared, and only when there is something to clear.
+				if (!isSelf || about === "" || !canEdit) return button;
+				return h(
+					"div",
+					{ key: given.key === undefined ? "self-block" : given.key + "-block", style: { display: "flex", flexDirection: "column", gap: "1px" } },
+					button,
+					h(
+						"button",
+						{
+							type: "button",
+							title: "清空我在这个群的介绍",
+							style: {
+								alignSelf: "flex-end",
+								margin: "0 6px 0 0",
+								padding: 0,
+								border: "none",
+								background: "transparent",
+								color: "inherit",
+								font: "inherit",
+								fontSize: "10px",
+								opacity: 0.5,
+								cursor: "pointer"
+							},
+							onClick: function () {
+								fillDraft(inputActions, draftGroupRoleClear({ groupName: group.name, groupId: group.id }));
+							}
+						},
+						"清空介绍"
+					)
+				);
+			}
+
+			/**
+			 * 「所有人」: a roster row, first, with an `@` instead of a presence dot.
+			 *
+			 * No dashed border and no separate padding — in WeChat / Feishu / Slack, @所有人 is
+			 * simply the first line of the member list with a special name. The glyph is the
+			 * whole cue.
+			 */
+			function broadcastRow() {
+				return h(
+					"button",
+					{
+						key: "broadcast",
+						type: "button",
+						title: "点击 @ 所有人",
+						style: membersLayout.personRow,
+						onClick: function () {
+							address("所有人");
+						}
+					},
+					// A literal `@`, not a glyph: it is the universal broadcast marker, it is what
+					// the inserted text actually looks like, and no icon in the product set says
+					// "everyone" more clearly than the character the reader is about to type.
+					h("span", { style: membersLayout.personLead, "aria-hidden": "true" }, "@"),
+					rowBody("所有人", { about: "", showEmptyRole: false })
+				);
+			}
+
+
+			// One flat roster, in the order a person scans it:
+			//
+			//   所有人 → 群主 → 我 → 其他人
+			//
+			// 「所有人」 first because it is an address, not a person. 群主 second because they
+			// are the one to ask when the group is stuck. 我 third because that is the row with
+			// a second action. Everyone else by presence, then name.
+			//
+			// `split.owner` carries `isSelf` when I run the group, so that case renders exactly
+			// one row (labelled 群主 · 我) rather than listing me twice.
+			const rosterRows = [broadcastRow()];
+			if (split.owner !== undefined) {
+				rosterRows.push(personRow(split.owner, { key: "owner", owner: true }));
+			}
+			if (split.mine !== undefined) {
+				rosterRows.push(personRow(split.mine, { key: "self" }));
+			}
+			if (split.others.length === 0 && members.length > 0 && split.owner === undefined && split.mine === undefined) {
+				rosterRows.push(h("p", { key: "alone", style: membersLayout.hint }, "这个群目前只有你。"));
+			}
+			for (const member of split.others) rosterRows.push(personRow(member, {}));
 
 			return h(
 				"div",
@@ -1279,62 +2301,18 @@ window.__ModuleLoader__.load({
 				h(
 					"div",
 					{ style: membersLayout.header },
-					h("span", { style: S.sectionLabel }, "群成员"),
-					h("span", { style: membersLayout.role }, countLine)
-				),
-				h(
-					"p",
-					{ style: { margin: "0 0 4px", fontSize: "11px", opacity: 0.7, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" } },
-					group.name
-				),
-				members.length === 0
-					? null
-					: h(
-							"div",
-							{ style: { display: "flex", flexDirection: "column" } },
-							members.map(function (member) {
-								return h(
-									"button",
-									{
-										key: member.id,
-										type: "button",
-										title: "点击在输入框里 @ " + member.name,
-										style: membersLayout.row,
-										onClick: function () {
-											address(member);
-										}
-									},
-									h("span", {
-										style: Object.assign({}, membersLayout.dot, {
-											background: member.online
-												? "var(--dsh-color-success, #3fb950)"
-												: "var(--dsh-color-border, #555)"
-										})
-									}),
-									h("span", { style: membersLayout.name }, member.name),
-									member.role === "owner" ? h("span", { style: membersLayout.role }, "群主") : null
-								);
-							})
-						),
-				h(
-					"div",
-					{ style: membersLayout.footer },
 					h(
-						"button",
-						{
-							type: "button",
-							title: "点击 @ 所有人",
-							style: Object.assign({}, membersLayout.row, {
-								justifyContent: "center",
-								border: "1px dashed var(--dsh-color-border, #444)"
-							}),
-							onClick: function () {
-								address({ name: "所有人" });
-							}
-						},
-						"@ 所有人"
-					)
-				)
+						"span",
+						{ style: membersLayout.headerTitle },
+						icon("users", 12),
+						"群成员"
+					),
+					h("span", { style: membersLayout.headerMeta }, countLine)
+				),
+				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
+				members.length === 0
+					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
+					: h("div", { style: membersLayout.roster }, rosterRows)
 			);
 		}
 
@@ -1408,7 +2386,7 @@ window.__ModuleLoader__.load({
 			);
 		}
 
-		function GroupsPanel() {
+		function GroupsPanel(props) {
 			const snapshot = useSnapshot();
 			const [expanded, toggle] = useExpanded();
 			// One state object for the pair: switching tabs clears the tag filter, which is
@@ -1501,6 +2479,18 @@ window.__ModuleLoader__.load({
 										return h(ColleagueCard, {
 											key: card.id,
 											card: card,
+											// The composer API, so the self card can fill the draft. Only the
+											// slot owner can provide it, which is why it is threaded down
+											// rather than reached for.
+											inputActions: props !== null && props !== undefined ? props.inputActions : undefined,
+											// Named in the drafted instruction: the profile tool authenticates
+											// through a group, so the text has to say which one.
+											groupName: (function () {
+												const mine = snapshot.groups.filter(function (group) {
+													return group.discovered !== true;
+												});
+												return mine.length > 0 ? mine[0].name : "";
+											})(),
 											onPickTag: function (tag) {
 												local.set({ tab: "cards", tag: tag });
 											}
@@ -1510,7 +2500,7 @@ window.__ModuleLoader__.load({
 					);
 
 			const tabs = PANEL_TABS.map(function (def) {
-				return { id: def.id, label: def.label, count: counts[def.id] };
+				return { id: def.id, label: def.label, icon: def.icon, count: counts[def.id] };
 			});
 
 			return h(
@@ -1833,6 +2823,10 @@ window.__ModuleLoader__.load({
 		exports.EmptyState = EmptyState;
 		exports.MembersPane = MembersPane;
 		exports.MembersButton = MembersButton;
+		exports.pickSelf = pickSelf;
+		exports.splitRoster = splitRoster;
+		exports.draftGroupRoleEdit = draftGroupRoleEdit;
+		exports.draftGroupRoleClear = draftGroupRoleClear;
 		exports.MEMBERS_TAB_KIND = MEMBERS_TAB_KIND;
 		exports.MEMBERS_TAB_KEY = MEMBERS_TAB_KEY;
 		exports.groupByRelationship = groupByRelationship;
