@@ -68,7 +68,8 @@ const SECRET_FIELDS = Object.freeze(['token', 'password', 'personKey', 'apiKey',
  * @param {() => number} [options.clock] - epoch-ms source, for deterministic tests.
  * @returns {{deliver: (input: object) => Promise<object>, isBusy: (sessionId: string) => boolean, waitIdle: (sessionId: string, ms?: number) => Promise<boolean>, debugState: () => object}} the deliverer.
  */
-export function createDeliverer({ ctx, logger, config, clock } = {}) {
+export function createDeliverer({ ctx, logger, config, clock, delayFn } = {}) {
+  // `delayFn` is injectable so a test can drive waitIdle without sleeping; see the `wait` const below.
   const delivery = config?.delivery ?? {};
   const dedupeWindowMs = Number.isFinite(delivery.dedupeWindowMs) && delivery.dedupeWindowMs > 0
     ? delivery.dedupeWindowMs
@@ -76,6 +77,10 @@ export function createDeliverer({ ctx, logger, config, clock } = {}) {
   const defaultMode = delivery.defaultMode === 'steer' || delivery.defaultMode === 'inbox' ? delivery.defaultMode : 'queue';
   const presentation = delivery.presentation === 'bubble' ? 'bubble' : 'notice';
   const now = typeof clock === 'function' ? clock : Date.now;
+  // Injectable so a test can drive `waitIdle` without sleeping. A real timer here made the test depend on the
+  // runner's scheduling: on Linux the loop could drain with the timer still pending, which Node reports as
+  // cancellation rather than a failed assertion — the least diagnostic outcome possible.
+  const wait = typeof delayFn === 'function' ? delayFn : delay;
 
   /** @type {Map<string, number>} `${sessionId}\u0000${messageId}` → delivery epoch ms. */
   const ledger = new Map();
@@ -365,7 +370,7 @@ export function createDeliverer({ ctx, logger, config, clock } = {}) {
       if (agent === null) return true;
       if (!agentIsRunning(agent)) return true;
       if (now() >= deadline) return false;
-      await delay(Math.min(IDLE_POLL_MS, Math.max(1, deadline - now())));
+      await wait(Math.min(IDLE_POLL_MS, Math.max(1, deadline - now())));
     }
   }
 

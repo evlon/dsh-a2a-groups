@@ -375,18 +375,30 @@ test('deliver: isBusy reports the live agent status, not a guess', () => {
 
 test('deliver: waitIdle resolves once the Session stops running', async () => {
   const host = fakeHost({ status: 'running', idleAfter: 2 });
-  const deliverer = createDeliverer({ ctx: host.ctx, config: {} });
+  // `delayFn` resolves immediately: this measures the poll loop, not the scheduler. With a real timer the
+  // Linux runner could drain its queue while the timer was still pending, which Node reports as
+  // `cancelledByParent` with no assertion output at all.
+  const deliverer = createDeliverer({ ctx: host.ctx, config: {}, delayFn: async () => {} });
 
   const idle = await deliverer.waitIdle('s1', 2000);
   assert.equal(idle, true);
+  assert.ok(host.calls.resolve >= 3, 'it kept polling until the Session went idle');
 });
 
 test('deliver: waitIdle reports a timeout instead of hanging', async () => {
   const host = fakeHost({ status: 'running' });
-  const deliverer = createDeliverer({ ctx: host.ctx, config: {} });
+  // The clock advances on every read and the sleep is instant, so the deadline is reached deterministically
+  // instead of after 120 real milliseconds.
+  let ticks = 0;
+  const deliverer = createDeliverer({
+    ctx: host.ctx,
+    config: {},
+    clock: () => (ticks += 1),
+    delayFn: async () => {},
+  });
 
   const idle = await deliverer.waitIdle('s1', 120);
-  assert.equal(idle, false);
+  assert.equal(idle, false, 'a still-running Session must report a timeout');
 });
 
 test('deliver: waitIdle on an unknown Session resolves immediately', async () => {
