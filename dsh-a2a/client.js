@@ -1801,6 +1801,99 @@ window.__ModuleLoader__.load({
 		 * chain, at the level that actually knows its height.
 		 */
 		const membersLayout = {
+			// A fixed overlay: the pane clips its own overflow, so a dialog parented inside it would be cut
+			// off at the pane's edge and the search box would appear to be missing.
+			dialogOverlay: {
+				position: "fixed",
+				inset: "0",
+				background: "rgba(0, 0, 0, 0.45)",
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "center",
+				zIndex: 9999
+			},
+			dialogPanel: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "8px",
+				width: "min(420px, calc(100vw - 32px))",
+				maxHeight: "min(460px, calc(100vh - 64px))",
+				padding: "14px",
+				background: "var(--dsh-color-bg-elevated, #1c2027)",
+				color: "inherit",
+				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				borderRadius: "8px",
+				boxShadow: "0 12px 32px rgba(0, 0, 0, 0.4)",
+				boxSizing: "border-box",
+				overflow: "hidden"
+			},
+			dialogHeader: {
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "space-between",
+				gap: "8px"
+			},
+			dialogClose: {
+				padding: "0 4px",
+				border: "none",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "14px",
+				lineHeight: 1,
+				cursor: "pointer",
+				opacity: 0.6
+			},
+			dialogSearch: {
+				width: "100%",
+				boxSizing: "border-box",
+				padding: "6px 8px",
+				border: "1px solid var(--dsh-color-border, #2a2f3a)",
+				borderRadius: "5px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "12px"
+			},
+			// Scrolls on its own: the header and the search stay put while the list moves, which is what
+			// makes a long result set usable in a short dialog.
+			dialogList: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "2px",
+				overflowY: "auto",
+				minHeight: 0
+			},
+			dialogItem: {
+				display: "flex",
+				alignItems: "baseline",
+				gap: "8px",
+				width: "100%",
+				padding: "6px 8px",
+				border: "1px solid transparent",
+				borderRadius: "5px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				textAlign: "left",
+				cursor: "pointer"
+			},
+			// The pane's single, quiet entry point into the dialog.
+			inviteButton: {
+				display: "inline-flex",
+				alignItems: "center",
+				gap: "5px",
+				alignSelf: "flex-start",
+				padding: "3px 10px",
+				border: "1px dashed var(--dsh-color-border, #444)",
+				borderRadius: "5px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "11px",
+				cursor: "pointer"
+			},
+
 			// The unbound pane: an explainer with one action, not a wall of text. Generous line-height
 			// because the copy is read once, carefully, by somebody who does not yet know what a
 			// collaboration group is.
@@ -2261,10 +2354,152 @@ window.__ModuleLoader__.load({
 			);
 		}
 
+		/**
+		 * The roster of a group, whichever name the data arrived under.
+		 *
+		 * `normalizeGroup` emits `members`; the raw injected snapshot uses `roster`. The pane is fed
+		 * both, so it asks this instead of assuming — the alternative is a list that is mysteriously
+		 * empty on one of the two paths.
+		 *
+		 * @param {object} group - the group row, normalized or raw.
+		 * @returns {object[]} the roster, never undefined.
+		 */
+		function rosterOf(group) {
+			if (group === null || group === undefined) return [];
+			if (Array.isArray(group.members) && group.members.length > 0) return group.members;
+			if (Array.isArray(group.roster)) return group.roster;
+			if (Array.isArray(group.members)) return group.members;
+			return [];
+		}
+
+		/**
+		 * One person's id, whichever field the row carries.
+		 *
+		 * A card has `personId`; a normalized roster row has `id`. Comparing one to the other without
+		 * this returns false for every pair, which is how "already in this group" stops working.
+		 *
+		 * @param {object} row - a card or a roster row.
+		 * @returns {string} the id, or an empty string.
+		 */
+		function personIdOf(row) {
+			if (row === null || row === undefined) return "";
+			const direct = pickString(row.personId);
+			if (direct !== "") return direct;
+			return pickString(row.id);
+		}
+
+		/**
+		 * The invite chooser.
+		 *
+		 * A dialog rather than a list inside the pane, because "who is in this group" and "who could
+		 * join it" are different questions and a directory of a thousand answers the second one badly in
+		 * a narrow column.
+		 *
+		 * Search is the primary control: nobody pages through a thousand colleagues, they type part of
+		 * a name. The list under the box is what an empty search shows, capped, with the count stated —
+		 * a silently truncated list makes a reader conclude somebody is not invitable.
+		 *
+		 * @param {object} props - `{ candidates, groupName, onPick, onClose }`.
+		 * @returns {object} the overlay.
+		 */
+		function InviteDialog(props) {
+			const [query, setQuery] = react.useState("");
+			const candidates = Array.isArray(props.candidates) ? props.candidates : [];
+
+			// Local, case-insensitive, and matched against the description too: a person looking for
+			// "the DBA" should find 赵六 even if they cannot recall the name.
+			const needle = String(query ?? "").trim().toLowerCase();
+			const matched = needle === ""
+				? candidates
+				: candidates.filter(function (person) {
+					const hay = (person.name + " " + (person.headline ?? "") + " " + (person.tags ?? []).join(" ")).toLowerCase();
+					return hay.indexOf(needle) !== -1;
+				});
+
+			const LIMIT = 6;
+			const shown = matched.slice(0, LIMIT);
+			const hidden = matched.length - shown.length;
+
+			return h(
+				"div",
+				{ style: membersLayout.dialogOverlay, onClick: props.onClose },
+				// Clicks inside must not close: the overlay closes, the panel does not.
+				h(
+					"div",
+					{ style: membersLayout.dialogPanel, onClick: function (event) { event.stopPropagation(); } },
+					h(
+						"div",
+						{ style: membersLayout.dialogHeader },
+						h("span", { style: { fontWeight: 600, fontSize: "13px" } }, "邀请同事入群"),
+						h(
+							"button",
+							{
+								type: "button",
+								title: "关闭",
+								style: membersLayout.dialogClose,
+								onClick: props.onClose
+							},
+							"✕"
+						)
+					),
+					h(
+						"p",
+						{ style: membersLayout.unboundHint },
+						"选中的同事会收到一条消息，里面带着加入「" + (props.groupName ?? "这个群") + "」的链接。"
+					),
+					h("input", {
+						type: "search",
+						value: query,
+						placeholder: "搜索名字、角色或标签…",
+						autoFocus: true,
+						onChange: function (event) {
+							setQuery(event !== null && event !== undefined && event.target !== undefined
+								? event.target.value
+								: "");
+						},
+						style: membersLayout.dialogSearch
+					}),
+					matched.length === 0
+						? h("p", { style: membersLayout.unboundHint }, "没有匹配的同事。")
+						: h(
+								"div",
+								{ style: membersLayout.dialogList },
+								shown.map(function (person) {
+									return h(
+										"button",
+										{
+											key: person.id,
+											type: "button",
+											style: membersLayout.dialogItem,
+											title: "邀请 " + person.name + " 加入",
+											onClick: function () { props.onPick(person); }
+										},
+										h("span", { style: { fontSize: "12px" } }, person.name),
+										(person.headline ?? "") === ""
+											? null
+											: h("span", { style: { fontSize: "11px", opacity: 0.6 } }, person.headline)
+									);
+								})
+							),
+					// Stated rather than implied: a capped list with no count reads as "that is everybody".
+					hidden > 0
+						? h(
+								"p",
+								{ style: membersLayout.unboundHint },
+								"还有 " + String(hidden) + " 位同事未显示，输入名字缩小范围。"
+							)
+						: null
+				)
+			);
+		}
+
 		function MembersPane(props) {
 			const snapshot = useSnapshot();
 			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
 			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
+			// Whether the invite chooser is open. Kept here rather than in the dialog so one Escape or
+			// one pick closes it from the outside too.
+			const [inviteOpen, setInviteOpen] = react.useState(false);
 
 			// Which group this Session belongs to. A Session can hold several; the pane shows
 			// the one with the most recent activity, because that is the one being worked in.
@@ -2300,7 +2535,8 @@ window.__ModuleLoader__.load({
 				return h(UnboundMembersPane, { inputActions: inputActions });
 			}
 
-			const members = group.members;
+			// The snapshot may be normalized (`members`) or raw (`roster`); ask once, here.
+			const members = rosterOf(group);
 			const self = pickSelf(group, snapshot.cards);
 			const split = splitRoster(members, self);
 			// A roster that arrived without an `isSelf` marker still gets a 「我」 row: the
@@ -2506,38 +2742,30 @@ window.__ModuleLoader__.load({
 				})
 				.filter(function (card) {
 					// Somebody already in this group cannot be invited to it again.
-					return !members.some(function (member) { return member.id === card.id; });
+					return !members.some(function (member) { return personIdOf(member) === personIdOf(card); });
 				});
 
+			// One quiet button. The choice happens in a dialog sized for choosing; an inline list either
+			// crowds the roster (a big team) or hides its own extent (twelve shown, no count).
 			function inviteRow() {
 				if (invitable.length === 0) return null;
 				return h(
 					"div",
 					{ style: membersLayout.inviteBlock },
-					h("span", { style: membersLayout.inviteLabel }, "邀请同事"),
 					h(
-						"div",
-						{ style: { display: "flex", flexWrap: "wrap", gap: "4px" } },
-						invitable.slice(0, 12).map(function (person) {
-							return h(
-								"button",
-								{
-									key: person.id,
-									type: "button",
-									title: "邀请 " + person.name + " 加入这个群",
-									style: membersLayout.inviteChip,
-									onClick: function () {
-										fillDraft(inputActions, draftGroupInvite(group, person));
-									}
-								},
-								person.name
-							);
-						})
+						"button",
+						{
+							type: "button",
+							title: "选择要拉进这个群的同事",
+							style: membersLayout.inviteButton,
+							onClick: function () { setInviteOpen(true); }
+						},
+						icon("users", 12),
+						"邀请同事入群"
 					)
 				);
 			}
-
-			return h(
+			const pane = h(
 				"div",
 				{ style: membersLayout.root },
 				h(
@@ -2555,8 +2783,24 @@ window.__ModuleLoader__.load({
 				members.length === 0
 					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
 					: h("div", { style: membersLayout.roster }, rosterRows),
-				inviteRow()
+				inviteRow(),
+				inviteOpen
+					? h(InviteDialog, {
+							candidates: invitable,
+							groupName: group.name,
+							onClose: function () { setInviteOpen(false); },
+							onPick: function (person) {
+								fillDraft(inputActions, draftGroupInvite(group, person));
+								setInviteOpen(false);
+							}
+						})
+					: null,
 			);
+
+			// The dialog is position: fixed, so it covers the viewport even though it is a child of the pane.
+			// A fixed element is positioned against the viewport regardless of its ancestors, which is why the
+			// pane's own overflow cannot clip it — and why no wrapper is needed.
+			return pane;
 		}
 
 

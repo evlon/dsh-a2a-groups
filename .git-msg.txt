@@ -1,34 +1,33 @@
-feat(ui): an unbound conversation gets a real pane, and a button that always opens it
+feat(ui): inviting happens in a dialog, not in the member list
 
-THE DEAD END THIS FIXES
+Listing colleagues inline fails in two ways that only appear at scale, and the second one is worse:
 
-The button and the pane were gated on the same condition — "does this conversation have a group" — so
-hiding the button when nothing was bound left no way to reopen the pane after closing it. A control
-that opens a panel has to exist whenever the panel can be opened; what changes is the label.
+  - a team of five gets a friendly little row; a directory of a thousand gets a wall that pushes the
+    roster off the pane
+  - the first twelve were shown with no indication that the rest existed, so a reader with a thousand
+    colleagues would reasonably conclude most of them were not invitable
 
-    bound    群成员 3
-    unbound  协作群        (no number — "群成员 0" would claim the group is empty)
+A dialog separates the two questions. "Who is in this group" stays in the pane; "who could join it"
+happens in a surface sized for choosing. The pane keeps one quiet button.
 
-THE PANE NOW ANSWERS THREE QUESTIONS
+SEARCH IS THE PRIMARY CONTROL, NOT PAGINATION
 
-The old body was one sentence and no action, which is the kind of pane a reader learns to ignore. A
-new conversation actually has three questions, and the pane answers them in order:
+Nobody pages through a thousand colleagues; they type two characters of a name. The list under the box
+is what an empty search shows — capped at six, with the count of what is not shown stated explicitly,
+because a silently truncated list is how somebody decides a person is not invitable.
 
-  1. what is a collaboration group   — so the feature is nameable
-  2. how do I get into one           — a pasted link, or the left sidebar's list
-  3. here is the link I was given    — a paste box, then one press
+Matching covers name, headline and tags, so "the DBA" finds 赵六 even without recalling the name.
 
-The paste box fills the composer rather than calling the tool: this component renders before any
-Session exists and holds no member credential, so the Session turn is the only writer. The button is
-dimmed rather than hidden while the box is empty, because a disappearing button teaches nothing.
+TWO MISTAKES WORTH RECORDING
 
-A FOOTNOTE FOR THE CONFUSING CASE
+1. The dialog was first wrapped in a `display: contents` div so it could sit outside the pane. Four
+   layout tests failed immediately — and correctly: `MembersPane()` returning an element whose
+   `props.style` IS the pane's style is the contract those tests describe. The fix was to notice that
+   `position: fixed` escapes the pane's clipping without any wrapper at all.
 
-Somebody who HAS joined a group from another conversation will otherwise find this pane insisting they
-have not. It says so plainly: that group belongs to that conversation, join it here too and both see
-the same messages.
+2. Replacing `membersLayout` wholesale lost the original `root`/`header` definitions, which the same
+   tests caught. Inserting next to the anchor instead of over it is the rule.
 
-Also fixed while here: the button's tooltip read 展开「undefined」的群成员 when nothing was bound.
-
-Verified: 422 tests, `node --check` clean, and the live page shows the 协作群 button with no count plus
-a pane containing both routes and the paste box.
+Verified: 422 tests, and a live run — open the pane, press 邀请同事入群, the dialog shows the search box
+and 赵六, and picking him closes the dialog and leaves a ready instruction in the composer naming both
+`personId` and `groupId`.
