@@ -283,6 +283,9 @@ export function createServer({
   joinContext,
   // Shared with the invite skill; see this file's note on why one store is not optional.
   joinTokens: providedJoinTokens,
+  // The origin this host resolved for itself, when it had to work it out without a request. A standalone
+  // host has no ctx.webServer to ask, so without this the page and the health output would disagree.
+  resolvedOrigin,
 } = {}) {
   const serverConfig = /** @type {any} */ (config)?.server ?? {};
   const maxBodyBytes = positiveInt(serverConfig.maxBodyBytes, DEFAULT_MAX_BODY_BYTES);
@@ -444,6 +447,9 @@ export function createServer({
       protocolVersion: PROTOCOL_VERSION,
       methods: [...SUPPORTED_METHODS],
       skills: typeof skills?.list === 'function' ? skills.list().map((skill) => skill?.id).filter(Boolean) : [],
+      // What this host would say a link looks like. An operator can compare it against the address they
+      // actually reach, which is the one question that decides whether invite links work off-machine.
+      publicOrigin: resolvePublicOrigin({ configured: serverConfig.publicUrl, origin: originProvider() ?? (typeof resolvedOrigin === 'string' && resolvedOrigin !== '' ? () => resolvedOrigin : undefined) }),
       tasks: typeof tasks?.size === 'number' ? tasks.size : 0,
     };
     if (typeof logger?.debug === 'function') logger.debug(`dsh-a2a: server ${attached ? 'attached' : 'detached'} at ${summary.url}`);
@@ -528,6 +534,9 @@ export function createServer({
       version: PROTOCOL_VERSION,
       uptimeSeconds: Math.round((Date.now() - STARTED_AT) / 1000),
       skills: typeof skills?.list === 'function' ? skills.list().length : 0,
+      // What this host would say a link looks like. An operator compares it against the address they actually
+      // reach — the one question that decides whether invite links work off-machine.
+      publicOrigin: resolvePublicOrigin({ req, configured: serverConfig.publicUrl, origin: originProvider() }),
       ...(flushRequested ? { flushed, ...(flushError === undefined ? {} : { flushError }) } : {}),
     });
   }
@@ -1052,9 +1061,16 @@ export function createServer({
   /** Origin provider that tolerates a webserver whose listener has not bound. */
   function originProvider() {
     const webServer = ctx?.webServer;
-    if (webServer === null || typeof webServer !== 'object') return undefined;
-    if (typeof webServer.getOrigin !== 'function') return undefined;
-    return () => webServer.getOrigin();
+    if (webServer !== null && typeof webServer === 'object' && typeof webServer.getOrigin === 'function') {
+      return () => webServer.getOrigin();
+    }
+    // No DSH webserver here — a standalone host, which resolved its own origin at startup from configuration or
+    // its listen address. Without this fallback that host would report and publish an empty origin, and every
+    // link it hands out would be a bare path.
+    if (typeof resolvedOrigin === 'string' && resolvedOrigin !== '') {
+      return () => resolvedOrigin;
+    }
+    return undefined;
   }
 
   /** Log a warning, scrubbing credentials out of any error detail. */

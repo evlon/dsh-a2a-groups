@@ -317,7 +317,8 @@ async function main() {
   // must fill in, and the startup log says which answer was used.
   const publicOrigin = resolvePublicOrigin({
     configured: config.server.publicUrl,
-    origin: () => `http://127.0.0.1:${options.port}`,
+    // The listen address is the weakest answer, used only when nothing else is known.
+    origin: () => 'http://' + (host === '0.0.0.0' ? '127.0.0.1' : host) + ':' + port,
   });
 
   const joinTokens = createJoinTokenStore({
@@ -372,6 +373,7 @@ async function main() {
   const { registrar, handle, routes } = createHttpRegistrar(logger);
   const server = createServer({
     joinTokens,
+    resolvedOrigin: publicOrigin,
     
     registrar,
     where: 'standalone agent-groups',
