@@ -917,19 +917,25 @@ test("my own row explains itself when I have no role yet", () => {
 });
 
 test("clearing my role uses its own instruction, because omission means 'unchanged'", () => {
+	// The clear affordance is no longer a button in the roster: clearing is the empty case of
+	// editing, and the edit draft says so. The INSTRUCTION still has to exist and has to be
+	// explicit, because the tool treats an omitted field as "leave it alone" — so a clear that
+	// merely omitted `about` would silently do nothing. That property is what this test keeps.
 	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
-	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
-	const clear = buttonsOf(root).filter((button) => textOf(button).includes("清空介绍"))[0];
-	assert.ok(clear !== undefined, "a filled-in role must offer a clear action");
-
-	const input = createFakeInput();
-	const root2 = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input });
-	const clear2 = buttonsOf(root2).filter((button) => textOf(button).includes("清空介绍"))[0];
-	clear2.props.onClick();
-	const text = input.inserted[0].text;
+	const text = exportsObject.draftGroupRoleClear({ groupName: "内网部署协作群", groupId: "grp-1" });
 	assert.ok(text.includes("a2a_group_role"), text);
 	assert.ok(text.includes("空字符串"), `the clear must be explicit, not implied: ${text}`);
 	assert.ok(text.includes("空数组"), `tags must be cleared explicitly too: ${text}`);
+});
+
+test("the roster offers no separate clear button", () => {
+	// Two reasons, both deliberate: a destructive action should not sit as a line of the member
+	// list (no IM does that — it belongs inside the row's own menu), and every extra writer is
+	// another place the "only the Session writes" property could be broken.
+	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
+	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
+	const clear = buttonsOf(root).filter((button) => textOf(button).includes("清空介绍"));
+	assert.equal(clear.length, 0, "clearing moved into the edit path");
 });
 
 test("the self row derives from the person table when the roster predates roleAbout", () => {

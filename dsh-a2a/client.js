@@ -2213,36 +2213,16 @@ window.__ModuleLoader__.load({
 					})
 				);
 
-				// Only my own row can be cleared, and only when there is something to clear.
-				if (!isSelf || about === "" || !canEdit) return button;
-				return h(
-					"div",
-					{ key: given.key === undefined ? "self-block" : given.key + "-block", style: { display: "flex", flexDirection: "column", gap: "1px" } },
-					button,
-					h(
-						"button",
-						{
-							type: "button",
-							title: "清空我在这个群的介绍",
-							style: {
-								alignSelf: "flex-end",
-								margin: "0 6px 0 0",
-								padding: 0,
-								border: "none",
-								background: "transparent",
-								color: "inherit",
-								font: "inherit",
-								fontSize: "10px",
-								opacity: 0.5,
-								cursor: "pointer"
-							},
-							onClick: function () {
-								fillDraft(inputActions, draftGroupRoleClear({ groupName: group.name, groupId: group.id }));
-							}
-						},
-						"清空介绍"
-					)
-				);
+				// No separate "clear" control. Clearing is not a sibling of editing — it is the
+				// empty case of it, and the edit draft already says so ("清空 about 就是删掉这条
+				// 介绍"). A second destructive button under the row would be one more thing to
+				// mis-click, and it has no IM precedent: WeChat and Feishu put destructive
+				// actions inside the row's own ⋯ menu, never as a line of the list.
+				//
+				// When that ⋯ menu exists, clearing belongs there. Until then the edit path is
+				// the only writer, which is also the property that keeps the credential on the
+				// host.
+				return button;
 			}
 
 			/**
