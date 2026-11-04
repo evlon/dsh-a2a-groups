@@ -39,7 +39,7 @@ import { randomFillSync } from 'node:crypto';
 import { ownEndpointFromConfig } from './endpoint.js';
 import { HOST_SESSION_ID } from './memberships.js';
 // The three message kinds the MVP sends. A fourth would mean the scope changed.
-import { DM_KIND_INVITE } from './groups.js';
+import { DM_KIND_INVITE, DM_KIND_JOIN_NOTICE, DM_KIND_WELCOME } from './groups.js';
 
 /**
  * How often an open subscription refreshes its member's presence.
@@ -48,6 +48,16 @@ import { DM_KIND_INVITE } from './groups.js';
  * between ticks. Half the window leaves room for one missed tick without the indicator lying.
  */
 const PRESENCE_TICK_MS = 50_000;
+
+/**
+ * The sender id used for a message no person authored.
+ *
+ * A welcome cannot be signed by the person being welcomed — the store refuses a message from yourself, and
+ * a self-signed greeting reads oddly anyway. When a group has no owner to speak for it, this stands in. It
+ * is deliberately not a person id: pretending a session identifier is a person is how ids stop meaning one
+ * thing.
+ */
+const SYSTEM_PERSON_ID = 'system';
 
 /** How many feed entries a join hands back so a new member has context. */
 const JOIN_FEED_TAIL = 20;
@@ -68,6 +78,61 @@ const MAX_READ_LIMIT = 200;
  */
 export function createGroupSkills({ store, identities, config, logger, clock = () => Date.now() }) {
   const settings = config.groups;
+
+  /**
+   * Tell the owner somebody joined, and tell the newcomer what they joined.
+   *
+   * Both messages are best-effort: the membership is already stored, and a courtesy that fails must not
+   * turn a successful join into an error the caller has to interpret.
+   *
+   * @param {object} group - the group snapshot, after the join.
+   * @param {object} joiner - `{ personId, displayName }`.
+   * @returns {{notifiedOwner: boolean, welcomed: boolean}} what was actually sent.
+   */
+  function announceJoin(group, joiner) {
+    const result = { notifiedOwner: false, welcomed: false };
+    const ownerId = group?.owner?.personId;
+    try {
+      if (typeof ownerId === 'string' && ownerId !== '' && ownerId !== joiner.personId) {
+        store.sendPersonMessage({
+          fromPersonId: joiner.personId,
+          toPersonId: ownerId,
+          kind: DM_KIND_JOIN_NOTICE,
+          // The name and the group, nothing else. A notice that quotes the invitation would put the token
+          // in the owner's own inbox, which is where a forwarded screenshot comes from.
+          text: `${joiner.displayName} 加入了「${group.name}」`,
+          payload: { groupId: group.groupId, groupName: group.name, personId: joiner.personId },
+        });
+        result.notifiedOwner = true;
+      }
+    } catch (error) {
+      // Best effort, and deliberately silent: the log already records the join.
+      void error;
+    }
+    try {
+      store.sendPersonMessage({
+        // Sent by the owner when there is one, never by the joiner themselves: a message from yourself
+        // is refused by the store, and a "welcome" signed by the person being welcomed reads oddly anyway.
+        // The host is the neutral sender when no owner exists.
+        // The owner when there is one; otherwise a reserved id that is not a person. Using
+        // HOST_SESSION_ID here would put a session identifier where a person id belongs.
+        fromPersonId: typeof ownerId === 'string' && ownerId !== '' ? ownerId : SYSTEM_PERSON_ID,
+        toPersonId: joiner.personId,
+        kind: DM_KIND_WELCOME,
+        text: `欢迎加入「${group.name}」`,
+        payload: {
+          groupId: group.groupId,
+          groupName: group.name,
+          topic: group.topic ?? '',
+          memberCount: group.memberCount ?? 0,
+        },
+      });
+      result.welcomed = true;
+    } catch (error) {
+      void error;
+    }
+    return result;
+  }
 
   /**
    * Turn a store refusal into the A2A error shape the server expects.
@@ -358,6 +423,12 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
             role: joined.member.role,
             lastSeq: joined.group.lastSeq ?? 0,
           });
+
+          // The join is stored; now tell both sides. Best-effort — see announceJoin.
+          const announced = announceJoin(store.snapshot({ groupId, member: { personId: joined.member.personId, personKey: joined.personKey } }), {
+            personId: joined.member.personId,
+            displayName: joined.member.displayName,
+          });
           return {
             text: `Joined "${joined.group.name}".\n\n`
               + `groupId  : ${groupId}\n`
@@ -385,6 +456,9 @@ export function createGroupSkills({ store, identities, config, logger, clock = (
               // having to read the group back. Empty means the host is not configured with a
               // gateway base and agent name; it does NOT mean the join failed.
               endpoint: endpoint ?? '',
+              // Who was told. Silence here would make "did the owner get notified?" unanswerable.
+              notifiedOwner: announced.notifiedOwner,
+              welcomed: announced.welcomed,
             },
           };
         } catch (error) {

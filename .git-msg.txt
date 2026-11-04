@@ -1,35 +1,31 @@
-fix: a role save that changes nothing no longer announces itself
+feat: a join now tells both sides
 
-A member reported six 「张工 更新了本群角色」 lines in a feed where the description had changed twice, with
-the interval shrinking from two hours to a hundred seconds. That is worse than noise: it makes the change
-notification useless, because a member can no longer tell an update from a repeat — and the reporter
-reasonably concluded "something is calling the write endpoint in a loop" and stopped replying to the
-broadcasts.
+`person/send` has carried `join-notice` and `welcome` since it was written, and nothing ever sent one. So a
+join produced a line in the feed that the owner sees only if they happen to be looking, and the newcomer got
+no statement of what they had walked into — the invitation flow was one-directional.
 
-Nothing was looping. `setProfile` wrote the system entry unconditionally, so every save announced itself
-whether or not the value differed. A dialog opened and saved three times produced three announcements.
+    owner      [join-notice] 李四 加入了「入群提示验证」
+    newcomer   [welcome]     欢迎加入「入群提示验证」
 
-NOW
+Both verified against a live host, and both reported in the join result (`notifiedOwner`, `welcomed`) so
+"did the owner get told?" is answerable instead of assumed.
 
-    real change    feed 18 -> 19   (+1, recorded)
-    same again     feed 19 -> 19   (+0, silent)
+THE WELCOME CANNOT BE SIGNED BY THE PERSON BEING WELCOMED
 
-Two details that make the comparison correct rather than approximately correct:
+The store refuses a message from yourself, which is not an inconvenience here but the right rule: a greeting
+signed by its own recipient reads oddly and gives the UI a sender it has to special-case. The owner signs it;
+a group with no owner gets a reserved `system` id — deliberately not a session id, because pretending a
+session identifier is a person id is how ids stop meaning one thing.
 
-- **tags are normalised on both sides.** Comparing a raw array against a normalised one would report a
-  change on every save — the same bug wearing a different hat.
-- **`profileUpdatedAt` is not stamped on a no-op.** That field means "when this last changed", so bumping it
-  would make the stored value lie in exactly the way the feed line did.
+NEITHER MESSAGE CARRIES THE INVITE TOKEN
 
-The write path also returns `changed`, so the panel can distinguish "saved" from "already that value"
-instead of saying 已保存 for both.
+A notice that quoted the invitation would put the token in the owner's own inbox, which is precisely where a
+forwarded screenshot comes from. Asserted, because it is the kind of leak that looks helpful.
 
-WHY THIS TOOK A DETOUR
+A FAILURE TO NOTIFY DOES NOT FAIL THE JOIN
 
-The store-level fix passed its own test immediately while the live feed kept growing, because the member
-instance reaches the host over A2A and the HOST process is what runs `setProfile`. The plugin in 3091 looked
-fixed and was irrelevant; the host needed the restart. Worth recording because the symptom — "the fix did
-not work" — pointed at the wrong process.
+The membership is already on disk. A missing courtesy costs nothing; turning it into an error would report a
+failed join for somebody who is, in fact, in the group.
 
-Verified: 422 tests, store-level (`changed: true / false / true`, two system entries not three), and
-end-to-end through the gateway with feed counts before and after.
+Verified: 427 tests (5 new — both directions, self-send refusal, no token in the payload, owner not notified
+about their own join, and notice surviving an absent owner), plus the live run above.
