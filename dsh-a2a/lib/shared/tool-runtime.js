@@ -595,7 +595,41 @@ function requireSession(sessionId, tool) {
   'a2a_group_invite': async function a2a_group_invite(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_invite');
-    const membership = requireLocalMembership(identities, groupId, sessionId);
+    const membership = identities.get(groupId, sessionId);
+    if (membership === undefined) {
+      throw coded('unknown_group', `this Session has not joined "${groupId}"; run a2a_groups to list the groups it belongs to`);
+    }
+    // A group hosted elsewhere: the host owns the token table, so it mints. The owner credential travels
+    // with the call and the host verifies it — this instance does not gain authority it does not have.
+    if (membership.local !== true) {
+      const target = targetOf(membership, config);
+      // invite via bridge: the host is the only process that can mint a link it will itself accept.
+      const result = await bridge.send(target, {
+        skill: 'group/invite',
+        text: 'invite for ' + groupId,
+        data: {
+          groupId,
+          personId: membership.personId,
+          personKey: membership.personKey,
+          label: args.label,
+          expiresInHours: args.expiresInHours,
+        },
+        timeoutMs: config.client.timeoutMs,
+      });
+      const meta = result.data ?? {};
+      const link = typeof meta.link === 'string' ? meta.link : '';
+      if (link === '') {
+        throw coded('bad_response', 'the host did not return an invite link');
+      }
+      return {
+        groupId,
+        link,
+        prompt: typeof meta.prompt === 'string' ? meta.prompt : link,
+        expiresAt: meta.expiresAt,
+        inviteId: meta.inviteId,
+      };
+    }
+
     const issued = store.invite({
       groupId,
       label: args.label,

@@ -1,39 +1,39 @@
-fix: `group/read` returned the author as a bare string, losing the name
+fix: a group created through MCP could not be invited to
 
-A four-process walkthrough — three DSH instances and a standalone host, each on its own port and home —
-surfaced this on the first full read:
+The MCP walkthrough — CodeBuddy in non-interactive mode calling this server over stdio — found it on the
+second real task:
 
-    [message] : 对账这块我梳理完了，李四你看下接口定义
-              ↑ the author's name is missing
+    cbc -p "对群 g-c728b019 做两件事：生成邀请；发一条消息"
 
-THE CAUSE
+    消息已发出（seq 2）。但邀请没有生成：
+    "g-c728b019" is hosted elsewhere; only this instance's own groups can be administered here
 
-The read serializer flattened `from` to its display name and hoisted `personId` alongside:
+`a2a_group_create` accepts an `agent` and creates the group on a remote host, which is the NORMAL case
+(the host is a standalone server). But `a2a_group_invite` gated on `local === true`. So a client could
+create a group it could not invite anybody to — and MCP always hits this path, because an MCP client has
+no hosted groups of its own.
 
-    from: entry.from.displayName,
-    personId: entry.from.personId,
+WHY THE HOST MUST MINT
 
-but `publicEntry` documents `from: { personId, displayName }`. Every consumer reading `from.displayName`
-got `undefined`. It stayed hidden because the panel no longer renders message bodies (the security fix), so
-nothing in the UI was reading the field.
+The invite token is stored (hashed) on the host that owns the group. Only that process can create a link
+the same process will accept, so `a2a_group_invite` now branches: in-process for a local group, and over
+`bridge.send` to `group/invite` for a remote one. The caller sends its own owner credential and the host
+verifies it — this instance never gains authority it does not have.
 
-WHY THE WALKTHROUGH FOUND IT AND THE SUITE DID NOT
+VERIFIED THROUGH THE SAME CLIENT THAT FOUND IT
 
-The tests assert on `entry.from.personId` and on rendered panel text. Neither touches the author NAME on a
-read entry — so the suite was green while a documented field was empty. Running the real flow over four
-processes is what made it visible.
+    cbc -p "用 a2a_group_invite 给群 g-c728b019 生成邀请链接"
+    -> agent-a2a://group?v=1&gw=http://127.0.0.1:3000/a2a&agent=agent-group-h...
+       有效期到 2026-11-11T09:09:29Z
 
-ALSO IN THE REPORT
+ALSO ESTABLISHED
 
-The walkthrough produced `docs`-adjacent evidence: `TEST-REPORT.md` plus four screenshots covering the
-owner's and both members' views. Both remaining findings are recorded there; the other one (a hardcoded home
-path in the screenshot script) was a test-tool bug, now fixed.
+MCP exposes all 25 tools with complete schemas — verified by a raw stdio handshake, not only through the
+model — and `cbc` drives them: it created `g-c728b019`, read it back with the right name and owner role,
+and posted to it. Reports live in `.shots/mcp/`.
 
-A LESSON WORTH KEEPING
+Two limits are protocol, not implementation: MCP has no server push, so a client cannot be woken by a
+group message and has to read on its own initiative; and it has no UI, so everything is described in
+conversation.
 
-While fixing this I replaced one line by index but wrote three comment lines into the same slot, pushing
-`kind` and `text` out of the object. `node --check` passed, because the result was still valid syntax. A
-syntax check is not a behaviour check, and that is why the fix was verified by reading a real feed afterwards
-rather than by the check alone.
-
-Verified: 427 tests, and on the live host `from: {"displayName":"张三","personId":"m-dbf471ab"}`.
+Verified: 427 tests, and the three MCP interactions above.
