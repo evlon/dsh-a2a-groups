@@ -222,20 +222,59 @@ export function renderJoinPage(input) {
   上面的内容就是全部 —— 你也可以自己照着改。
 </div>
 
+<h2>发给同事</h2>
+<p class="sub">同事打开这个链接就能自己配好。链接里带着一次性邀请，用完即失效。</p>
+<pre id="shareLink">…</pre>
+<p><button id="copyShare" type="button">复制链接</button></p>
+
 <h2>群信息</h2>
 <pre>群名  ${escapeHtml(input.groupName)}
 群 id ${escapeHtml(input.groupId)}
 网关  ${escapeHtml(input.gatewayBase)}</pre>
 
 <script>
+  // The page's own URL carries the token, so it is read here rather than templated twice.
+  var token = new URLSearchParams(window.location.search).get('t') || '';
+
+  // The shareable link, derived from the address the browser is ACTUALLY on. A gateway may mount this page
+  // at /agent-groups/join and strip the prefix before forwarding, so the host only ever sees /join and cannot
+  // reconstruct the prefix. location.pathname has it, which is why the browser computes this and not the host.
+  function computeShareLink() {
+    // RegExp from a string, not a literal: this page is emitted from a template literal, and a regex literal
+    // here loses its escapes on the way out, which silently turned the pattern into a comment.
+    var prefix = window.location.pathname.replace(new RegExp('/join/?' + '$'), '');
+    return window.location.origin + prefix + '/join?t=' + encodeURIComponent(token);
+  }
+
+  var shareField = document.getElementById('shareLink');
+  if (shareField !== null) shareField.textContent = computeShareLink();
+
+  document.getElementById('copyShare').addEventListener('click', async function () {
+    var button = this;
+    try {
+      await navigator.clipboard.writeText(computeShareLink());
+    } catch (error) {
+      // A plain http:// origin is not a secure context, so the clipboard API is unavailable. Selecting the
+      // text is the honest fallback, and the button says what happened rather than claiming success.
+      var range = document.createRange();
+      range.selectNodeContents(shareField);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+      button.textContent = '已选中，按 Ctrl+C 复制';
+      button.classList.add('done');
+      return;
+    }
+    button.textContent = '已复制';
+    button.classList.add('done');
+  });
+
   document.getElementById('copy').addEventListener('click', async function () {
     var button = this;
     var text = document.getElementById('text').textContent;
     try {
       await navigator.clipboard.writeText(text);
     } catch (error) {
-      // Clipboard needs a secure context; a plain http:// host is not one. Selecting the text is the honest
-      // fallback — the user can press Ctrl+C, and the button says what happened rather than claiming success.
       var range = document.createRange();
       range.selectNodeContents(document.getElementById('text'));
       var selection = window.getSelection();
