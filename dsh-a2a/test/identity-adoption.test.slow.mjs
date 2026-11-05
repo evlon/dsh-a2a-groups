@@ -352,3 +352,14 @@ test('the tool sends the credential, not just the id', () => {
   assert.match(runtime, /personKey: adoptPersonKey/u);
   assert.match(runtime, /personKey: adoptRemotePersonKey/u);
 });
+
+test('the host skill forwards personKey, not only personId', () => {
+  // The chain has FOUR hops — panel prefill, tool, host skill, store — and each must carry the credential. The host
+  // skill forwarded only `personId`, so `claimsExisting` was always false and every tokenless join fell back to
+  // demanding an invite. The panel looked right, the store was right, and the link between them dropped the secret.
+  const skills = readFileSync('lib/core/skills-group.js', 'utf8');
+  const at = skills.indexOf("id: 'group/join'");
+  const body = skills.slice(at, skills.indexOf("id: 'group/invite'", at));
+  assert.match(body, /personId: typeof data\.personId/u);
+  assert.match(body, /personKey: typeof data\.personKey/u, 'the proof must travel with the claim');
+});

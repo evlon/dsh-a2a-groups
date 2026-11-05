@@ -482,6 +482,9 @@ return {
 			// normal case when somebody opens a new working directory and rejoins a long-lived group. The store
 			// reuses the member row and reissues the credential instead of creating a second 张三.
 			personId: typeof data.personId === 'string' && data.personId !== '' ? data.personId : undefined,
+			// The PROOF, not just the claim: a bare personId gets nobody in, and must not — accepting it would let
+			// anybody rejoin as anybody. Both together are verified against the stored keyHash.
+			personKey: typeof data.personKey === 'string' && data.personKey !== '' ? data.personKey : undefined,
           });
           identities.upsert({
             sessionId: context?.sessionId ?? HOST_SESSION_ID,
