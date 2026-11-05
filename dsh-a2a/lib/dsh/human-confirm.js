@@ -23,6 +23,10 @@
  * @module dsh-a2a/human-confirm
  */
 
+import { appendFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 /** The channels a question can travel over. Only `question` is implemented. */
 export const CHANNELS = Object.freeze(['question', 'im']);
 
@@ -45,20 +49,18 @@ export const TIMEOUTS = Object.freeze(['never', 'deny', 'allow']);
  * @returns {void}
  */
 function writeAnswerTrace(detail) {
-  void (async () => {
-    try {
-      const { writeFileSync } = await import('node:fs');
-      const { tmpdir } = await import('node:os');
-      const { join } = await import('node:path');
-      writeFileSync(
-        join(tmpdir(), 'a2a-human-confirm-answer.json'),
-        JSON.stringify({ at: new Date().toISOString(), ...detail }, null, 2),
-        'utf8',
-      );
-    } catch {
-      // Ignored on purpose.
-    }
-  })();
+  // Synchronous on purpose: these traces are written moments apart (enter → before-call → after-call) and an async
+  // write would race with the next one, leaving only the last. A diagnostic that loses the step before the hang is
+  // worse than none, because it looks like the earlier step never ran.
+  try {
+    appendFileSync(
+      join(tmpdir(), 'a2a-human-confirm-trace.log'),
+      `${new Date().toISOString()} ${JSON.stringify(detail)}\n`,
+      'utf8',
+    );
+  } catch {
+    // Ignored on purpose.
+  }
 }
 
 /**
@@ -142,6 +144,12 @@ export function confirmationQuestion({ groupName, sender, text }) {
  * @returns {Promise<{ outcome: string, answer?: object, error?: string }>} what happened.
  */
 export async function askHuman({ seam, agent, question, onTimeout = 'deny', timeoutMs = 300000 }) {
+  // Record entry before anything can go wrong.
+  //
+  // Measured twice: a request configured for 180 seconds was still pending five minutes later, and NO trace file was
+  // written — which left two possibilities indistinguishable (never entered here, or entered and hung). This line
+  // separates them.
+  writeAnswerTrace({ step: 'enter', onTimeout, timeoutMs, hasSeam: seam !== undefined && seam !== null });
   // Either method is enough to ask. `askTimed` alone is a complete seam — it is the one that returns a `pending` result
   // when the window closes — so requiring `ask` specifically would reject a Host that only implements the better one.
   // Measured by test: an earlier version returned `unavailable` for a seam that had askTimed only.
@@ -181,12 +189,14 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
     //
     // So the deadline is enforced here, in the Host, where it cannot be skipped by a missing UI.
     if (typeof seam.askTimed === 'function') {
+      writeAnswerTrace({ step: 'before-askTimed', timeoutMs });
       const pending = seam.askTimed(
         { ...question, agent },
         // The call id keys the client card. Any stable string works; the seam only needs it to match the answer back.
         `a2a-confirm-${Date.now()}`,
         timeoutMs,
       );
+      writeAnswerTrace({ step: 'after-askTimed-call', timeoutMs, isPromise: typeof pending?.then === 'function' });
       // Whichever settles first decides: the human, or the deadline.
       let timer;
       const deadline = new Promise((resolve) => {

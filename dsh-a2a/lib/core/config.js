@@ -105,7 +105,12 @@ export const DEFAULT_CONFIG = Object.freeze({
       // thing.
       onTimeout: 'deny',
       // How long to wait before applying onTimeout. Ignored when onTimeout is 'never'.
-      timeoutMs: 300000,
+      //
+      // 30 seconds, not 5 minutes. The seam's countdown lives in the CLIENT (measured: TimedQuestionWait only arms its
+      // Host timer while no Client holds a claim), so an unanswered question can sit for as long as nobody answers.
+      // A long default therefore means a colleague's message can park a conversation for minutes; 30 seconds is long
+      // enough for someone at the keyboard to answer and short enough that an unattended Session fails fast.
+      timeoutMs: 30000,
     }),
     publicUrl: '',
     agentName: '',
