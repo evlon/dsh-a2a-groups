@@ -735,7 +735,13 @@ return {
                 // normal case for a host with no gateway base configured; a caller must read it
                 // as "no address", never as "offline".
                 endpoint: typeof entry.endpoint === 'string' ? entry.endpoint : '',
-                online: entry.online === true,
+				// The timestamp as well as the boolean. `online` is this host's answer about NOW, and a
+				// caller caches the roster — so sending only the boolean hands out an inference that expires
+				// the moment it is written. `lastSeenAt` is a fact, and a reader that holds it can answer
+				// "online?" correctly at any later time. Omitting it here is why a member panel kept showing
+				// an 84-minute-old presence picture with no way to correct itself.
+				lastSeenAt: Number.isFinite(entry.lastSeenAt) ? entry.lastSeenAt : 0,
+				online: entry.online === true,
               })),
               // Surfaced so a member instance can tell a stale cache from live data.
               fetchedAt: Date.now(),
@@ -1119,6 +1125,47 @@ return {
               ? '这个群已归档：还能读，但不能发言，也不会出现在频道目录里。让群主再调一次并传 archived=false 可以恢复。'
               : '这个群已恢复：可以继续发言，也会重新出现在频道目录里。',
             meta: { groupId, archived: result.archived },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/touch',
+      name: 'Stay present',
+      description:
+        'Refresh this member\'s last-seen time. The cheapest authenticated call there is — no payload, no feed read, '
+        + 'just presence. An instance calls it on a timer so that a member who joined but never opened the inbox is '
+        + 'still shown as online while their process is running.',
+      examples: ['I am still here'],
+      async run(input) {
+        const { groupId, member } = requireMember(input);
+        try {
+          // Deliberately thin: this runs every fifty seconds per group, so anything expensive here would be a tax
+          // on every member's machine. `touch` already refreshes lastSeenAt through resolveMember.
+          const at = store.touch({ groupId, member });
+          return { text: 'present', meta: { groupId, at } };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/away',
+      name: 'Announce going away',
+      description:
+        'Mark this member as away right now, instead of letting presence decay over the online window. '
+        + 'Called by a disposing instance on a clean shutdown; a killed process cannot call it, which is why the '
+        + 'decay window remains the backstop.',
+      examples: ['I am shutting down'],
+      async run(input) {
+        const { groupId, member } = requireMember(input);
+        try {
+          const at = store.markAway({ groupId, member });
+          return {
+            text: at === undefined ? 'Not a member; nothing to announce.' : 'Marked as away.',
+            meta: { groupId, away: at !== undefined },
           };
         } catch (error) {
           refuse(error);

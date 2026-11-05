@@ -204,3 +204,23 @@ test('the online count ignores members whose state is unknown', () => {
   // Counting `undefined` as offline would be one thing; counting it as online would be worse. Neither happens.
   assert.match(panel, /member\.online === true/u);
 });
+test('group/info sends lastSeenAt, not just a boolean', () => {
+  // The data source for the whole presence chain. A member panel can only derive presence from a timestamp, so if
+  // the host never sends one the panel has nothing to work from — which is exactly what happened: `online` was
+  // sent, `lastSeenAt` was dropped while building the reply, and every downstream fix had no input.
+  const skills = readFileSync('lib/core/skills-group.js', 'utf8');
+  const start = skills.indexOf("id: 'group/info'");
+  assert.ok(start > -1);
+  const body = skills.slice(start, skills.indexOf("id: 'group/members'", start));
+  assert.match(body, /lastSeenAt: Number\.isFinite\(entry\.lastSeenAt\)/u, 'the timestamp must travel');
+  assert.match(body, /online: entry\.online === true/u, 'and the host-side boolean may remain for old readers');
+});
+
+test('store.members actually carries lastSeenAt', () => {
+  // publicMember is the source. If it stopped including the field, group/info would send 0 for everybody and
+  // nobody would notice until a panel showed every member as unknown.
+  const store = readFileSync('lib/core/groups.js', 'utf8');
+  const start = store.indexOf('function publicMember(');
+  const body = store.slice(start, store.indexOf('function publicEntry(', start));
+  assert.match(body, /lastSeenAt: member\.lastSeenAt/u);
+});

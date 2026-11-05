@@ -538,6 +538,39 @@ window.__ModuleLoader__.load({
 		}
 
 		/** Current snapshot straight from the Host, normalized. */
+		/**
+		 * Replace the injected groups table with a freshly read one.
+		 *
+		 * The page renders from a global the Host injects once, plus a poll that re-reads it. A refresh performed
+		 * over RPC changes the LEDGER, not that global — so without this the new data would exist on disk and the
+		 * screen would keep drawing the old copy until the next full page load.
+		 *
+		 * @param {Array} groups - the `groups` array a refresh returned.
+		 * @returns {void}
+		 */
+		function replaceGroups(groups) {
+			if (!Array.isArray(groups)) return;
+			const host = hostObject();
+			if (host === undefined) return;
+			try {
+				const existing = host[GLOBAL_KEY];
+				const next = existing !== null && typeof existing === "object" && !Array.isArray(existing)
+					? Object.assign({}, existing, { groups: groups })
+					: { groups: groups };
+				host[GLOBAL_KEY] = next;
+			} catch (error) {
+				// A frozen global would make this throw; the poll will pick the change up on the next load instead.
+				warn("could not replace groups", error);
+			}
+			// Wake every subscriber the same way a Host-side change would, so the poll is not the only path to a
+			// re-render. Falls back silently on a non-DOM host; the interval still covers it.
+			try {
+				host.dispatchEvent(new Event(CHANGE_EVENT));
+			} catch (error) {
+				/* non-DOM host: the poll still covers it */
+			}
+		}
+
 		function currentSnapshot() {
 			return readSnapshot(readRaw());
 		}
@@ -547,6 +580,14 @@ window.__ModuleLoader__.load({
 			let signature = String(snapshot.groups.length) + "|" + String(snapshot.unreadTotal);
 			for (const group of snapshot.groups) {
 				signature += "|" + group.id + ":" + String(group.memberCount) + ":" + String(group.unreadCount) + ":" + String(group.lastTime);
+				// A refresh can change the roster WITHOUT changing any of the fields above — same member count, same
+				// last activity, different names or brand-new presence timestamps. Without these two the panel would
+				// receive the new data, compute the same signature, and stay on the old rendering.
+				signature += ":s" + (group.rosterStale === true ? "1" : "0");
+				const roster = Array.isArray(group.members) ? group.members : [];
+				for (const member of roster) {
+					signature += ":" + String(member.id) + "/" + String(member.name) + "/" + String(member.online);
+				}
 				const last = group.lastMessage;
 				if (last !== undefined) signature += ":" + last.id + ":" + String(last.text.length);
 			}
@@ -2606,9 +2647,21 @@ window.__ModuleLoader__.load({
 				opacity: 0.55,
 				whiteSpace: "normal",
 				wordBreak: "break-word"
+			},
+			// A small, quiet button. It sits beside the notice it fixes, so the reader does not have to learn
+			// that a cache exists before being allowed to update one.
+			refreshButton: {
+				flex: "0 0 auto",
+				fontSize: "11px",
+				lineHeight: "1.4",
+				padding: "2px 8px",
+				borderRadius: "4px",
+				border: "1px solid rgba(128, 128, 128, 0.35)",
+				background: "transparent",
+				color: "inherit",
+				cursor: "pointer"
 			}
 		};
-
 		/**
 		 * Write a whole draft sentence into the composer, through the owner's two-step API.
 		 *
@@ -2956,6 +3009,57 @@ window.__ModuleLoader__.load({
 			const snapshot = useSnapshot();
 			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
 			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
+
+			// Whether a refresh is running, and what the last one said. The note is not decoration: an automatic
+			// action with no visible outcome is indistinguishable from a broken one.
+			const [refreshing, setRefreshing] = react.useState(false);
+			const [refreshNote, setRefreshNote] = react.useState("");
+			// One automatic attempt per group per mount. Without this a failed refresh would re-fire on every
+			// render and hammer an unreachable host.
+			// A Set kept in state rather than a ref: `useRef` is not used anywhere in this bundle and the subset
+			// react implementation available here cannot be assumed to provide it. State is the safe choice.
+			const [autoTried, setAutoTried] = react.useState({});
+
+			/**
+			 * Ask the Host to re-read this group's roster.
+			 *
+			 * The credential lives on this machine, so the refresh happens there and only the result travels back —
+			 * the page holds no credential and, by design, cannot reach the group's host itself.
+			 *
+			 * @param {string} groupId - which group.
+			 * @returns {Promise<void>} resolves when the attempt finished, successfully or not.
+			 */
+			const refreshRoster = function (groupId) {
+				if (typeof panelRpcCaller !== "function") {
+					setRefreshNote("这个 Host 没有实时通道，无法刷新。");
+					return Promise.resolve();
+				}
+				setRefreshing(true);
+				setRefreshNote("正在刷新…");
+				return panelRpcCaller("/a2a-panel", "refresh", { groupId: groupId, sessionId: sessionId })
+					.then(function (result) {
+						if (result !== null && result !== undefined && result.ok === true) {
+							const groups = result.value !== undefined && result.value !== null ? result.value.groups : undefined;
+							replaceGroups(groups);
+							setRefreshNote("已刷新。");
+							return;
+						}
+						const code = result !== null && result !== undefined && result.error !== undefined ? result.error.code : "";
+						const message = result !== null && result !== undefined && result.error !== undefined ? result.error.message : "";
+						// Name the reason: "刷新失败" alone leaves the reader unable to tell a dead host from being
+						// removed from the group.
+						setRefreshNote(code === "not_member"
+							? "刷新失败：本机已经没有这个群的成员凭证了。"
+							: "刷新失败：" + (message === "" ? code : message));
+					})
+					.catch(function () {
+						setRefreshNote("刷新失败：通道没有响应。");
+					})
+					.then(function () {
+						setRefreshing(false);
+					});
+			};
+
 			// Whether the invite chooser is open. Kept here rather than in the dialog so one Escape or
 			// one pick closes it from the outside too.
 			const [inviteOpen, setInviteOpen] = react.useState(false);
@@ -2974,6 +3078,25 @@ window.__ModuleLoader__.load({
 				return (right.lastTime || 0) - (left.lastTime || 0);
 			});
 			const group = candidates[0];
+
+			// Refresh automatically when the cache is already known to be stale, and only then.
+			//
+			// Refreshing on every open would spend another machine's network on data nobody asked for; refreshing
+			// never leaves the reader looking at an hour-old roster with no way to fix it short of leaving the UI.
+			// The button below covers everything auto does not.
+			react.useEffect(function () {
+				if (group === undefined || group === null) return;
+				if (group.rosterStale !== true) return;
+				const id = String(group.id);
+				if (autoTried[id] === true) return;
+				setAutoTried(function (previous) {
+					const next = Object.assign({}, previous);
+					next[id] = true;
+					return next;
+				});
+				refreshRoster(id);
+			}, [group === undefined || group === null ? "" : String(group.id), group === undefined || group === null ? false : group.rosterStale]);
+
 
 			/** Insert `@name ` into the composer through the owner's two-step API. */
 			function address(name) {
@@ -3261,7 +3384,28 @@ window.__ModuleLoader__.load({
 						icon("users", 12),
 						"群成员"
 					),
-					h("span", { style: membersLayout.headerMeta }, countLine)
+					h("span", { style: membersLayout.headerMeta }, countLine),
+					// Always present, never merely when stale. A refresh control that appears only after the panel has
+					// already gone stale gives the reader no way to check a group they suspect is out of date.
+					group === undefined
+						? null
+						: h(
+							"button",
+							{
+								type: "button",
+								// A marker rather than a style: a member row and this control are both <button>
+								// elements, and a test that reads "the buttons" needs a way to exclude this one.
+								"data-role": "refresh",
+								style: membersLayout.refreshButton,
+								disabled: refreshing === true,
+								title: "立刻向群里查一次最新成员",
+								onClick: function () {
+									if (refreshing === true) return;
+									refreshRoster(String(group.id));
+								}
+							},
+							refreshing === true ? "刷新中…" : "刷新"
+						),
 				),
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
 				// Data here is a CACHE. When the last attempt to reach the host was refused, say so: a panel that
@@ -3280,16 +3424,35 @@ window.__ModuleLoader__.load({
 				// A roster can be cached and simply old. Different from unreachable: we have no evidence anything
 				// is wrong, we only know the list may have changed since it was fetched. Saying so is cheaper than
 				// being confidently out of date.
+				// The cache is old. Say so, and put the fix next to the complaint: the previous wording told the
+				// reader their data was stale and then asked them to leave the UI and run a tool call, which is
+				// homework rather than an interface.
+				// The cache is old. The button now lives in the header, so this is a sentence rather than a
+				// sentence plus a second control.
 				group.rosterStale === true && Number(group.unreachableAt || 0) === 0
 					? h(
 							"p",
 							{
 								style: Object.assign({}, membersLayout.hint, { opacity: 0.7 }),
-								title: "名单是上次查询缓存的，可能已经不是最新的。在会话里调一次 a2a_group_info 刷新。"
+								title: "名单是上次查询缓存的，可能已经不是最新的。点右上角刷新。"
 							},
-							"名单来自缓存，可能已变化。在会话里查一次群成员即可刷新。"
+							"名单来自缓存，可能已变化。"
 						)
 					: null,
+				// Report the outcome. An automatic or button-triggered action with no visible result is
+				// indistinguishable from one that silently did nothing.
+				refreshNote === ""
+					? null
+					: h(
+							"p",
+							{
+								style: Object.assign({}, membersLayout.hint, {
+									opacity: 0.75,
+									color: refreshNote.indexOf("失败") > -1 ? "#c0392b" : "inherit"
+								})
+							},
+							refreshNote
+						),
 				members.length === 0
 					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
 					: h("div", { style: membersLayout.roster }, rosterRows),

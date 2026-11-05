@@ -65,7 +65,13 @@ export const HOST_SESSION_ID = 'host';
  * takes to read the panel and shorter than a working session, so the common case shows live data and the rare case
  * admits it is stale.
  */
-export const ROSTER_STALE_MS = 10 * 60 * 1000;
+//
+// Thirty seconds, not ten minutes. The number decides how long the panel is allowed to present cached names and a
+// cached member count as current. Ten minutes was chosen to be "longer than reading the panel" — but a group is
+// exactly the place where somebody joins or is removed while you are looking at it, and waiting ten minutes to
+// admit that is not caution, it is a stale screen. Thirty seconds is long enough that the notice does not flicker
+// on every render, and short enough that a refresh feels responsive.
+export const ROSTER_STALE_MS = 30 * 1000;
 
 const MAX_MEMBERSHIPS = 500;
 

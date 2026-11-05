@@ -466,7 +466,15 @@ export const TOOL_SPECS = Object.freeze([
   
     name: 'a2a_group_post',
     description:
-      'Post a message to a group. Every member is woken by it, so post what a member should act on, not a running commentary. Read a2a_group_read first when you need to know what was already said.',
+      // The old text said "every member is woken by it", which stopped being true when unaddressed posts became
+      // quiet. A model reading it either avoids posting for fear of interrupting everybody, or describes one group
+      // post as "sent to 李四 and 王五 separately" — which is exactly what a live run produced. This spec used to
+      // contradict its own `mentions` description; only that half was right.
+      'Post ONE message to the group: a single entry every member can read, not a separate delivery to each person. ' +
+      'Who gets WOKEN depends on `mentions` — the listed members start a turn, everybody else sees an unread count ' +
+      'and reads it when they next look. Omit `mentions` for ordinary progress; add it when somebody must act. ' +
+      'Say "posted to the group", never "sent to X and Y", because that is what happened. ' +
+      'Read a2a_group_read first when you need to know what was already said.',
     parameters: {
       type: 'object',
       additionalProperties: false,

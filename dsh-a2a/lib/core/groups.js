@@ -1266,6 +1266,29 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {object} input - `{ groupId, member }`.
    * @returns {number} the timestamp written.
    */
+  /**
+   * Record that this member is going away.
+   *
+   * Sets `lastSeenAt` far enough in the past that presence reads as offline immediately, instead of waiting out the
+   * online window. The value is explicit rather than `now - ONLINE_WINDOW_MS - 1` so a reader can tell "went away at
+   * T" from "has not been seen since T".
+   *
+   * @param {object} input - `{ groupId, member }`.
+   * @returns {number|undefined} the timestamp written, or undefined when the credential is not valid.
+   */
+  function markAway(input = {}) {
+    const group = findGroup(input.groupId);
+    if (group === undefined) return undefined;
+    const member = resolveMember(group, input.member);
+    if (member === undefined) return undefined;
+    // One millisecond past the window: unambiguous offline without pretending to know a time we do not have.
+    member.lastSeenAt = now() - ONLINE_WINDOW_MS - 1;
+    dirty = true;
+    appendSystem(group, `${member.displayName} 离开了`);
+    persist();
+    return member.lastSeenAt;
+  }
+
   function touch(input = {}) {
     const group = requireGroup(input.groupId);
     const member = resolveMember(group, input.member);
@@ -2047,6 +2070,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // caller's own membership — never another member's.
     // Presence refresh for an open subscription. Separate from the mutators above because it
     // changes only a timestamp.
+    markAway,
     touch,
     // One-to-one invitations. A doorbell, not a chat: see the module note above.
     sendPersonMessage,

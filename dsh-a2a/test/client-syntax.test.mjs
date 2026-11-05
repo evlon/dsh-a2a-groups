@@ -210,7 +210,11 @@ function findAll(node, sink = []) {
 
 /** Every `<button>` in a stub tree, in document order. */
 function buttonsOf(tree) {
-	const buttons = findAll(tree).filter((element) => element.type === "button");
+	// Roster rows only. The refresh control is also a <button> but it is not a member, and folding it in made every
+	// ordering assertion read one row too many.
+	const buttons = findAll(tree).filter(
+		(element) => element.type === "button" && element.props["data-role"] !== "refresh",
+	);
 	// The tree above is flattened depth-first, which is document order for this renderer.
 	return buttons;
 }

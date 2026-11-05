@@ -555,6 +555,103 @@ const PANEL_FEED_TAIL = 8;
     if (connection === undefined || connection === null || typeof connection.rpc?.handle !== 'function') {
       console.error("[a2a-panel] no connection.rpc available");
     } else {
+      /**
+       * Re-read one group's roster and write it back to the ledger.
+       *
+       * The panel cannot do this itself: the credential is here, and the page holds no credential on purpose. So the
+       * refresh happens against the local ledger and only the resulting snapshot travels back.
+       *
+       * @param {object} payload - `{ groupId, sessionId }`.
+       * @returns {Promise<object>} the Connection RPC envelope.
+       */
+      const refreshGroupRoster = async (payload) => {
+        const body = payload !== null && typeof payload === 'object' ? payload : {};
+        const groupId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+        if (groupId === '') {
+          return { ok: false, error: { code: 'bad_argument', message: 'groupId is required', details: {} } };
+        }
+
+        // Any membership of this group will do: the credential identifies the person, and the roster is the same
+        // regardless of which one presents it. Prefer the Session the panel belongs to, then any.
+        const candidates = identities.list({ groupId });
+        const record = candidates.find((entry) => entry.sessionId === sessionId) ?? candidates[0];
+        if (record === undefined) {
+          return {
+            ok: false,
+            error: { code: 'not_member', message: 'this instance holds no membership for that group', details: { groupId } },
+          };
+        }
+
+        try {
+          let info;
+          if (record.local === true) {
+            // Hosted here: the store is the authority, no network involved.
+            info = groups.snapshot({ groupId, member: { personId: record.personId, personKey: record.personKey } });
+          } else {
+            const result = await bridge.send(
+              {
+                baseUrl: record.baseUrl,
+                apiKey: record.apiKey ?? settings.client.apiKey,
+                forwardProto: settings.client.forwardProto,
+                protocolVersion: settings.client.protocolVersion,
+              },
+              {
+                skill: 'group/info',
+                text: 'info',
+                data: { groupId, personId: record.personId, personKey: record.personKey },
+                timeoutMs: settings.client.timeoutMs,
+              },
+            );
+            info = result?.data ?? undefined;
+          }
+          if (info === undefined || info === null) {
+            return { ok: false, error: { code: 'empty_answer', message: 'the host returned no group info', details: { groupId } } };
+          }
+
+          // Same shape the tool writes: keep the timestamp, drop the claim about now.
+          identities.upsert({
+            sessionId: record.sessionId,
+            groupId,
+            personId: record.personId,
+            personKey: record.personKey,
+            groupName: typeof info.name === 'string' ? info.name : undefined,
+            groupTopic: typeof info.topic === 'string' ? info.topic : undefined,
+            memberCount: Number.isFinite(info.memberCount) ? info.memberCount : undefined,
+            onlineCount: Number.isFinite(info.onlineCount) ? info.onlineCount : undefined,
+            isOwner: info.owner?.personId === record.personId,
+            members: Array.isArray(info.members)
+              ? info.members.map((member) => ({
+                  personId: member.personId,
+                  displayName: member.displayName,
+                  role: member.role,
+                  lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+                  roleAbout: member.roleAbout,
+                  tags: Array.isArray(member.tags) ? member.tags : undefined,
+                }))
+              : undefined,
+            rosterCachedAt: clock(),
+            reachable: true,
+          });
+          if (typeof identities.flush === 'function') await identities.flush();
+
+          return {
+            ok: true,
+            value: {
+              groupId,
+              memberCount: Number.isFinite(info.memberCount) ? info.memberCount : 0,
+              refreshedAt: clock(),
+              groups: publishGroups(),
+            },
+          };
+        } catch (error) {
+          // A failed refresh must leave the old cache alone and say what happened: the reader still needs to know
+          // the group exists, and the next attempt is theirs to make.
+          const code = typeof error?.data === 'string' ? error.data : (typeof error?.code === 'string' ? error.code : 'refresh_failed');
+          return { ok: false, error: { code, message: describe(error), details: { groupId } } };
+        }
+      };
+
       const disposePanelRpc = connection.rpc.handle(
         PANEL_RPC_CHANNEL,
         async (endpoint, payload) => {
@@ -567,6 +664,9 @@ const PANEL_FEED_TAIL = 8;
             }
             if (name === 'profile') {
               return await setPanelProfile(payload);
+            }
+            if (name === 'refresh') {
+              return await refreshGroupRoster(payload);
             }
             if (name === 'invite') {
               return await setPanelInvite(payload);
@@ -611,6 +711,76 @@ const PANEL_FEED_TAIL = 8;
     void inbox.resume().catch((error) => {
       info(ctx, `a2a: the group inbox could not resume (${describe(error)}); use a2a_group_inbox on to retry`);
     });
+
+  // --- presence ---------------------------------------------------------
+  // A running instance is present, whether or not anybody has the inbox open.
+  //
+  // The heartbeat used to live inside `group/subscribe`, which made presence a side effect of watching: an instance
+  // that joined a group and never opened its inbox was shown as offline two minutes after starting, while it was
+  // demonstrably alive. Presence is a property of the process.
+  //
+  // The tick is 50s against a 120s window, so a single missed tick does not flicker anybody offline. It touches only
+  // remote groups: a hosted group is this instance's own store and needs no network to stay fresh.
+  const PRESENCE_TICK_MS = 50_000;
+  let presenceTimer;
+  const presenceHeartbeat = () => {
+    if (settings.groups.enabled !== true) return;
+    for (const record of identities.remoteMemberships()) {
+      void bridge
+        .send(
+          {
+            baseUrl: record.baseUrl,
+            apiKey: record.apiKey ?? settings.client.apiKey,
+            forwardProto: settings.client.forwardProto,
+            protocolVersion: settings.client.protocolVersion,
+          },
+          {
+            skill: 'group/touch',
+            text: 'touch',
+            data: { groupId: record.groupId, personId: record.personId, personKey: record.personKey },
+            timeoutMs: settings.client.timeoutMs,
+          },
+        )
+        .catch(() => {
+          // An unreachable host must not produce a log line every fifty seconds for every group. The next tick
+          // tries again, and presence decays on its own if the host stays down.
+        });
+    }
+  };
+  if (settings.groups.enabled === true) {
+    presenceTimer = setInterval(presenceHeartbeat, PRESENCE_TICK_MS);
+    presenceTimer.unref?.();
+    // One immediate tick: a freshly started instance should appear online at once, not up to 50s later.
+    presenceHeartbeat();
+  }
+
+  // A clean shutdown says goodbye. A killed process cannot, which is why the online window remains the backstop —
+  // but when we do get the chance to speak, colleagues should not have to wait two minutes to learn we left.
+  ctx.on('dispose', () => {
+    if (presenceTimer !== undefined) clearInterval(presenceTimer);
+    if (settings.groups.enabled !== true) return;
+    for (const record of identities.remoteMemberships()) {
+      void bridge
+        .send(
+          {
+            baseUrl: record.baseUrl,
+            apiKey: record.apiKey ?? settings.client.apiKey,
+            forwardProto: settings.client.forwardProto,
+            protocolVersion: settings.client.protocolVersion,
+          },
+          {
+            skill: 'group/away',
+            text: 'away',
+            data: { groupId: record.groupId, personId: record.personId, personKey: record.personKey },
+            timeoutMs: 2000,
+          },
+        )
+        .catch(() => {
+          // Disposal must never fail on a network error: the process is already going away.
+        });
+    }
+  });
+
   }
 
   // Restore the task store lazily: `flush` on unload keeps a restart from losing
