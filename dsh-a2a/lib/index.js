@@ -514,8 +514,14 @@ const PANEL_FEED_TAIL = 8;
         // empty — and that is exactly the case this feature exists for ("I changed working directory and need to
         // rejoin"). The ledger knows every group this machine holds a credential for, whoever hosts it, and it
         // caches the name and counts, which is enough to draw the row.
-        for (const [groupId, record] of knownByGroup) {
-          if (joinedIds.has(groupId)) continue;
+        // One row per LEDGER RECORD, not per group.
+        //
+        // `joinedIds` is keyed by group, but the question the pane asks is per SESSION: "does THIS conversation
+        // hold a credential?". A group joined from Session A is in `rows`, so skipping by group emitted nothing
+        // for Session B — and Session B is exactly who the rejoin offer is for. Rows therefore carry their
+        // holding Session and the pane decides.
+        for (const record of identities.list()) {
+          const groupId = record.groupId;
           rows.push({
             id: groupId,
             groupId,

@@ -484,6 +484,12 @@ window.__ModuleLoader__.load({
 				// A group that exists only as a directory row: not joined, so it belongs in
 				// "discover" and its only action is "ask to join".
 				discovered: raw.discovered === true || raw.joined === false,
+				// Whether this machine already holds a credential for this group from ANOTHER Session — which is what
+				// makes rejoining possible without an invite. Also a whitelist mapper site: adding it to the host snapshot
+				// without adding it here is how a field silently never reaches the pane.
+				canRejoinAs: raw.canRejoinAs === true,
+				knownAs: pickString(raw.knownAs),
+				knownSessionId: pickString(raw.knownSessionId),
 				// Which Session this membership belongs to, when the Host says.
 				sessionId: pickString(firstDefined(raw, ["sessionId", "session"])),
 				// My own person id IN THIS GROUP, when the Host puts it on the membership row
@@ -2774,7 +2780,17 @@ window.__ModuleLoader__.load({
 			// link box would ask a member to prove themselves to a group they never left.
 			const rejoinable = (props !== null && props !== undefined && props.snapshot !== undefined && props.snapshot !== null
 				&& Array.isArray(props.snapshot.groups) ? props.snapshot.groups : [])
-				.filter(function (row) { return row !== null && row !== undefined && row.canRejoinAs === true; });
+				.filter(function (row) {
+					if (row === null || row === undefined) return false;
+					// A credential exists on this machine...
+					if (row.canRejoinAs !== true) return false;
+					// ...but not for this conversation. Without the second half the offer would appear for a group
+					// this conversation is already in, which is the one case where it must not.
+					const holdingSession = row.sessionId === undefined || row.sessionId === null ? "" : row.sessionId;
+					const currentSession = props.sessionId === undefined || props.sessionId === null ? "" : props.sessionId;
+					if (currentSession === "") return holdingSession !== "";
+					return holdingSession !== currentSession;
+				});
 
 			/** Hand the pasted link to the Session as a ready-to-send instruction. */
 			function joinWithLink() {
@@ -3191,7 +3207,7 @@ window.__ModuleLoader__.load({
 				// A real pane, not one sentence: the entry point exists, so it owes the reader the three
 				// answers a new conversation needs — what this is, how to join, and the one-step path
 				// for somebody who already has a link.
-				return h(UnboundMembersPane, { inputActions: inputActions, snapshot: snapshot });
+				return h(UnboundMembersPane, { inputActions: inputActions, snapshot: snapshot, sessionId: sessionId });
 			}
 
 			// The snapshot may be normalized (`members`) or raw (`roster`); ask once, here.

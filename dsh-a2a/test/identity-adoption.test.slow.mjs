@@ -30,7 +30,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -233,4 +233,43 @@ test('the host accepts a personId when joining', async () => {
   const skills = (await import('node:fs')).readFileSync('lib/core/skills-group.js', 'utf8');
   // Without this the remote path sends a personId the host ignores, and the duplicate 张三 comes back.
   assert.match(skills, /personId: typeof data\.personId === 'string'/u);
+});
+
+// ---------------------------------------------------------------------------
+// The panel must be able to OFFER it, or the backend work is unreachable
+// ---------------------------------------------------------------------------
+
+test('the host publishes a rejoinable row per ledger record, not per group', () => {
+  const index = readFileSync('lib/index.js', 'utf8');
+
+  // The row used to be skipped whenever ANY Session held the group, which is always true once a person has joined —
+  // so the offer could never appear for the one case it exists for.
+  assert.equal(
+    /if \(joinedIds\.has\(groupId\)\) continue;/u.test(index),
+    false,
+    'skipping by group hides the offer from every other Session',
+  );
+  assert.match(index, /canRejoinAs: true/u);
+});
+
+test('the normaliser carries the rejoin fields to the pane', () => {
+  const client = readFileSync('client.js', 'utf8');
+  // Another whitelist mapper. Adding the field to the host snapshot without adding it here is how it never arrives.
+  assert.match(client, /canRejoinAs: raw\.canRejoinAs === true/u);
+  assert.match(client, /knownAs: pickString\(raw\.knownAs\)/u);
+});
+
+test('the offer is keyed on the CURRENT Session, not on the row', () => {
+  const client = readFileSync('client.js', 'utf8');
+  // A group this conversation is already in must not offer to rejoin it; one held by ANOTHER conversation must.
+  assert.match(client, /holdingSession !== currentSession/u);
+  // And the pane needs the current Session passed in, or the comparison has nothing to compare against.
+  assert.match(client, /UnboundMembersPane, \{ inputActions: inputActions, snapshot: snapshot, sessionId: sessionId \}/u);
+});
+
+test('the copy no longer says a group will not follow you', () => {
+  const client = readFileSync('client.js', 'utf8');
+  // That sentence described the behaviour before identity adoption, and contradicts the offer rendered above it.
+  assert.equal(/不会自动跟过来/u.test(client), false, 'the old wording must be gone');
+  assert.match(client, /你已经在这些群里/u, 'and the offer must be named');
 });
