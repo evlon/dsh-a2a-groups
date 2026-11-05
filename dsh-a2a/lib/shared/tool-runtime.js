@@ -1366,7 +1366,13 @@ ormalised, with sessionId.
   }
 
   function reapStaleMembership(error, args, caller) {
-    const code = typeof error?.code === 'string' ? error.code : '';
+    // The business sub-code lands in TWO places depending on the path: a local call throws with `code` set, while a
+    // remote call wraps the JSON-RPC error and puts the sub-code in data (bridge.js rpcErrorOf). Reading only
+    // code therefore meant a remote membership was NEVER marked — the whole point of this function — because
+    // code was the numeric -32004 and the string it wanted sat one field over.
+    const code = typeof error?.code === 'string'
+      ? error.code
+      : (typeof error?.data === 'string' ? error.data : '');
     // `not_member` is the host saying "this credential is not one of mine".
     // `unknown_group` covers a group that was deleted, a cache pointing at a host that no longer has it, and a
     // host briefly serving the wrong data directory.
