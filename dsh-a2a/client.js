@@ -2194,7 +2194,32 @@ window.__ModuleLoader__.load({
 		 * and swallow the slack. Scrolling is the parent's job — one scroll container in the
 		 * chain, at the level that actually knows its height.
 		 */
+// Button geometry, shared by every control in this pane.
+//
+// Declared OUTSIDE membersLayout on purpose: spreading it from inside that object literal reads it before it is
+// initialised, which throws 「Cannot access 'membersLayout' before initialization」 and blanks the whole bundle.
+const buttonBase = {
+	display: "inline-flex",
+	alignItems: "center",
+	gap: "5px",
+	padding: "3px 10px",
+	borderRadius: "4px",
+	background: "transparent",
+	color: "inherit",
+	font: "inherit",
+	fontSize: "11px",
+	lineHeight: "1.5",
+	cursor: "pointer"
+};
+const buttonOutline = { border: "1px solid rgba(128, 128, 128, 0.45)" };
+const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
+
 		const membersLayout = {
+			// Button geometry, in one place. Every control in this pane takes its size from here so that
+			// "button" looks the same wherever it appears; only the semantic differences (dashed vs solid border)
+			// stay per-button.
+			// The border treatment, split out because two buttons need a different one for a reason.
+
 			// The inline role editor: a box that appears under my row, in the roster's own visual language so
 			// it reads as part of that row rather than as a separate screen.
 			editorBox: {
@@ -2334,18 +2359,11 @@ window.__ModuleLoader__.load({
 			},
 			// The pane's single, quiet entry point into the dialog.
 			inviteButton: {
-				display: "inline-flex",
-				alignItems: "center",
-				gap: "5px",
+				...buttonBase,
 				alignSelf: "flex-start",
-				padding: "3px 10px",
-				border: "1px dashed rgba(128, 128, 128, 0.5)",
-				borderRadius: "5px",
-				background: "transparent",
-				color: "inherit",
-				font: "inherit",
-				fontSize: "11px",
-				cursor: "pointer"
+				// Dashed, deliberately: this control CREATES a link rather than acting on existing data, and that
+				// distinction is one of the few border treatments worth keeping.
+				...buttonDashed
 			},
 
 			// The unbound pane: an explainer with one action, not a wall of text. Generous line-height
@@ -2390,15 +2408,9 @@ window.__ModuleLoader__.load({
 				resize: "vertical"
 			},
 			unboundButton: {
+				...buttonBase,
 				alignSelf: "flex-start",
-				padding: "3px 10px",
-				border: "1px solid currentColor",
-				borderRadius: "4px",
-				background: "transparent",
-				color: "inherit",
-				font: "inherit",
-				fontSize: "11px",
-				cursor: "pointer"
+				...buttonOutline
 			},
 			// Dimmed rather than hidden while the box is empty: a button that disappears teaches the
 			// reader nothing about why.
@@ -2660,46 +2672,44 @@ window.__ModuleLoader__.load({
 			},
 			// A small, quiet button. It sits beside the notice it fixes, so the reader does not have to learn
 			// that a cache exists before being allowed to update one.
-			// Small and quiet: the version is reference, not a status. It must be legible when looked for and
-			// invisible when not.
-			// A per-row version chip: reference information that must be legible when looked for.
-			// A one-click rejoin. Sized like a row rather than a form control: it is the primary action on this
-			// pane for anybody who is already a member.
-			rejoinButton: {
-				width: "100%",
-				textAlign: "left",
-				fontSize: "12px",
-				lineHeight: "1.5",
-				padding: "6px 10px",
-				margin: "0 0 4px 0",
-				borderRadius: "6px",
-				border: "1px solid rgba(128, 128, 128, 0.35)",
-				background: "transparent",
-				color: "inherit",
-				cursor: "pointer"
-			},
-			versionChip: {
-				fontSize: "10px",
-				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-				whiteSpace: "nowrap",
-				flex: "0 0 auto"
-			},
+			// Small and quiet: the version is reference, not a status. Legible when looked for, invisible when not.
 			versionTag: {
 				fontSize: "11px",
 				opacity: 0.5,
 				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
 				whiteSpace: "nowrap"
 			},
+			// A per-row version chip: reference information that must be legible when looked for.
+			versionChip: {
+				fontSize: "10px",
+				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+				whiteSpace: "nowrap",
+				flex: "0 0 auto"
+			},
+			// A rejoin is a CONTROL, not an input.
+			//
+			// Full width is right (it names a group, which can be long), but the height, radius and font size come
+			// from buttonBase — otherwise it reads as a text field, which is what the first version looked like.
+			// Sizes to its label, not to the pane.
+			//
+			// Full width was the single strongest signal that this was a text field rather than a control — the
+			// reported symptom was exactly that. A long group name ellipsises instead of stretching the button.
+			rejoinButton: {
+				...buttonBase,
+				maxWidth: "100%",
+				overflow: "hidden",
+				textOverflow: "ellipsis",
+				whiteSpace: "nowrap",
+				textAlign: "left",
+				justifyContent: "flex-start",
+				margin: "0 0 4px 0",
+				...buttonOutline
+			},
 			refreshButton: {
+				...buttonBase,
 				flex: "0 0 auto",
-				fontSize: "11px",
-				lineHeight: "1.4",
 				padding: "2px 8px",
-				borderRadius: "4px",
-				border: "1px solid rgba(128, 128, 128, 0.35)",
-				background: "transparent",
-				color: "inherit",
-				cursor: "pointer"
+				...buttonOutline
 			}
 		};
 		/**
