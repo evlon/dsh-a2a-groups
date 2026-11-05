@@ -489,6 +489,11 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
       }
       const muted = disabled.has(groupId);
       const grade = gradeOf(post, membership, muted);
+      // Process-wide, from config. Not per group: the group store does not publish its settings through
+      // `snapshot()`, so reading a per-group value here would mean inventing a call that does not exist. The
+      // question "should an unaddressed post wake me" is a property of how this person works, not of one channel,
+      // so a single switch is also the more honest place to ask it.
+      const wakeMembers = config.groups.wakeMembers !== false;
       // Only a mention changes the rendering: the reader has to know the post is FOR
       // them, not merely in a group they belong to.
       const addressedMe = grade === 'mention'
@@ -498,10 +503,15 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
           sessionId,
           text: renderPost(membership.groupName ?? groupId, post, addressedMe),
           messageId: post.msgId,
-          // Only a mention or an ordinary notice starts a turn. Ambient posts wait
-          // in the task inbox, so a large group cannot interrupt everybody for
-          // everything that happens in it.
-          mode: grade === 'ambient' ? 'inbox' : 'queue',
+          // A mention always starts a turn; anything else depends on `wakeMembers`.
+          //
+          // The old rule woke on `notice` too, and a "notice" is every post that mentions nobody — which is most of
+          // them. That made an ordinary conversation wake everybody on every line, and each wake can produce another
+          // message: three people talking produced six wakes per round. Off by default now, so an unaddressed post is
+          // seated without waking anyone and read at the next natural moment.
+          //
+          // This is the whole difference between a chat room and a task channel, and it is one condition.
+          mode: grade === 'mention' || (grade === 'notice' && wakeMembers !== false) ? 'queue' : 'inbox',
           source: {
             kind: 'a2a',
             skill: 'group/subscribe',

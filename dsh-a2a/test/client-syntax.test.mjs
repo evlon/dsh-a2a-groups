@@ -684,9 +684,11 @@ test("normalizes the exact shape lib/groups.js snapshot() produces", () => {
 		memberCount: 2,
 		inviteCount: 1,
 		lastSeq: 7,
+		// Presence is carried as timestamps. The bare `online` boolean this fixture used to send is no longer
+		// trusted: it records what was true when the roster was fetched, and a cached roster can be an hour old.
 		members: [
-			{ personId: "m-a", displayName: "阿强", role: "owner", joinedAt: now - 86400000, online: true, endpoint: "http://x/a2a" },
-			{ personId: "m-b", displayName: "小美", role: "member", joinedAt: now - 3600000, online: false },
+			{ personId: "m-a", displayName: "阿强", role: "owner", joinedAt: now - 86400000, lastSeenAt: Date.now() - 1000, endpoint: "http://x/a2a" },
+			{ personId: "m-b", displayName: "小美", role: "member", joinedAt: now - 3600000, lastSeenAt: Date.now() - 600000 },
 		],
 		feedTail: [
 			{ seq: 6, at: now - 120000, msgId: "uuid-6", kind: "message", from: { personId: "m-a", displayName: "阿强" }, text: "证书我换好了" },
@@ -709,7 +711,9 @@ test("normalizes the exact shape lib/groups.js snapshot() produces", () => {
 	assert.equal(group.members[0].id, "m-a", "personId must be picked up");
 	assert.equal(group.members[0].name, "阿强", "displayName must be picked up");
 	assert.equal(group.members[0].role, "owner");
-	assert.equal(group.members[0].online, true);
+	// Derived from the timestamp: seen a second ago, so online. Seen ten minutes ago, so not.
+	assert.equal(group.members[0].online, true, "a recent lastSeenAt means online");
+	assert.equal(group.members[1].online, false, "a stale lastSeenAt means away");
 	assert.equal(group.feed.length, 2, "feedTail must be picked up");
 	assert.equal(group.feed[1].id, "uuid-7", "msgId must be picked up");
 	assert.equal(group.feed[1].senderName, "小美", "from.displayName must be picked up");

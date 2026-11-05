@@ -20,7 +20,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -168,4 +168,39 @@ test('the two other roster fields the panel needs are still cached', async () =>
   } finally {
     env.cleanup();
   }
+});
+
+test('a roster written before timestamp caching is not trusted at all', () => {
+  // The old cache shape: `online` and no `lastSeenAt`. That boolean recorded what was true when the roster was
+  // fetched — here, 84 minutes ago — so honouring it means asserting a stale fact with the confidence of a live
+  // one. This is the exact case that kept showing a live member as offline.
+  const legacy = { personId: 'p-3', displayName: '王五', online: false };
+
+  // presenceOf returns undefined for it, which the panel renders as 状态未知 and offers to refresh.
+  const panel = readFileSync('client.js', 'utf8');
+  const body = panel.slice(panel.indexOf('function presenceOf(raw) {'));
+  const firstReturn = body.slice(0, body.indexOf('\n\t}'));
+  assert.match(firstReturn, /return undefined;/u, 'the legacy shape must yield unknown, not a stored boolean');
+  assert.equal(/return raw[^;]*\.online/u.test(firstReturn), false, 'no path may trust a cached online boolean');
+});
+
+test('the only source of presence is a timestamp', () => {
+  // Anything else is a guess. Pinning this keeps a future convenience fallback from reintroducing the bug.
+  const panel = readFileSync('client.js', 'utf8');
+  const start = panel.indexOf('function presenceOf(raw) {');
+  const body = panel.slice(start, panel.indexOf('\n\t}', start));
+  assert.match(body, /lastSeenAt/u);
+  assert.match(body, /Date\.now\(\) - seen/u);
+});
+
+test('presence renders as three states, so unknown is never shown as away', () => {
+  const panel = readFileSync('client.js', 'utf8');
+  // A two-state ternary is what made "no data" indistinguishable from "offline".
+  assert.match(panel, /card\.online === true \? "在线" : card\.online === false \? "不在线" : "状态未知"/u);
+});
+
+test('the online count ignores members whose state is unknown', () => {
+  const panel = readFileSync('client.js', 'utf8');
+  // Counting `undefined` as offline would be one thing; counting it as online would be worse. Neither happens.
+  assert.match(panel, /member\.online === true/u);
 });

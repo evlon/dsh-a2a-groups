@@ -276,8 +276,14 @@ window.__ModuleLoader__.load({
 		if (typeof seen === "number" && Number.isFinite(seen) && seen > 0) {
 			return Date.now() - seen <= ONLINE_WINDOW_MS;
 		}
-		// No timestamp at all: fall back to a boolean only if one was sent, and never invent one.
-		return raw !== null && typeof raw === "object" && typeof raw.online === "boolean" ? raw.online : undefined;
+		// A roster written before timestamps were cached carries `online` and NOTHING else. That boolean recorded
+		// what was true when the roster was fetched, which may be hours ago, so honouring it means repeating a
+		// stale claim with the same confidence as a live one — exactly the bug this function exists to prevent.
+		//
+		// The old fallback returned it. That was wrong for caches and is why an 84-minute-old roster still showed
+		// a member as offline after the writer had switched to timestamps. "I do not know" is the honest answer,
+		// and it is the one the panel can act on (it offers to refresh) rather than asserting a fact.
+		return undefined;
 	}
 
 		/**
@@ -1957,26 +1963,34 @@ window.__ModuleLoader__.load({
 							height: "6px",
 							borderRadius: "50%",
 							flex: "0 0 auto",
-							background: card.online
-								? "#3fb950"
-								: "rgba(128, 128, 128, 0.5)"
-						},
-						"aria-hidden": "true"
-					}),
-					h(
-						"span",
-						{
-							style: {
-								fontSize: "11px",
-								opacity: card.online ? 0.8 : 0.55,
-								color: card.online ? "#3fb950" : "inherit"
+								// Three states, not two. `undefined` means we hold no timestamp for this member — the roster
+								// predates timestamp caching, or the host does not track presence. Rendering that as
+								// "不在线" asserts something we do not know, which is how a 84-minute-old cache kept
+								// claiming a live member was away.
+								background: card.online === true
+									? "#3fb950"
+									: card.online === false
+										? "rgba(128, 128, 128, 0.5)"
+										: "rgba(128, 128, 128, 0.28)",
 							},
-							title: card.online
-								? "对方正开着 DSH，发消息会立即送到"
-								: "对方当前不在线，消息会存着等他上线"
-						},
-						card.online ? "在线" : "不在线"
-					),
+							"aria-hidden": "true"
+						}),
+						h(
+							"span",
+							{
+								style: {
+									fontSize: "11px",
+									opacity: card.online === undefined ? 0.45 : 0.8,
+									color: card.online === true ? "#3fb950" : "inherit"
+								},
+								title: card.online === true
+									? "对方正开着 DSH，发消息会立即送到"
+									: card.online === false
+										? "对方当前不在线，消息会存着等他上线"
+										: "还没有这个人的在线信息。在会话里查一次群成员即可刷新。"
+							},
+							card.online === true ? "在线" : card.online === false ? "不在线" : "状态未知"
+						),
 					card.groups.length === 0
 						? null
 						: h(
@@ -3117,11 +3131,18 @@ window.__ModuleLoader__.load({
 					given.lead === undefined
 						? h("span", {
 							style: Object.assign({}, membersLayout.dot, {
+								// Three states again: a member whose timestamp we never had must not be labelled "offline".
 								background: member.online === true
 									? "#3fb950"
-									: "rgba(128, 128, 128, 0.5)"
+									: member.online === false
+										? "rgba(128, 128, 128, 0.5)"
+										: "rgba(128, 128, 128, 0.28)"
 							}),
-							title: member.online === true ? "在线" : "离线或未知"
+							title: member.online === true
+								? "在线"
+								: member.online === false
+									? "不在线"
+									: "状态未知（还没有这个人的在线信息）"
 						})
 						: h("span", { style: membersLayout.personLead, "aria-hidden": "true" }, given.lead),
 					rowBody(member.name, {

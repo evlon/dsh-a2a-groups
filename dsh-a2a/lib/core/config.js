@@ -72,7 +72,15 @@ export const DEFAULT_CONFIG = Object.freeze({
     maxPostChars: 32000,
     maxPostsPerMinute: 20,
     retentionDays: 30,
-    wakeMembers: true,
+    // Whether an ordinary group post (one that mentions nobody) wakes the members.
+    //
+    // DEFAULT OFF, deliberately. With it on, every post wakes everybody not mentioned, so three people talking
+    // produced six wakes per round and each wake could produce another message — the "group storm". Off means only a
+    // mention or an @all starts a turn; an unaddressed post is seated quietly and read at the next natural moment.
+    //
+    // Nothing is lost: the post is still delivered, still in the feed, and still counted by `a2a_pending`. A group
+    // that wants ambient chatter can turn this back on.
+    wakeMembers: false,
     publicUrl: '',
     agentName: '',
     gatewayBase: '',
