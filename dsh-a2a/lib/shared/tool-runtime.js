@@ -1059,6 +1059,9 @@ function requireSession(sessionId, tool) {
             displayName: member.displayName,
             role: member.role,
             lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+            // Which build this member reported. The panel shows it so a mixed group is visible; without it a
+            // version skew looks like the group misbehaving.
+            clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
             roleAbout: member.roleAbout,
             tags: Array.isArray(member.tags) ? member.tags : undefined,
           }))

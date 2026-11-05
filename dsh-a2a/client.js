@@ -317,6 +317,8 @@ window.__ModuleLoader__.load({
 				}),
 				// Derived from the timestamp, not read from the cache: see presenceOf.
 				online: presenceOf(raw),
+				// Which build this member reported. Empty means unknown, which must not be rendered as agreement.
+				clientVersion: pickString(firstDefined(raw, ["clientVersion", "version"])),
 				self: raw.self === true || raw.isSelf === true
 			};
 		}
@@ -528,6 +530,8 @@ window.__ModuleLoader__.load({
 				return {
 					groups: groups,
 					cards: readCards(raw),
+					// This instance build, sent by the Host because the page cannot read package.json.
+					selfVersion: raw !== null && typeof raw === "object" && !Array.isArray(raw) ? pickString(raw.selfVersion) : "",
 					updatedAt: updatedAt,
 					unreadTotal: unreadTotal,
 					ok: true
@@ -2650,6 +2654,14 @@ window.__ModuleLoader__.load({
 			},
 			// A small, quiet button. It sits beside the notice it fixes, so the reader does not have to learn
 			// that a cache exists before being allowed to update one.
+			// Small and quiet: the version is reference, not a status. It must be legible when looked for and
+			// invisible when not.
+			versionTag: {
+				fontSize: "11px",
+				opacity: 0.5,
+				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+				whiteSpace: "nowrap"
+			},
 			refreshButton: {
 				flex: "0 0 auto",
 				fontSize: "11px",
@@ -3079,6 +3091,12 @@ window.__ModuleLoader__.load({
 			});
 			const group = candidates[0];
 
+			// My build, and who is on a different one. A version belongs to a process, so this compares what each
+			// member reported against what this instance is running.
+			const selfVersion = snapshot !== undefined && snapshot !== null && typeof snapshot.selfVersion === "string"
+				? snapshot.selfVersion
+				: "";
+
 			// Refresh automatically when the cache is already known to be stale, and only then.
 			//
 			// Refreshing on every open would spend another machine's network on data nobody asked for; refreshing
@@ -3122,6 +3140,19 @@ window.__ModuleLoader__.load({
 
 			// The snapshot may be normalized (`members`) or raw (`roster`); ask once, here.
 			const members = rosterOf(group);
+
+			// Who reports a different build than mine.
+			//
+			// Placed here, after `members`, because reading it earlier threw a ReferenceError that blanked the
+			// whole pane — the failure mode of a hook used before its declaration, which no test caught because
+			// the panel is exercised through its export rather than by mounting it.
+			const versionMismatch = (function () {
+				if (selfVersion === "") return [];
+				return members.filter(function (member) {
+					// Unknown is not a mismatch: we cannot claim somebody differs from us on no evidence.
+					return member.clientVersion !== "" && member.clientVersion !== selfVersion;
+				});
+			})();
 			const self = pickSelf(group, snapshot.cards);
 			const split = splitRoster(members, self);
 			// A roster that arrived without an `isSelf` marker still gets a 「我」 row: the
@@ -3384,6 +3415,18 @@ window.__ModuleLoader__.load({
 						icon("users", 12),
 						"群成员"
 					),
+					// My build, always. Every debugging session this month opened by establishing which version was
+					// running, twice by comparing file timestamps by hand — a visible version makes that a glance.
+					selfVersion === ""
+						? null
+						: h(
+							"span",
+							{
+								style: membersLayout.versionTag,
+								title: "你运行的这个实例的版本",
+							},
+							"v" + selfVersion
+						),
 					h("span", { style: membersLayout.headerMeta }, countLine),
 					// Always present, never merely when stale. A refresh control that appears only after the panel has
 					// already gone stale gives the reader no way to check a group they suspect is out of date.
@@ -3408,6 +3451,23 @@ window.__ModuleLoader__.load({
 						),
 				),
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
+				// A skew is a GROUP-level fact, so it reads as one line rather than as a badge on each row.
+				// It is also the single most useful thing on this panel when something behaves inconsistently:
+				// three people on three versions will disagree about behaviour and blame the group.
+				versionMismatch.length === 0
+					? null
+					: h(
+							"p",
+							{
+								style: Object.assign({}, membersLayout.hint, { color: "#d29922", opacity: 0.95 }),
+								title: "版本不同的人看到的行为可能不一样。让所有人升级到同一版本后再对比现象。",
+							},
+							"⚠ 有 " + String(versionMismatch.length) + " 位成员的版本与你不同（"
+								+ versionMismatch.map(function (member) {
+									return member.name + " v" + member.clientVersion;
+								}).join("、")
+								+ "）。行为差异可能来自版本，不是群的问题。"
+						),
 				// Data here is a CACHE. When the last attempt to reach the host was refused, say so: a panel that
 				// draws a roster without mentioning it cannot be trusted, and "I am in this group" is the one
 				// thing a person will conclude from it.

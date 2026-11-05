@@ -1353,6 +1353,25 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const member = resolveMember(group, input.member);
     const at = now();
     member.lastSeenAt = at;
+    // Which build this member is running.
+    //
+    // Carried on `touch` rather than on every call: the heartbeat runs every fifty seconds, so the value refreshes
+    // within a minute of an upgrade and costs nothing extra. Recorded rather than enforced — a group running three
+    // versions still works, and refusing an old member would strand them mid-upgrade. What matters is that the skew
+    // is VISIBLE, because a behaviour difference caused by it otherwise reads as a bug in the group.
+    const version = typeof input.version === 'string' ? input.version.trim() : '';
+    if (version !== '' && member.clientVersion !== version) {
+      member.clientVersion = version.slice(0, 32);
+      dirty = true;
+      // Written through immediately, unlike the timestamp.
+      //
+      // `lastSeenAt` changes every fifty seconds and is only worth flushing when something else does; a version
+      // changes once per upgrade and is exactly what somebody wants to read AFTER a restart. Leaving it in memory
+      // meant the one moment the version is most useful — a process that was just restarted — reported nothing.
+      persist();
+    }
+    // The timestamp still only marks the state dirty: it changes every fifty seconds and is flushed with
+    // whatever else does, which keeps the heartbeat off the disk on every tick.
     dirty = true;
     return at;
   }
@@ -2716,6 +2735,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       personId: member.personId,
       displayName: member.displayName,
       role: member.role,
+      // Which build this member reported on its last heartbeat. Absent for anybody who has not been seen since
+      // the field existed — the panel must show that as unknown, not as a match.
+      ...(typeof member.clientVersion === 'string' ? { clientVersion: member.clientVersion } : {}),
       joinedAt: member.joinedAt,
       joinedAtIso: new Date(member.joinedAt).toISOString(),
       lastSeenAt: member.lastSeenAt,

@@ -184,7 +184,9 @@ test('touch is cheap: it refreshes presence and returns', () => {
   const skills = readFileSync('lib/core/skills-group.js', 'utf8');
   const at = skills.indexOf("id: 'group/touch'");
   const body = skills.slice(at, skills.indexOf("id: 'group/away'", at));
-  // It runs every fifty seconds per group on every member's machine.
-  assert.match(body, /store\.touch\(\{ groupId, member \}\)/u);
+  // It runs every fifty seconds per group on every member's machine, so it must stay a single store call — but the
+  // argument list legitimately grows (it now also reports the caller's version), so match the call rather than its
+  // exact spelling. Pinning the literal was what broke here when the version field was added.
+  assert.match(body, /store\.touch\(\{ groupId, member/u);
   assert.equal(/sendPersonMessage|appendSystem/u.test(body), false, 'a heartbeat must not write to the feed');
 });

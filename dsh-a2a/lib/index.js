@@ -496,6 +496,9 @@ const PANEL_FEED_TAIL = 8;
         info(ctx, `a2a: could not list discoverable groups (${describe(error)})`);
       }
       return {
+        // This instance's own build, so the panel can compare it against what each member reports. The panel
+        // cannot read package.json itself — it is a page, not a process.
+        selfVersion: pluginVersion(),
         updatedAt: clock(),
         groups: rows,
         // Colleague cards travel with the group list because the panel renders both from one
@@ -626,6 +629,9 @@ const PANEL_FEED_TAIL = 8;
                   displayName: member.displayName,
                   role: member.role,
                   lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+                  // Which build this member reported on its last heartbeat. Carried so the panel can show a mixed
+                  // group instead of letting a version skew look like a bug in the group.
+                  clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
                   roleAbout: member.roleAbout,
                   tags: Array.isArray(member.tags) ? member.tags : undefined,
                 }))
@@ -737,7 +743,13 @@ const PANEL_FEED_TAIL = 8;
           {
             skill: 'group/touch',
             text: 'touch',
-            data: { groupId: record.groupId, personId: record.personId, personKey: record.personKey },
+            // The only process that knows which version is running is the one running it, so it reports.
+            data: {
+              groupId: record.groupId,
+              personId: record.personId,
+              personKey: record.personKey,
+              version: pluginVersion(),
+            },
             timeoutMs: settings.client.timeoutMs,
           },
         )

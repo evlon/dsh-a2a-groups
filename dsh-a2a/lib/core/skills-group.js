@@ -748,6 +748,10 @@ return {
                 // normal case for a host with no gateway base configured; a caller must read it
                 // as "no address", never as "offline".
                 endpoint: typeof entry.endpoint === 'string' ? entry.endpoint : '',
+                // Which build this member reported. Absent means it has not heartbeated since the field existed — a
+                // reader must treat that as unknown, never as "same as me". This is what lets a group notice that three
+                // people are running three versions before blaming the group for behaving differently.
+                clientVersion: typeof entry.clientVersion === 'string' ? entry.clientVersion : '',
 				// The timestamp as well as the boolean. `online` is this host's answer about NOW, and a
 				// caller caches the roster — so sending only the boolean hands out an inference that expires
 				// the moment it is written. `lastSeenAt` is a fact, and a reader that holds it can answer
@@ -1157,7 +1161,9 @@ return {
         try {
           // Deliberately thin: this runs every fifty seconds per group, so anything expensive here would be a tax
           // on every member's machine. `touch` already refreshes lastSeenAt through resolveMember.
-          const at = store.touch({ groupId, member });
+          // The caller reports its own version: the only process that knows which build is running is the one
+          // running it. A host that guessed would be reporting its own version for somebody else.
+          const at = store.touch({ groupId, member, version: payload(input).version });
           return { text: 'present', meta: { groupId, at } };
         } catch (error) {
           refuse(error);
