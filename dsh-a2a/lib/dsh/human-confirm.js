@@ -33,6 +33,35 @@ export const TRIGGERS = Object.freeze(['mention', 'always', 'never']);
 export const TIMEOUTS = Object.freeze(['never', 'deny', 'allow']);
 
 /**
+ * Record what a confirmation actually did, for diagnosis.
+ *
+ * A confirmation that answers itself is the one failure this feature cannot tolerate: if it silently approves when no
+ * client is attached, 「ask me first」 becomes 「do whatever you like」 while the person believes they are protected.
+ * Writing the outcome down is what lets that claim be checked instead of assumed.
+ *
+ * Best-effort: diagnostics must never be the reason a refusal fails to happen.
+ *
+ * @param {object} detail - what to record.
+ * @returns {void}
+ */
+function writeAnswerTrace(detail) {
+  void (async () => {
+    try {
+      const { writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      writeFileSync(
+        join(tmpdir(), 'a2a-human-confirm-answer.json'),
+        JSON.stringify({ at: new Date().toISOString(), ...detail }, null, 2),
+        'utf8',
+      );
+    } catch {
+      // Ignored on purpose.
+    }
+  })();
+}
+
+/**
  * Decide whether this post should stop and ask.
  *
  * Returns a VERDICT rather than a boolean so the caller can say why — "no question" and "asked but the channel is
@@ -143,13 +172,44 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
     // when the window closes. Supplying our own AbortController made every call fail immediately with `ASK_ABORTED`
     // (measured: code ASK_ABORTED, 「ask_user_question was aborted before the user answered」, from Proxy.askTimed) —
     // the signal was being read as "the caller has already given up", so no dialog ever appeared.
+    // A bounded wait: askTimed for the dialog, plus OUR OWN deadline.
+    //
+    // The seam's countdown lives in the CLIENT (「the Client rejects with ASK_TIMED_OUT when its countdown ends」). When
+    // no client is attached to that Session — the normal case for a turn a group message woke while nobody is watching
+    // — nothing ever rejects, and `askTimed` waits forever. Measured: a request configured for 300 seconds was still
+    // pending after 5 minutes, which means `onTimeout` was decorative and the turn would hang indefinitely.
+    //
+    // So the deadline is enforced here, in the Host, where it cannot be skipped by a missing UI.
     if (typeof seam.askTimed === 'function') {
-      const result = await seam.askTimed(
+      const pending = seam.askTimed(
         { ...question, agent },
         // The call id keys the client card. Any stable string works; the seam only needs it to match the answer back.
         `a2a-confirm-${Date.now()}`,
         timeoutMs,
       );
+      // Whichever settles first decides: the human, or the deadline.
+      let timer;
+      const deadline = new Promise((resolve) => {
+        timer = setTimeout(() => resolve({ __deadline: true }), timeoutMs);
+      });
+      let result;
+      try {
+        result = await Promise.race([pending, deadline]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (result !== null && typeof result === 'object' && result.__deadline === true) {
+        // The question is left pending on the seam's side; it is harmless there and the human may still see it later.
+        writeAnswerTrace({ pending: 'deadline', onTimeout, timeoutMs });
+        return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
+      }
+      writeAnswerTrace({
+        pending: result !== null && typeof result === 'object' ? result.pending === true : null,
+        keys: result !== null && typeof result === 'object' ? Object.keys(result) : null,
+        result: JSON.stringify(result ?? null).slice(0, 600),
+        onTimeout,
+        timeoutMs,
+      });
       if (result !== null && typeof result === 'object' && result.pending === true) {
         return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
       }

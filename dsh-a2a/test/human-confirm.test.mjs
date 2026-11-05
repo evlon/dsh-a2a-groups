@@ -197,3 +197,25 @@ test('an approval is read from `selected`, which is the shape the seam returns',
   const denied = decideFromAnswer({ outcome: 'answered', answer: { answers: [{ id: 'q', selected: ['拒绝'] }] } });
   assert.equal(denied.proceed, false);
 });
+
+test('a Host-side deadline fires even when askTimed never settles', async () => {
+  // Measured: the seam's countdown lives in the CLIENT. A turn woken by a group message has no client attached, so
+  // nothing ever rejects and a request configured for 300 seconds was still pending after more than 5 minutes.
+  // That made `onTimeout` decorative and the turn would hang forever. The Host must own the deadline.
+  const seam = {
+    askTimed: () => new Promise(() => {}),  // never settles, like a request nobody will answer
+  };
+  const started = Date.now();
+  const result = await askHuman({ seam, agent: {}, question: { questions: [] }, onTimeout: 'deny', timeoutMs: 60 });
+  const elapsed = Date.now() - started;
+  assert.equal(result.outcome, 'timed-out-deny');
+  assert.ok(elapsed < 2000, `the Host deadline must fire, took ${elapsed}ms`);
+  assert.equal(decideFromAnswer(result).proceed, false);
+});
+
+test('the Host deadline honours the allow policy too', async () => {
+  const seam = { askTimed: () => new Promise(() => {}) };
+  const result = await askHuman({ seam, agent: {}, question: { questions: [] }, onTimeout: 'allow', timeoutMs: 60 });
+  assert.equal(result.outcome, 'timed-out-allow');
+  assert.equal(decideFromAnswer(result).proceed, true);
+});
