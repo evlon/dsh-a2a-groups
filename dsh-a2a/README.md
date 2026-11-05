@@ -229,6 +229,7 @@ MCP 配置（stdio）：
 | [DESIGN.md](docs/DESIGN.md) | 设计决策与依据 |
 | [CONTRACT.md](docs/CONTRACT.md) | 模块职责、协议、目录边界 |
 | [RUNBOOK.md](docs/RUNBOOK.md) | **运行手册**：新同事照着做就能跑起来 |
+| [SANDBOX.md](docs/SANDBOX.md) | **测试隔离**：为什么群实例不该落在默认工作区 |
 | [DEPLOY.md](docs/DEPLOY.md) | 生产部署 |
 | [MCP.md](docs/MCP.md) | MCP 接入 |
 | [BACKLOG.md](docs/BACKLOG.md) | 需求池：想过但暂不做的事 |
