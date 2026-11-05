@@ -508,6 +508,28 @@ return {
               personId: joined.member.personId,
               displayName: joined.member.displayName,
             });
+
+          // On a rejoin, retire the join notices that are still sitting unread.
+          //
+          // The welcome seen after every rejoin was NOT a new one: it is a record from the first join that was never
+          // acked, so it re-surfaces each time the inbox is read — 「欢迎加入「发票与对账平台」」 with `deliveredAt`
+          // already set from hours earlier. Marking them delivered is also simply correct: this person is in the
+          // group, so a notice telling them to join has no remaining purpose.
+          let retiredNotices = 0;
+          if (joined.rejoined === true && typeof store.listPersonMessages === 'function') {
+            try {
+              const pending = store.listPersonMessages({ personId: joined.member.personId })
+                .filter((message) => message.deliveredAt === undefined)
+                .filter((message) => message.kind === DM_KIND_JOIN_NOTICE || message.kind === DM_KIND_WELCOME);
+              const ids = pending.map((message) => message.dmId).filter((id) => typeof id === 'string');
+              if (ids.length > 0) {
+                retiredNotices = store.ackPersonMessages({ personId: joined.member.personId, dmIds: ids }).acked;
+              }
+            } catch {
+              // Best effort: an inbox that cannot be cleaned must not fail the join.
+            }
+          }
+
           return {
             text: `Joined "${joined.group.name}".\n\n`
               + `groupId  : ${groupId}\n`
@@ -531,6 +553,13 @@ return {
               members: joined.group.memberCount,
               lastSeq: joined.group.lastSeq ?? 0,
               feedTail: joined.feedTail,
+              // Whether this was a takeover of an existing identity rather than a new arrival.
+              //
+              // Without it the caller cannot tell the two apart, which is how a rejoin kept looking like a first join
+              // — and why the welcome suppression had to be inferred from side effects instead of read from the reply.
+              rejoined: joined.rejoined === true,
+              // How many stale join notices were retired by this rejoin. Zero on a first join.
+              retiredNotices,
               // Surfaced so the caller can tell "you are reachable" from "you are not", without
               // having to read the group back. Empty means the host is not configured with a
               // gateway base and agent name; it does NOT mean the join failed.

@@ -1214,13 +1214,27 @@ function requireSession(sessionId, tool) {
   },
   'a2a_group_directory': async function a2a_group_directory(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_directory');
-    // Default to whatever host this instance already points at: the common case
-    // is "what is on OUR host", and requiring an address for that would be noise.
-    const reference = args.agent
-      ?? (config.groups.agentName !== '' && config.groups.gatewayBase !== ''
-        ? joinUrl(config.groups.gatewayBase, config.groups.agentName)
-        : undefined);
-    const target = resolveTarget(registry, config, requireText(reference, 'agent or groups.gatewayBase+agentName'));
+    // WHICH host to ask.
+    //
+    // The old default was `gatewayBase + agentName` — this INSTANCE's own agent name. That is the wrong object: a
+    // member instance hosts no groups, so asking it for a group directory returns 404 `unknown A2A agent` (or an empty
+    // list) while the groups themselves are fine. The directory lives on the HOST that hosts the groups, which is the
+    // same host every group call already reaches.
+    //
+    // So: an explicit `agent` wins; otherwise ask the host this Session's group membership already points at; only if
+    // there is no membership at all fall back to the configured agent (a host-configured instance is its own host).
+    const fromMembership = (() => {
+      if (identities === undefined || identities === null || typeof identities.list !== 'function') return undefined;
+      const record = identities.list({ sessionId })[0];
+      return record !== undefined && typeof record.baseUrl === 'string' && record.baseUrl !== ''
+        ? record.baseUrl
+        : undefined;
+    })();
+    const configured = config.groups.agentName !== '' && config.groups.gatewayBase !== ''
+      ? joinUrl(config.groups.gatewayBase, config.groups.agentName)
+      : undefined;
+    const reference = args.agent ?? fromMembership ?? configured;
+    const target = resolveTarget(registry, config, requireText(reference, 'agent or a group membership'));
     const result = await bridge.send(target, {
       skill: 'group/directory',
       text: 'list groups',
