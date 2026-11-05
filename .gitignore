@@ -25,3 +25,4 @@ dsh-session-bus/
 # Local verification reports are written to .shots/ (already ignored) — but keep this
 # pattern in case one is ever copied out.
 *-REPORT.md
+.npmrc-publish
