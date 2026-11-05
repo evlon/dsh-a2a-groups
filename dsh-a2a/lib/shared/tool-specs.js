@@ -473,8 +473,10 @@ export const TOOL_SPECS = Object.freeze([
       'Post ONE message to the group: a single entry every member can read, not a separate delivery to each person. ' +
       'Who gets WOKEN depends on `mentions` — the listed members start a turn, everybody else sees an unread count ' +
       'and reads it when they next look. Omit `mentions` for ordinary progress; add it when somebody must act. ' +
-      'Say "posted to the group", never "sent to X and Y", because that is what happened. ' +
-      'When you are answering somebody, pass `replyTo` with the seq you are answering — that wakes them. ' +
+      'Say "posted to the group", never "sent to X and Y", because that happened. ' +
+      'When you are answering somebody, pass `replyTo` with the seq you are answering — that wakes them, and the '
+      + 'reply reports `rootSeq`, the message the whole exchange started from. `replyTo` is who you answered; '
+      + '`rootSeq` is which conversation you are in. ' +
       'Read a2a_group_read first when you need to know what was already said.',
     parameters: {
       type: 'object',
@@ -490,9 +492,9 @@ export const TOOL_SPECS = Object.freeze([
         replyTo: {
           type: 'integer',
           description:
-            'The seq this message answers. Use it EVERY time you are replying to somebody: the author of that '
+            'The seq this message answers. Pass it WHENEVER you choose to answer somebody: the author of that '
             + 'message is woken automatically, and the reply records the thread. Without it a reply is just another '
-            + 'unaddressed post — the person who asked you waits for a message nobody sent them to. '
+            + 'unaddressed post — the person who asked waits for a message nobody sent them to. '
             + 'Answering an @all broadcast needs no mentions at all: the reply goes to whoever broadcast it, NOT to '
             + 'everybody again. Do not reach for @all out of habit when answering — that re-wakes the whole group for '
             + 'one answer. Pass @all explicitly only when the answer really does concern everyone (the plan changed, '

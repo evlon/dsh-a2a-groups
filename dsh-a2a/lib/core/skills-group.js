@@ -637,6 +637,9 @@ return {
               // Which message this answered. A caller reporting "replied to #158" needs it back; without it the only
               // proof of the thread is a re-read of the feed.
               replyTo: posted.replyTo,
+              // The conversation this belongs to. Distinct from `replyTo` in exactly the case that matters: a reply to
+              // a reply answers one message but belongs to the same thread, and only the root says so.
+              rootSeq: posted.rootSeq,
             },
           };
         } catch (error) {
@@ -687,6 +690,10 @@ return {
                 // Whenever `publicEntry` grows a field, this list must grow with it.
                 mentions: Array.isArray(entry.mentions) ? [...entry.mentions] : undefined,
                 replyTo: Number.isInteger(entry.replyTo) ? entry.replyTo : undefined,
+                // The thread this entry belongs to. `replyTo` names the message answered; this names the conversation,
+                // which is what a late reader needs to see that several replies are one exchange. The parity test caught
+                // this omission on the first run — the sixth repetition of exactly this bug.
+                rootSeq: Number.isInteger(entry.rootSeq) ? entry.rootSeq : undefined,
                 kind: entry.kind,
                 text: entry.text,
               })),

@@ -20,7 +20,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -134,4 +134,34 @@ test('@all still reaches everybody, because it is meant to', () => {
 
   // The escape hatch stays intact: an announcement still interrupts, which is why it must be used deliberately.
   assert.equal(woken.length, 3);
+});
+
+/**
+ * REGRESSION: a delivery told the Session to answer, which turned a broadcast into a storm.
+ *
+ * ROOT CAUSE: `renderPost` ended every delivery with 「Answer with a2a_group_post to the same group」, and the
+ * `replyTo` parameter said a reply wakes its author. Together they closed a loop: a mention arrives, the Session is
+ * told to answer, the answer wakes the author, who is told to answer. A four-line test broadcast in a three-person
+ * group produced four replies and one person answering twice.
+ *
+ * In a real group the receiver decides whether and when to answer; the sender cannot compel it. With nine members the
+ * arithmetic stops being an annoyance.
+ */
+test('a delivered post does not instruct the reader to answer', () => {
+  // Strip comments: the historical wording is quoted in one on purpose, to explain why it was removed.
+  const inbox = readFileSync('lib/dsh/inbox.js', 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//gu, '')
+    .split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
+  // The exact phrasing that caused the loop must never come back.
+  assert.doesNotMatch(inbox, /Answer with a2a_group_post/u, 'the delivery must not demand a reply');
+  // The channel fact that motivated the old wording is still worth stating, so it is kept as a statement.
+  assert.match(inbox, /only a2a_group_post reaches the group/u);
+  // And the decision is explicitly the reader's.
+  assert.match(inbox, /Whether and when to answer is yours to decide/u);
+});
+
+test('the replyTo parameter invites a reply without demanding one', () => {
+  const specs = readFileSync('lib/shared/tool-specs.js', 'utf8');
+  assert.match(specs, /Pass it WHENEVER you choose to answer/u);
+  assert.doesNotMatch(specs, /Use it EVERY time you are replying/u, 'that phrasing reads as a standing order');
 });

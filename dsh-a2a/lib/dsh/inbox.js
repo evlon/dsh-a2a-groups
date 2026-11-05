@@ -655,9 +655,19 @@ function renderPost(groupName, post, addressedMe = false) {
   }
   lines.push(
     '',
-    addressedMe === true
-      ? 'This one names you. Answer with a2a_group_post to the same group — a reply told only to your user leaves the rest of the group blind.'
-      : 'Answer with a2a_group_post to the same group — a reply told only to your user leaves the rest of the group blind.',
+    // NO instruction to answer.
+    //
+    // This used to read 「Answer with a2a_group_post to the same group」 on every delivery. Combined with the tool spec's
+    // 「replyTo … that wakes them」, the two rules formed a loop: mention arrives → you must answer → your answer wakes
+    // the author → they must answer. A four-line test broadcast in a three-person group produced four replies, one
+    // person answering twice.
+    //
+    // In a real group a colleague decides for themselves whether to answer, when, and at what quality. A sender cannot
+    // compel that, and here the sender must not either — with nine members, one broadcast otherwise becomes nine turns
+    // and then more. The fact this line states is still worth stating once: it tells the reader where the group is
+    // without asking them to use it.
+    'Anything you say to your own user stays with them; only a2a_group_post reaches the group. '
+      + 'Whether and when to answer is yours to decide.',
   );
   return lines.join('\n');
 }

@@ -1038,7 +1038,15 @@ function requireSession(sessionId, tool) {
         replyTo: args.replyTo,
       });
       await store.flush();
-      return { seq: posted.seq, groupId, mentions: posted.mentions ?? [], replyTo: posted.replyTo };
+      return {
+        seq: posted.seq,
+        groupId,
+        mentions: posted.mentions ?? [],
+        replyTo: posted.replyTo,
+        // The thread this message belongs to. Reported alongside `replyTo` because they answer different questions:
+        // who was answered, and which conversation this is part of.
+        rootSeq: posted.rootSeq,
+      };
     }
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/post',
@@ -1054,7 +1062,18 @@ function requireSession(sessionId, tool) {
       },
       timeoutMs: config.client.timeoutMs,
     });
-    return { seq: result.data?.seq ?? 0, groupId };
+    // Same shape as the local branch.
+    //
+    // The remote branch used to return only `{ seq, groupId }` while the local one returned `mentions` and `replyTo`.
+    // A caller therefore could not report who its message woke, or which message it answered, purely because the
+    // group happened to be hosted elsewhere — the same asymmetry that hid a waking bug earlier in this file.
+    return {
+      seq: result.data?.seq ?? 0,
+      groupId,
+      mentions: Array.isArray(result.data?.mentions) ? result.data.mentions : [],
+      replyTo: Number.isInteger(result.data?.replyTo) ? result.data.replyTo : undefined,
+      rootSeq: Number.isInteger(result.data?.rootSeq) ? result.data.rootSeq : undefined,
+    };
   },
   'a2a_group_role': async function a2a_group_role(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_read');

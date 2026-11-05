@@ -1018,6 +1018,17 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // Kept so a reader can see the thread without scanning for adjacency, and so a later "is this closed?"
       // check has something to join on.
       ...(replyToEntry === undefined ? {} : { replyTo: replyToEntry.seq }),
+      // The ROOT of the thread this message belongs to.
+      //
+      // `replyTo` says which message is being answered; that is a different question from "which conversation is this
+      // part of". Answering #180 answers 李四, but #180 may itself answer #179 — and with only `replyTo` the chain
+      // points one step back, so somebody joining late cannot tell that #181 and #182 belong to the same original ask.
+      //
+      // Both facts are kept because they serve different readers. Inheriting the answered message's root is what
+      // makes a thread of any depth resolve to one number; a message that answers nothing is a root itself.
+      ...(replyToEntry === undefined
+        ? {}
+        : { rootSeq: Number.isInteger(replyToEntry.rootSeq) ? replyToEntry.rootSeq : replyToEntry.seq }),
     };
     group.feed.push(entry);
     member.lastSeenAt = at;
@@ -1032,6 +1043,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       atIso: new Date(at).toISOString(),
       mentions,
       replyTo: replyToEntry === undefined ? undefined : replyToEntry.seq,
+      // Reported so a caller can say "answered #179" rather than only "answered #180" — the root is what a person can
+      // look up to see the whole exchange.
+      rootSeq: entry.rootSeq,
     };
   }
 
@@ -2800,6 +2814,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // and then dropped by a whitelist mapper on the way out, so the value sits in the file and is invisible to
     // every reader. Add the field here whenever one is added to the entry above.
     if (Number.isInteger(entry.replyTo)) view.replyTo = entry.replyTo;
+    // The thread this message belongs to, however deep the reply chain goes. Different question from `replyTo`:
+    // that one names the message answered, this one names the conversation. Dropping it here would leave the field in
+    // the file and invisible to every reader — which is the exact failure the comment above keeps recording.
+    if (Number.isInteger(entry.rootSeq)) view.rootSeq = entry.rootSeq;
     return view;
   }
 

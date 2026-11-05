@@ -260,3 +260,48 @@ test('the reason is discoverable from the tool description', () => {
   const spec = TOOL_SPECS.find((entry) => entry.name === 'a2a_group_post');
   assert.match(spec.parameters.properties.replyTo.description, /broadcast|@all|everybody|everyone/iu);
 });
+
+/**
+ * REGRESSION: a reply recorded who it answered, but not which conversation it belonged to.
+ *
+ * ROOT CAUSE: only `replyTo` was stored, so the chain pointed exactly one step back. Answering #180 answers 李四,
+ * but #180 may itself answer #179 — and a late reader could not tell that #181 and #182 were one exchange rather
+ * than two unrelated replies.
+ *
+ * The two facts answer different questions and both are needed: `replyTo` is for the person being answered,
+ * `rootSeq` is for anybody reading the thread.
+ */
+test('a chain of replies resolves to one thread root', () => {
+  const home = mkdtempSync(join(tmpdir(), 'dsh-a2a-thread-root-'));
+  try {
+    const logger = { info() {}, warn() {}, debug() {} };
+    const config = normalizeConfig({ groups: { gatewayBase: 'http://g/a2a', agentName: 'agent-test' } });
+    const store = createGroupStore({ home, logger, clock: () => Date.now(), config });
+
+    const created = store.create({ name: '发票重构', ownerDisplayName: '张三' });
+    const groupId = created.group.groupId;
+    const invite = store.invite({ groupId, ownerKey: created.ownerKey });
+    const joined = store.join({ groupId, token: invite.token, displayName: '李四' });
+    const owner = { personId: created.group.owner.personId, personKey: created.ownerKey };
+    const lisi = { personId: joined.member.personId, personKey: joined.personKey };
+
+    const ask = store.post({ groupId, member: owner, text: '任务：对齐对账口径', mentions: ['@all'] });
+    const answer = store.post({ groupId, member: lisi, text: '收到', replyTo: ask.seq });
+    const followUp = store.post({ groupId, member: owner, text: '补充一句', replyTo: answer.seq });
+
+    // A root has no root of its own.
+    assert.equal(ask.rootSeq, undefined);
+    // One step down, the answered message IS the root.
+    assert.equal(answer.rootSeq, ask.seq);
+    // Two steps down, `replyTo` moves but the root does not — this is the whole point.
+    assert.equal(followUp.replyTo, answer.seq);
+    assert.equal(followUp.rootSeq, ask.seq);
+
+    // And it survives the whitelist mapper, or the field sits in the file and is invisible to every reader.
+    const feed = store.read({ groupId, member: owner, sinceSeq: 0 });
+    const deep = feed.entries.find((entry) => entry.seq === followUp.seq);
+    assert.equal(deep.rootSeq, ask.seq);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
