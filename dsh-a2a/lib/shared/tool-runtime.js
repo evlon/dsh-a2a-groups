@@ -902,7 +902,27 @@ function requireSession(sessionId, tool) {
     // link that omitted it.
     // The link splits the address in two (`gw` + `agent`) because they are two facts; the ledger needs
     // one callable string, so they are joined here rather than at every use site.
+    // Where to reach the host. In priority order:
+    //
+    //   1. the link's own endpoint              — an explicit, complete address
+    //   2. the address this machine ALREADY uses for this group  — it worked before, and a rejoin is exactly the
+    //      case where there is no link to read it from
+    //   3. gatewayBase + agent from the link    — a hand-written link that omitted the address
+    //
+    // Step 2 is what was missing. A rejoin arrives with a groupId and nothing else, so `parsed.agent` was empty,
+    // so this fell through to the bare gatewayBase — which has no handler — and the host answered 404. The ledger
+    // had the working address the whole time.
+		// Same person, new working directory. The host resolves it the same way a local join does: reuse the
+		// member row and reissue the credential, so the group keeps ONE 张三 across working directories.
+		const adoptRemote = existingMembershipFor(identities, parsed.groupId, sessionId);
+		const adoptRemotePersonId = adoptRemote === undefined ? undefined : adoptRemote.personId;
+		const adoptRemotePersonKey = adoptRemote === undefined ? undefined : adoptRemote.personKey;
+
+    const knownBaseUrl = typeof adoptRemote?.baseUrl === 'string' && adoptRemote.baseUrl !== ''
+      ? adoptRemote.baseUrl
+      : undefined;
     const baseUrl = parsed.endpoint
+      ?? knownBaseUrl
       ?? composeMemberBase(
         parsed.gatewayBase ?? (config.groups.gatewayBase === '' ? undefined : config.groups.gatewayBase),
         parsed.agent,
@@ -919,11 +939,6 @@ function requireSession(sessionId, tool) {
       forwardProto: config.client.forwardProto,
       protocolVersion: config.client.protocolVersion,
     };
-		// Same person, new working directory. The host resolves it the same way a local join does: reuse the
-		// member row and reissue the credential, so the group keeps ONE 张三 across working directories.
-		const adoptRemote = existingMembershipFor(identities, parsed.groupId, sessionId);
-		const adoptRemotePersonId = adoptRemote === undefined ? undefined : adoptRemote.personId;
-		const adoptRemotePersonKey = adoptRemote === undefined ? undefined : adoptRemote.personKey;
     const result = await bridge.send(target, {
       skill: 'group/join',
       text: `join ${parsed.groupId}`,
@@ -946,11 +961,10 @@ function requireSession(sessionId, tool) {
       timeoutMs: config.client.timeoutMs,
     });
     const meta = result.data ?? {};
-      sessionId,
     identities.upsert({
       sessionId,
-      groupId: parsed.groupId,
       personId: meta.personId,
+      groupId: parsed.groupId,
       personKey: meta.personKey,
       local: false,
       baseUrl,
@@ -964,6 +978,9 @@ function requireSession(sessionId, tool) {
       groupId: parsed.groupId,
       groupName: meta.groupName ?? parsed.groupName ?? parsed.groupId,
       personId: meta.personId,
+      // Same contract as the local path: the credential comes back exactly once, at join. Without it a
+      // caller cannot act as this member, and the adoption path looks failed while it succeeded.
+      personKey: meta.personKey,
       remote: true,
       recentMessages: Array.isArray(meta.feedTail) ? meta.feedTail.length : 0,
     };
