@@ -945,7 +945,37 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const at = now();
     const seq = group.nextSeq;
     group.nextSeq += 1;
-    const mentions = resolveMentions(group, input.mentions);
+    // A reply's recipient is a FACT about the message being answered, not a choice the replier makes. Deriving it
+    // here means "reply to 李四" cannot silently omit the mention that wakes him — which is exactly what happened
+    // when a live run produced a reply with `mentions: 无` and left the asker waiting forever.
+    const replyToEntry = replyToOf(group, input.replyTo);
+    const replyTo = replyToEntry === undefined || replyToEntry.from.personId === member.personId
+      ? undefined
+      : replyToEntry.from.personId;
+    // Was the message being answered a broadcast? Read from the entry rather than inferred, so the rule follows
+    // the record even after a reload.
+    const answeredBroadcast = replyToEntry !== undefined
+      && Array.isArray(replyToEntry.mentions)
+      && replyToEntry.mentions.includes(MENTION_ALL);
+    // Whether the caller actually chose recipients. An empty array is "I did not choose", not "nobody".
+    const choseMentions = input.mentions !== undefined && input.mentions !== null
+      && !(Array.isArray(input.mentions) && input.mentions.length === 0);
+    const explicitMentions = resolveMentions(group, input.mentions);
+    // Precedence, in order:
+    //   1. an explicit @all the replier typed -> honour it (a real announcement)
+    //   2. answering a broadcast             -> the broadcaster only, never everybody
+    //   3. an ordinary reply                 -> the author of the message being answered
+    //   4. no reply                          -> exactly what was asked for
+    //
+    // Rule 2 is the one that is easy to miss by omission: without it every answer to an announcement re-wakes the
+    // whole group, and three people answering one notice produce nine wakes for one decision.
+    const mentions = explicitMentions.includes(MENTION_ALL)
+      ? explicitMentions
+      : (replyTo === undefined
+        ? explicitMentions
+        : (answeredBroadcast && choseMentions === false
+          ? [replyTo]
+          : (explicitMentions.includes(replyTo) ? explicitMentions : [...explicitMentions, replyTo])));
     const entry = {
       seq,
       at,
@@ -958,12 +988,24 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // between "addressed nobody" and "addressed everyone" must survive the file, and
       // an empty array would read as the former for both.
       ...(mentions.length === 0 ? {} : { mentions }),
+      // Kept so a reader can see the thread without scanning for adjacency, and so a later "is this closed?"
+      // check has something to join on.
+      ...(replyToEntry === undefined ? {} : { replyTo: replyToEntry.seq }),
     };
     group.feed.push(entry);
     member.lastSeenAt = at;
     persist();
     notify(group, entry);
-    return { seq, msgId: entry.msgId, at, atIso: new Date(at).toISOString(), mentions };
+    // `replyTo` out of the result is the SEQ that was answered, not the person woken: a caller reporting "replied
+    // to #42" needs the number, and the recipient is already visible in `mentions`.
+    return {
+      seq,
+      msgId: entry.msgId,
+      at,
+      atIso: new Date(at).toISOString(),
+      mentions,
+      replyTo: replyToEntry === undefined ? undefined : replyToEntry.seq,
+    };
   }
 
   /**
@@ -983,6 +1025,23 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {unknown} raw - the caller's mention list.
    * @returns {string[]} resolved ids, or `[MENTION_ALL]`; empty array for no mentions.
    */
+  /**
+   * Find the feed entry a reply names.
+   *
+   * A missing seq is not an error: the message may have been trimmed by retention, and refusing the reply would lose
+   * the reply rather than the thread link. A reply with no thread is still a reply.
+   *
+   * @param {GroupRecord} group - internal group record.
+   * @param {unknown} raw - the `replyTo` argument: a seq number, or a numeric string.
+   * @returns {object|undefined} the entry, when one matches.
+   */
+  function replyToOf(group, raw) {
+    if (raw === undefined || raw === null) return undefined;
+    const seq = typeof raw === 'number' ? raw : Number.parseInt(String(raw).replace(/^#/u, ''), 10);
+    if (!Number.isInteger(seq) || seq <= 0) return undefined;
+    return group.feed.find((entry) => entry.seq === seq);
+  }
+
   function resolveMentions(group, raw) {
     if (raw === undefined || raw === null) return [];
     const list = Array.isArray(raw) ? raw : [raw];
@@ -2688,6 +2747,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Who this post addressed. Omitted when nobody was, so a reader can tell an
     // ordinary message from one that summons the whole group.
     if (Array.isArray(entry.mentions) && entry.mentions.length > 0) view.mentions = [...entry.mentions];
+    // Which message this one answers. THIRD TIME this class of bug has appeared: a field is written to the record
+    // and then dropped by a whitelist mapper on the way out, so the value sits in the file and is invisible to
+    // every reader. Add the field here whenever one is added to the entry above.
+    if (Number.isInteger(entry.replyTo)) view.replyTo = entry.replyTo;
     return view;
   }
 

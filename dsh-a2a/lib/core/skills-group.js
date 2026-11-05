@@ -574,10 +574,14 @@ return {
             text,
             payload: data.payload,
             mentions: data.mentions,
+            // The recipient of a reply is derived from the message being answered, never reconstructed by the
+            // replier. See `post` in groups.js.
+            replyTo: data.replyTo,
           });
           const named = Array.isArray(posted.mentions) && posted.mentions.length > 0;
           return {
             text: `Posted to the group at seq ${posted.seq}.`
+              + (posted.replyTo === undefined ? '' : `\nReply to seq ${data.replyTo}: that author is woken.`)
               + (named
                 ? (posted.mentions.includes('@all')
                   ? '\nAddressed to everyone: every member is woken.'
@@ -588,6 +592,9 @@ return {
               msgId: posted.msgId,
               at: posted.atIso,
               mentions: posted.mentions ?? [],
+              // Which message this answered. A caller reporting "replied to #158" needs it back; without it the only
+              // proof of the thread is a re-read of the feed.
+              replyTo: posted.replyTo,
             },
           };
         } catch (error) {
@@ -632,6 +639,12 @@ return {
                 // hoisted alongside, which silently broke every consumer reading `from.displayName` —
                 // `publicEntry` documents a { personId, displayName } shape, and a flat string is not that.
                 from: { personId: entry.from.personId, displayName: entry.from.displayName },
+                // Who this entry addressed and what it answers. FIFTH time a whitelist mapper has dropped a field
+                // that `publicEntry` documented: the value exists in the file, survives the store, and then
+                // vanishes here — so a reader cannot see a mention or a thread even though both were recorded.
+                // Whenever `publicEntry` grows a field, this list must grow with it.
+                mentions: Array.isArray(entry.mentions) ? [...entry.mentions] : undefined,
+                replyTo: Number.isInteger(entry.replyTo) ? entry.replyTo : undefined,
                 kind: entry.kind,
                 text: entry.text,
               })),

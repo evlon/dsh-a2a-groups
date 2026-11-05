@@ -917,9 +917,13 @@ function requireSession(sessionId, tool) {
         groupId,
         member: { personId: membership.personId, personKey: membership.personKey },
         text: message,
+        // Both of these were missing here while the remote branch sent them, so mentioning somebody in a group this
+        // instance HOSTS never woke them. The live group is remote, which is why nobody hit it.
+        mentions: args.mentions,
+        replyTo: args.replyTo,
       });
       await store.flush();
-      return { seq: posted.seq, groupId };
+      return { seq: posted.seq, groupId, mentions: posted.mentions ?? [], replyTo: posted.replyTo };
     }
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/post',
@@ -930,6 +934,8 @@ function requireSession(sessionId, tool) {
         personKey: membership.personKey,
         text: message,
         mentions: args.mentions,
+        // Resolved on the host, which owns the feed: only it can map a seq to an author.
+        replyTo: args.replyTo,
       },
       timeoutMs: config.client.timeoutMs,
     });
