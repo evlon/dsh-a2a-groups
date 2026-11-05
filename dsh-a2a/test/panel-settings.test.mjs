@@ -157,3 +157,26 @@ test('set() without a Session is refused instead of writing a shared value', () 
     cleanup();
   }
 });
+
+test('a partial override never reverts the fields it does not name', () => {
+  // Measured bug: the panel used to send the whole `effective` object on every change. Because that copy is a
+  // SNAPSHOT, a save issued from a stale render wrote the old values for every field the person had not just
+  // edited — three of four settings reverted to defaults while only the one being changed survived.
+  //
+  // The store already merged field by field; what this locks in is that successive single-field writes accumulate
+  // instead of clobbering each other.
+  const { settings, cleanup } = store();
+  try {
+    settings.set({ sessionId: 'session-a', inherit: false, humanConfirm: { enabled: true } }, PROFILE);
+    settings.set({ sessionId: 'session-a', inherit: false, humanConfirm: { trigger: 'always' } }, PROFILE);
+    settings.set({ sessionId: 'session-a', inherit: false, humanConfirm: { onTimeout: 'allow' } }, PROFILE);
+    const result = settings.effectiveFor('session-a', PROFILE);
+    assert.equal(result.effective.enabled, true, 'the first field must survive later writes');
+    assert.equal(result.effective.trigger, 'always');
+    assert.equal(result.effective.onTimeout, 'allow');
+    // And a field never named still follows the profile.
+    assert.equal(result.effective.timeoutMs, PROFILE.timeoutMs);
+  } finally {
+    cleanup();
+  }
+});

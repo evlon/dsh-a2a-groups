@@ -1,0 +1,1 @@
+(function(){var sels=document.querySelectorAll('select');if(sels.length<2)return JSON.stringify({found:sels.length});var s=sels[0];s.value='always';s.dispatchEvent(new Event('change',{bubbles:true}));return JSON.stringify({found:sels.length,now:s.value});})()

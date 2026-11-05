@@ -1,0 +1,1 @@
+(function(){var inputs=document.querySelectorAll('input[type=checkbox]');if(inputs.length<2)return JSON.stringify({found:inputs.length});var enable=inputs[1];var was=enable.checked;if(!enable.disabled){enable.click();}return JSON.stringify({found:inputs.length,was:was,disabled:enable.disabled});})()

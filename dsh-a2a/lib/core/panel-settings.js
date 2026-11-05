@@ -114,13 +114,23 @@ export function createPanelSettings({ home, logger, clock = () => Date.now() }) 
       persist();
       return effectiveFor(sessionId, profileDefault);
     }
-    const clean = {};
+    // MERGE, do not replace.
+    //
+    // The panel sends one field per change (see its save()), so replacing the stored block would discard every earlier
+    // choice: enabling confirmation, then changing the trigger, would silently turn confirmation back off. Measured by
+    // test — three successive single-field writes left only the last one in force.
+    const existing = state.sessions[sessionId];
+    const previous = existing !== null && typeof existing === 'object'
+      && existing.inherit === false && existing.humanConfirm !== null && typeof existing.humanConfirm === 'object'
+      ? existing.humanConfirm
+      : {};
+    const merged = { ...previous };
     for (const field of OVERRIDABLE_FIELDS) {
       if (humanConfirm !== null && typeof humanConfirm === 'object' && humanConfirm[field] !== undefined) {
-        clean[field] = humanConfirm[field];
+        merged[field] = humanConfirm[field];
       }
     }
-    state.sessions[sessionId] = { inherit: false, humanConfirm: clean, updatedAt: clock() };
+    state.sessions[sessionId] = { inherit: false, humanConfirm: merged, updatedAt: clock() };
     persist();
     return effectiveFor(sessionId, profileDefault);
   }

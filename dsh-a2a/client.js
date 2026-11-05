@@ -3316,10 +3316,17 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 				if (typeof panelRpcCaller !== "function") return Promise.resolve();
 				setBusy(true);
 				const current = state !== null && state !== undefined ? state : { inherit: true, effective: {} };
+				// Send ONLY the fields this change touched.
+				//
+				// Sending the whole `effective` object looked simpler and produced a silent data loss: the copy in hand
+				// is a snapshot, so a save issued from a stale render wrote the OLD values for every field the person had
+				// not just changed — measured, three of four settings reverted to defaults while only the one being
+				// edited survived. A partial patch cannot do that: the fields it does not name are never mentioned, so
+				// the Host keeps whatever it already had.
 				const body = {
 					sessionId: sessionId,
 					inherit: patch.inherit !== undefined ? patch.inherit === true : current.inherit !== false,
-					humanConfirm: patch.humanConfirm !== undefined ? patch.humanConfirm : current.effective,
+					humanConfirm: patch.humanConfirm,
 				};
 				return panelRpcCaller("/a2a-panel", "set-confirm-settings", body)
 					.then(function (result) {
@@ -3362,11 +3369,10 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						disabled: inherit === true,
 						value: String(effective[key] === undefined ? "" : effective[key]),
 						onChange: function (event) {
-							const patch = {};
-							const next = Object.assign({}, effective);
-							next[key] = key === "timeoutMs" ? Number(event.target.value) : event.target.value;
-							patch.humanConfirm = next;
-							void save(patch);
+							// One field only: see save() for why a whole-object write loses the others.
+							const one = {};
+							one[key] = key === "timeoutMs" ? Number(event.target.value) : event.target.value;
+							void save({ humanConfirm: one });
 						}
 					},
 					options.map(function (option) { return h("option", { value: option.value, key: option.value }, option.label); })
@@ -3395,8 +3401,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					checked: effective.enabled === true,
 					disabled: inherit,
 					onChange: function (event) {
-						const next = Object.assign({}, effective, { enabled: event.target.checked });
-						void save({ humanConfirm: next });
+						void save({ humanConfirm: { enabled: event.target.checked } });
 					}
 				})),
 				row("什么时候问", select("trigger", [
@@ -3424,8 +3429,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					onChange: function (event) {
 						const seconds = Number(event.target.value);
 						if (!Number.isFinite(seconds) || seconds < 1) return;
-						const next = Object.assign({}, effective, { timeoutMs: Math.round(seconds * 1000) });
-						void save({ humanConfirm: next });
+						void save({ humanConfirm: { timeoutMs: Math.round(seconds * 1000) } });
 					}
 				})),
 				// The warning is the point: choosing to wait forever is the one option that can leave a turn blocked while
