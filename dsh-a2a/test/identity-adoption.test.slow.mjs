@@ -421,3 +421,55 @@ test('joining records the member count, so the list is right immediately', async
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+/**
+ * REGRESSION: after a takeover, every OTHER Session still showed the group as joined.
+ *
+ * ROOT CAUSE: joining wrote the new Session's row and never touched the old ones. Their credential had been retired
+ * by the host — the takeover reissues it — but the ledger rows remained, so each stale conversation kept drawing a
+ * group it could no longer post to. Reported as 「我现在切换不同的会话，都显示在这个群里面，这好像是不对的」.
+ *
+ * Removing the row is right, not marking it: unlike an unreachable host, there is nothing to recover — the host has
+ * already stopped accepting that credential, and keeping the row is the false signal itself.
+ */
+test('a takeover removes the other Sessions of the same person', async () => {
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const home = mkdtempSync(join(tmpdir(), 'dsh-a2a-takeover-'));
+  try {
+    const clock = () => Date.now();
+    const logger = { info() {}, warn() {}, debug() {} };
+    const config = normalizeConfig({ groups: { enabled: true, gatewayBase: 'http://g/a2a', agentName: 'a', embedded: true }, client: { apiKey: 'k' } });
+    const store = createGroupStore({ home, logger, clock, config });
+    const ledger = createMembershipLedger({ home, logger, clock });
+    const runtime = createToolRuntime({ store, identities: ledger, config, logger, clock });
+
+    const created = store.create({ name: '发票重构', ownerDisplayName: '张三' });
+    const groupId = created.group.groupId;
+    await runtime.call(
+      'a2a_group_join',
+      { groupId, token: store.invite({ groupId, ownerKey: created.ownerKey }).token, displayName: '李四' },
+      { sessionId: 'session-old' },
+    );
+    await runtime.call(
+      'a2a_group_join',
+      { groupId, token: store.invite({ groupId, ownerKey: created.ownerKey }).token, displayName: '李四' },
+      { sessionId: 'session-new' },
+    );
+
+    // One membership, held by the new Session.
+    const rows = ledger.list({ groupId });
+    assert.equal(rows.length, 1, 'the old row must be gone, not merely stale');
+    assert.equal(rows[0].sessionId, 'session-new');
+
+    // And the old conversation no longer claims the group.
+    const oldView = await runtime.call('a2a_groups', {}, { sessionId: 'session-old' });
+    assert.equal(oldView.groups.length, 0, 'a stale conversation must not show a group it cannot speak in');
+    const newView = await runtime.call('a2a_groups', {}, { sessionId: 'session-new' });
+    assert.equal(newView.groups.length, 1);
+  } finally {
+    const { rmSync } = await import('node:fs');
+    rmSync(home, { recursive: true, force: true });
+  }
+});

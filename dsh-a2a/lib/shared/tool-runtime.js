@@ -885,6 +885,21 @@ function requireSession(sessionId, tool) {
         // 「0 member(s)」 until a `group_info` happened to fill it in.
         memberCount: Number.isFinite(joined.group.memberCount) ? joined.group.memberCount : undefined,
       });
+      // The OLD Sessions lose their membership here.
+      //
+      // A takeover means this person moved out of those working directories: their credential was just retired by the
+      // host, so keeping their ledger rows makes every other conversation keep showing 「已加入」 for a group it can no
+      // longer speak in — reported as "every Session I switch to shows I am in the group; only the new one should".
+      //
+      // The row is removed rather than marked, because the host no longer accepts it: unlike an unreachable host, there
+      // is nothing to recover here, and a stale row is exactly the false signal this fixes.
+      if (adopt !== undefined) {
+        for (const stale of identities.list({ groupId: parsed.groupId })) {
+          if (stale.sessionId === sessionId) continue;
+          if (stale.personId !== joined.member.personId) continue;
+          identities.remove({ groupId: parsed.groupId, sessionId: stale.sessionId });
+        }
+      }
       await store.flush();
       await identities.flush();
       return {
@@ -983,6 +998,17 @@ function requireSession(sessionId, tool) {
       //   [5] a2a_groups  -> members: 3        <- only after info
       memberCount: Number.isFinite(meta.members) ? meta.members : undefined,
     });
+    // Same rule as the local path: the Sessions this one took over from lose their row.
+    //
+    // Their credential was retired the moment the host reissued one for this Session, so leaving their rows in place
+    // keeps every other conversation showing a group it can no longer post to.
+    if (adoptRemote !== undefined) {
+      for (const stale of identities.list({ groupId: parsed.groupId })) {
+        if (stale.sessionId === sessionId) continue;
+        if (stale.personId !== meta.personId) continue;
+        identities.remove({ groupId: parsed.groupId, sessionId: stale.sessionId });
+      }
+    }
     await identities.flush();
     if (inbox !== undefined) await inbox.enable(parsed.groupId);
     return {
