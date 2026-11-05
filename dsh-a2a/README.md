@@ -46,8 +46,8 @@ lib/
 │   └── profile.js       名片聚合
 │
 ├── shared/   两个宿主共用，谁也不属于
-│   ├── tool-specs.js    26 个工具的 name/description/schema/render（纯数据）
-│   └── tool-runtime.js  26 个工具的执行（接收 { sessionId }）
+│   ├── tool-specs.js    27 个工具的 name/description/schema/render（纯数据）
+│   └── tool-runtime.js  27 个工具的执行（接收 { sessionId }）
 │
 ├── mcp/      唯一读 MCP 协议的地方
 │   └── mcp-deps.js      为"没有 DSH 的进程"接线
@@ -193,33 +193,41 @@ MCP 配置（stdio）：
 
 **MCP 版没有界面**——协议里只有 tools/resources/prompts。[MCP 文档](docs/MCP.md)
 
-## 26 个工具
+## 27 个工具
 
 | 组 | 工具 |
 |---|---|
 | 找人 | `a2a_agents` `a2a_discover` `a2a_send` `a2a_stream` |
-| 建群/邀请 | `a2a_group_create` `a2a_group_invite` `a2a_group_join` |
+| 建群/邀请 | `a2a_group_create` `a2a_group_invite` `a2a_group_join` `a2a_group_leave` |
 | 群内 | `a2a_group_post` `a2a_group_read` `a2a_group_info` `a2a_group_role` |
-| 浏览 | `a2a_group_directory` |
+| 浏览 | `a2a_group_directory` `a2a_groups` |
 | 申请审批 | `a2a_group_request` `a2a_group_requests` `a2a_group_decide` `a2a_group_claim` |
-| 管理 | `a2a_groups` `a2a_group_inbox` `a2a_serve` |
+| 群主管理 | `a2a_group_rename` `a2a_group_remove` `a2a_group_archive` |
+| 收件与提醒 | `a2a_person_send` `a2a_person_inbox` `a2a_person_ack` `a2a_pending` |
+| 运行 | `a2a_group_inbox` `a2a_serve` |
 
-### 两个关键设计
+### 四个关键设计
 
 **入群不用密码。** 只有两条路，凭证互不重叠：
 
 - 邀请链接（群主批量发，可撤销，可设永不过期）
 - 申请审批（申请人拿 `claimKey`，群主只决定同意与否）
+- **已经有身份的人换工作目录**：不用邀请，凭手上已有的凭证接手，群里不会多出一个人
 
 **群消息分三档，决定谁被打断：**
 
 ```
 @ 我        → 唤醒会话，标题标「you were mentioned」
 @所有人     → 唤醒会话，标「@everyone」
-普通发言    → 只进未读，不打断
+普通发言    → 只进未读，不打断（wakeMembers 默认关闭）
 ```
 
 不加分级的群里每条消息都打断所有人，最后所有人都会静音——那一条重要消息也丢了。
+
+**是否回复由接收方决定。** 投递文案只说明「你说给自己用户的话别人看不到」，不写「必须回帖」。发起者不能强制同事
+立刻回、回什么质量——这一点在真实协作里成立，在插件里也必须成立，否则 9 人的群会把一条广播变成 9 个 turn。
+
+**回复记录两件事：回给谁、属于哪件事。** `replyTo` 是前者，`rootSeq` 是后者；任意深度的回复都归到同一个根。
 
 ## 文档
 
@@ -241,11 +249,39 @@ MCP 配置（stdio）：
 
 ## 验证
 
+### 单元与集成测试
+
 ```bash
-node --test test/*.test.mjs      # 321 tests，320 pass，1 skip（Windows 无 POSIX mode）
+npm test                # 快层：纯内存，约 1 秒
+npm run test:all        # 全量：678 个测试，约 3 秒
+npm run test:coverage   # 带覆盖率门槛
+```
+
+```bash
 node scripts/mcp-probe.mjs       # MCP stdio 端到端
 node scripts/standalone-probe.mjs --port 3095 --token <token>   # 独立宿主，全程无 DSH
 ```
+
+### UI 要另测：真实点击
+
+**单元测试看不到「用户点了之后会发生什么」。** 改 `client.js` 或面板 RPC 之后，装一次 opencli adapter：
+
+```bash
+node scripts/install-opencli-adapter.mjs   # 装到 ~/.opencli/clis/dsh/
+opencli daemon restart                     # adapter 模块只加载一次，改完必须重启
+```
+
+然后像真人一样驱动界面：
+
+```bash
+opencli dsh open --port 3096 --home "$DSH_HOME"
+opencli dsh send --text "请回复两个字：收到" --timeout 120
+opencli dsh read --contains "收到" --timeout 30     # 这条就是断言
+```
+
+**`~/.opencli/clis/dsh/` 不在这个仓库里**，是安装出来的副本。源码在 `opencli-adapter/`，改源码后要重新跑安装脚本。
+
+细则与 11 条踩坑记录见 [OPENCLI-ADAPTER.md](docs/OPENCLI-ADAPTER.md)，测试分层见 [test/README.md](test/README.md)。
 
 ## License
 
