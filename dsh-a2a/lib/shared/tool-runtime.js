@@ -881,6 +881,9 @@ function requireSession(sessionId, tool) {
         groupName: joined.group.name,
         role: joined.member.role,
         lastSeq: joined.group.lastSeq ?? 0,
+        // Same reason as the remote path: the count is known at join, and leaving it out made `a2a_groups` report
+        // 「0 member(s)」 until a `group_info` happened to fill it in.
+        memberCount: Number.isFinite(joined.group.memberCount) ? joined.group.memberCount : undefined,
       });
       await store.flush();
       await identities.flush();
@@ -971,6 +974,14 @@ function requireSession(sessionId, tool) {
       groupName: meta.groupName ?? parsed.groupName,
       role: 'member',
       lastSeq: meta.lastSeq ?? 0,
+      // The host already told us the size at join; not storing it made `a2a_groups` report 「0 member(s)」 until the
+      // first `a2a_group_info` filled it in. Reproduced by running the exact sequence a new conversation runs:
+      //
+      //   [2] join        -> ok, no count recorded
+      //   [3] a2a_groups  -> members: 0        <- the reported symptom
+      //   [4] group_info  -> memberCount: 3    <- the data was available all along
+      //   [5] a2a_groups  -> members: 3        <- only after info
+      memberCount: Number.isFinite(meta.members) ? meta.members : undefined,
     });
     await identities.flush();
     if (inbox !== undefined) await inbox.enable(parsed.groupId);

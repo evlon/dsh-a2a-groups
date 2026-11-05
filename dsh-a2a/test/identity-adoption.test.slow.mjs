@@ -375,3 +375,49 @@ test('the host skill forwards personKey, not only personId', () => {
   assert.match(body, /personId: typeof data\.personId/u);
   assert.match(body, /personKey: typeof data\.personKey/u, 'the proof must travel with the claim');
 });
+
+// ---------------------------------------------------------------------------
+// A join must leave the ledger complete
+// ---------------------------------------------------------------------------
+
+/**
+ * REGRESSION: right after joining, `a2a_groups` reported 0 members.
+ *
+ * ROOT CAUSE: `join` did not record `memberCount`, although the host returns it. Until some later `a2a_group_info`
+ * happened to fill it in, every list showed 「0 member(s)」 — which reads as an empty or broken group, not as a count
+ * that has not been fetched yet.
+ *
+ * Found by running the exact sequence a new conversation runs, in one process, and reading each result:
+ *
+ *   join -> ok          a2a_groups -> members: 0          group_info -> memberCount: 3
+ *
+ * The data was available at join. It simply was not stored.
+ */
+test('joining records the member count, so the list is right immediately', async () => {
+  // Isolated home: the previous investigation corrupted a real ledger by exercising join against it.
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const home = mkdtempSync(join(tmpdir(), 'dsh-a2a-join-count-'));
+  try {
+    const clock = () => Date.now();
+    const logger = { info() {}, warn() {}, debug() {} };
+    const config = normalizeConfig({ groups: { enabled: true, gatewayBase: 'http://g/a2a', agentName: 'a', embedded: true }, client: { apiKey: 'k' } });
+    const store = createGroupStore({ home, logger, clock, config });
+    const ledger = createMembershipLedger({ home, logger, clock });
+    const runtime = createToolRuntime({ store, identities: ledger, config, logger, clock });
+
+    const created = store.create({ name: '发票重构', ownerDisplayName: '张三' });
+    const groupId = created.group.groupId;
+    const token = store.invite({ groupId, ownerKey: created.ownerKey }).token;
+
+    await runtime.call('a2a_group_join', { groupId, token, displayName: '李四' }, { sessionId: 'session-fresh' });
+    const listed = await runtime.call('a2a_groups', {}, { sessionId: 'session-fresh' });
+
+    // The whole point: no window in which the group looks empty.
+    assert.equal(listed.groups[0].members, 2, 'owner plus the joiner, known at join time');
+  } finally {
+    const { rmSync } = await import('node:fs');
+    rmSync(home, { recursive: true, force: true });
+  }
+});
