@@ -57,6 +57,16 @@ const FILE_NAME = 'memberships.json';
 export const HOST_SESSION_ID = 'host';
 
 /** Upper bound on remembered memberships, so a runaway join loop cannot grow the file. */
+/**
+ * How old a cached roster may be before the panel must stop presenting it as fact.
+ *
+ * A roster is fetched once and never refreshed on its own, so without a bound the panel would show a member list and
+ * a count that could be weeks old — as confidently as a fresh one. Ten minutes is chosen to be longer than a person
+ * takes to read the panel and shorter than a working session, so the common case shows live data and the rare case
+ * admits it is stale.
+ */
+export const ROSTER_STALE_MS = 10 * 60 * 1000;
+
 const MAX_MEMBERSHIPS = 500;
 
 /** Stable key for one (session, group) pair. `\u0000` cannot appear in either id. */

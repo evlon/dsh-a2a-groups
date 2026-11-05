@@ -43,7 +43,7 @@ import { createBridge } from './core/bridge.js';
 import { createRegistry } from './core/registry.js';
 import { createDeliverer } from './dsh/deliver.js';
 import { createGroupStore } from './core/groups.js';
-import { createMembershipLedger } from './core/memberships.js';
+import { createMembershipLedger, ROSTER_STALE_MS } from './core/memberships.js';
 import { createSessions } from './dsh/sessions.js';
 import { createSkillRegistry } from './core/skills.js';
 import { buildProfile } from './dsh/profile.js';
@@ -441,12 +441,19 @@ const PANEL_FEED_TAIL = 8;
           // record — it simply was not being passed on.
           personId: record.personId ?? '',
           local: hostedHere,
+          // When the last attempt to reach this group was refused, the panel can say so. Without this it has
+          // no way to distinguish a live membership from one whose credential the host no longer accepts —
+          // which is how a person ends up believing they are in a group they cannot actually speak in.
+          unreachableAt: typeof record.unreachableAt === 'number' ? record.unreachableAt : 0,
           // The roster a Session cached earlier, via a2a_group_info / a2a_group_members.
           // Nothing is fetched at render time — this page is built before any Session
           // exists and holds no credential — so an absent roster means "not fetched yet"
           // and `rosterCachedAt` says how old a present one is.
           roster: Array.isArray(record.members) ? record.members : [],
           rosterCachedAt: typeof record.rosterCachedAt === 'number' ? record.rosterCachedAt : 0,
+          // The panel must not present a cached roster as fact once it is old. This is the honest half of having a
+          // cache at all: it says both what we know and how much to trust it.
+          rosterStale: !Number.isFinite(record.rosterCachedAt) || (clock() - record.rosterCachedAt) > ROSTER_STALE_MS,
           // Kept for the card's hint: with a cached roster the panel draws people, without
           // one it points at the Session rather than implying the group is empty.
           rosterInSession: !Array.isArray(record.members) || record.members.length === 0,

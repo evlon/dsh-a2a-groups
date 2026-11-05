@@ -3194,6 +3194,32 @@ window.__ModuleLoader__.load({
 					h("span", { style: membersLayout.headerMeta }, countLine)
 				),
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
+				// Data here is a CACHE. When the last attempt to reach the host was refused, say so: a panel that
+				// draws a roster without mentioning it cannot be trusted, and "I am in this group" is the one
+				// thing a person will conclude from it.
+				Number(group.unreachableAt || 0) > 0
+					? h(
+							"p",
+							{
+								style: Object.assign({}, membersLayout.hint, { color: "#c0392b", opacity: 0.9 }),
+								title: "宿主说这个群成员凭证无效。下面的名单是本地缓存，可能已经过期。"
+							},
+							"⚠ 与宿主失联过，下面的名单是缓存。发言可能失败，可让群主重新邀请。"
+						)
+					: null,
+				// A roster can be cached and simply old. Different from unreachable: we have no evidence anything
+				// is wrong, we only know the list may have changed since it was fetched. Saying so is cheaper than
+				// being confidently out of date.
+				group.rosterStale === true && Number(group.unreachableAt || 0) === 0
+					? h(
+							"p",
+							{
+								style: Object.assign({}, membersLayout.hint, { opacity: 0.7 }),
+								title: "名单是上次查询缓存的，可能已经不是最新的。在会话里调一次 a2a_group_info 刷新。"
+							},
+							"名单来自缓存，可能已变化。在会话里查一次群成员即可刷新。"
+						)
+					: null,
 				members.length === 0
 					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
 					: h("div", { style: membersLayout.roster }, rosterRows),

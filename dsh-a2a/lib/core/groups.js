@@ -782,6 +782,33 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       });
     }
 
+    // IDEMPOTENT PER PERSON. The caller may name an identity it already holds; if that identity is already a
+    // member, this is a retry rather than a new person. Returning the existing row (with a fresh key, which is the
+    // only way the caller can act) is what stops a flaky network or a double click from producing a second 王五.
+    const claimedId = typeof input.personId === 'string' && input.personId !== '' ? input.personId : '';
+    const existing = claimedId === ''
+      ? undefined
+      : group.members.find((entry) => entry.personId === claimedId);
+
+    if (existing !== undefined) {
+      const reissuedKey = `mk_${randomToken(32)}`;
+      existing.keyHash = sha256Hex(reissuedKey);
+      existing.lastSeenAt = at;
+      if (endpoint !== undefined) {
+        existing.endpoint = endpoint;
+        noteEndpoint(existing.personId, endpoint);
+      }
+      // No system line: nothing changed about who is in the group, and a second 「加入了群」 reads as a bug.
+      persist();
+      log.info('member rejoined', { groupId: group.groupId, personId: existing.personId, inviteId: usedInvite?.inviteId });
+      return {
+        member: publicMember(existing, at),
+        personKey: reissuedKey,
+        group: withFeedTail(group, at),
+        rejoined: true,
+      };
+    }
+
     const personKey = `mk_${randomToken(32)}`;
     const member = {
       // The caller may present an id it already holds from another group; reusing it is what

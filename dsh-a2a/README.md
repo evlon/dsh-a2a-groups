@@ -232,6 +232,7 @@ MCP 配置（stdio）：
 | [DEPLOY.md](docs/DEPLOY.md) | 生产部署 |
 | [MCP.md](docs/MCP.md) | MCP 接入 |
 | [BACKLOG.md](docs/BACKLOG.md) | 需求池：想过但暂不做的事 |
+| [FAQ.md](docs/FAQ.md) | **常见问题**：数据不一致时先看这里，按谁能修分类 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更记录：修过什么、为什么、踩过哪些坑 |
 
 ## 验证
