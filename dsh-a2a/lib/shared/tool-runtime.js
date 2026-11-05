@@ -1043,7 +1043,20 @@ function requireSession(sessionId, tool) {
       isOwner: meta.isOwner === true,
       // The roster is what makes a colleague card useful: without roleAbout and tags a card
       // can only say "in N groups", which is the one thing the reader already knows.
-      members: Array.isArray(meta.members) ? meta.members : undefined,
+      // lastSeenAt is a fact about the past and stays true; online is a claim about NOW and is wrong the moment
+      // it is stored. Keeping the timestamp and dropping the boolean is what lets the panel answer correctly an hour
+      // later instead of repeating whatever was true at fetch time - the bug that showed one group three different
+      // presence pictures depending on whose cache was newest.
+      members: Array.isArray(meta.members)
+        ? meta.members.map((member) => ({
+            personId: member.personId,
+            displayName: member.displayName,
+            role: member.role,
+            lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+            roleAbout: member.roleAbout,
+            tags: Array.isArray(member.tags) ? member.tags : undefined,
+          }))
+        : undefined,
       rosterCachedAt: Array.isArray(meta.members) ? Date.now() : undefined,
     });
     await identities.flush();

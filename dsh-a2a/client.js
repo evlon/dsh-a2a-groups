@@ -249,6 +249,37 @@ window.__ModuleLoader__.load({
 			return undefined;
 		}
 
+	/**
+	 * How long a member counts as online after their last authenticated call.
+	 *
+	 * Mirrors the host constant. Duplicated deliberately: the panel cannot import from the
+	 * plugin's own source, and a stale copy here would only change a label, not any data.
+	 */
+	const ONLINE_WINDOW_MS = 120000;
+
+	/**
+	 * Presence from a timestamp, never from a stored boolean.
+	 *
+	 * A cached roster can be an hour old. Its `online` field, if it has one, records what was
+	 * true when it was fetched — so trusting it means showing a stale claim with the same
+	 * confidence as a live one. `lastSeenAt` is a fact about the past and does not decay, so
+	 * the answer stays correct as time passes.
+	 *
+	 * An absent timestamp yields `undefined`, not `false`: "we do not know" and "they are
+	 * away" are different, and only one of them is ours to assert.
+	 *
+	 * @param {object} raw - member or card source.
+	 * @returns {boolean|undefined} whether they are online, or undefined when unknown.
+	 */
+	function presenceOf(raw) {
+		const seen = firstDefined(raw, ["lastSeenAt", "lastSeen"]);
+		if (typeof seen === "number" && Number.isFinite(seen) && seen > 0) {
+			return Date.now() - seen <= ONLINE_WINDOW_MS;
+		}
+		// No timestamp at all: fall back to a boolean only if one was sent, and never invent one.
+		return raw !== null && typeof raw === "object" && typeof raw.online === "boolean" ? raw.online : undefined;
+	}
+
 		/**
 		 * One roster member. `personId`/`displayName` are lib/groups.js `publicMember`.
 		 *
@@ -259,6 +290,7 @@ window.__ModuleLoader__.load({
 		 */
 		function normalizeMember(raw, index) {
 			if (!raw || typeof raw !== "object") return undefined;
+
 			const name = pickString(firstDefined(raw, ["displayName", "name", "title", "label"]));
 			// Both names are accepted: this bundle is cached by the page and may talk to a Host
 			// that still sends the older field. Do not drop the old one — a cached bundle and a
@@ -277,7 +309,8 @@ window.__ModuleLoader__.load({
 				tags: (Array.isArray(raw.tags) ? raw.tags : []).filter(function (tag) {
 					return typeof tag === "string" && tag !== "";
 				}),
-				online: raw.online === true,
+				// Derived from the timestamp, not read from the cache: see presenceOf.
+				online: presenceOf(raw),
 				self: raw.self === true || raw.isSelf === true
 			};
 		}
@@ -449,7 +482,16 @@ window.__ModuleLoader__.load({
 				// (`lib/index.js` does). It is what lets the pane say "这是你" before any
 				// roster has been fetched, which is the normal state on first open.
 				personId: pickString(firstDefined(raw, ["personId", "memberId"])),
-				muted: raw.muted === true || raw.mute === true
+				muted: raw.muted === true || raw.mute === true,
+				// Health flags the Host sends about THIS membership. They were being dropped here,
+				// which is why the stale-cache and unreachable warnings never appeared: the Host
+				// supplied the facts and the normaliser discarded them before any renderer saw them.
+				//
+				// `rosterStale` means the cached roster is older than the bound, so the names and
+				// presence count may have moved on. `unreachableAt` means the Host refused the last
+				// call, which is a stronger claim worth its own, louder line.
+				rosterStale: raw.rosterStale === true,
+				unreachableAt: Number.isFinite(raw.unreachableAt) ? raw.unreachableAt : 0,
 			};
 		}
 
@@ -1222,7 +1264,8 @@ window.__ModuleLoader__.load({
 					// My own card: the only one the reader can change, so the only one styled as
 					// editable. The Host decides this by member id, not by name.
 					isSelf: entry.isSelf === true,
-					online: entry.online === true,
+					// A cached roster can be an hour old; its timestamp survives, its boolean does not.
+					online: presenceOf(entry),
 					// Their A2A address, when the host knows one. Editable from the card, and the
 					// basis for a future "reach them directly" action.
 					endpoint: pickString(firstDefined(entry, [ "endpoint", "baseUrl", "url" ]))
@@ -2961,8 +3004,14 @@ window.__ModuleLoader__.load({
 				};
 			}
 
+			// Counted from the roster we are about to draw, not from `group.onlineCount`.
+			//
+			// The cached count was computed when the roster was fetched, so an hour-old cache reported
+			// "1 在线" beside a row that presenceOf now knows is away. Two numbers on one screen
+			// disagreeing is worse than either being slightly stale.
+			const onlineNow = members.filter(function (member) { return member.online === true; }).length;
 			const countLine = String(group.memberCount || members.length) + " 人"
-				+ (group.onlineCount > 0 ? " · " + String(group.onlineCount) + " 在线" : "");
+				+ (onlineNow > 0 ? " · " + String(onlineNow) + " 在线" : "");
 
 			/**
 			 * The body shared by every roster row, including 「所有人」.
