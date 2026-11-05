@@ -81,6 +81,32 @@ export const DEFAULT_CONFIG = Object.freeze({
     // Nothing is lost: the post is still delivered, still in the feed, and still counted by `a2a_pending`. A group
     // that wants ambient chatter can turn this back on.
     wakeMembers: false,
+    // Human confirmation before acting on somebody else's group message.
+    //
+    // The premise is social, not technical: a colleague decides for themselves whether, when and how well to answer;
+    // the sender cannot compel it. The same must hold here, so a member may require their own human to approve before
+    // their Session acts on an inbound task.
+    //
+    // EVERYTHING is a setting because the right answer differs per person: someone at a desk wants to be asked, an
+    // unattended bot wants timeouts to deny, and a chatty group may want no prompts at all.
+    humanConfirm: Object.freeze({
+      // Off by default: turning it on makes a colleague's message stop and wait for a human, which is disruptive.
+      enabled: false,
+      // When to ask: 'mention' (the post names me or @all), 'always' (any addressed post), 'never'.
+      trigger: 'mention',
+      // How to ask. 'question' uses the Host's user-questions seam and truly blocks the turn. 'im' is reserved for
+      // asking over an instant messenger and is NOT implemented: choosing it must fail loudly, because silently
+      // skipping the confirmation would remove the protection while looking like it was applied.
+      channel: 'question',
+      // What to do when nobody answers in time: 'never' (wait forever), 'deny' (refuse), 'allow' (proceed).
+      //
+      // DEFAULT 'deny'. 'never' leaves the turn blocked while the person is away, and 'allow' makes the whole
+      // confirmation decorative; denying is the only choice that fails visibly instead of silently doing the wrong
+      // thing.
+      onTimeout: 'deny',
+      // How long to wait before applying onTimeout. Ignored when onTimeout is 'never'.
+      timeoutMs: 300000,
+    }),
     publicUrl: '',
     agentName: '',
     gatewayBase: '',
@@ -118,6 +144,8 @@ export function normalizeConfig(raw) {
   const server = isPlainObject(source.server) ? source.server : {};
   const client = isPlainObject(source.client) ? source.client : {};
   const groups = isPlainObject(source.groups) ? source.groups : {};
+  // Read once so every field of the nested block is validated the same way, and a missing block is simply empty.
+  const humanConfirm = isPlainObject(groups.humanConfirm) ? groups.humanConfirm : {};
   const delivery = isPlainObject(source.delivery) ? source.delivery : {};
   const skills = isPlainObject(server.skills) ? server.skills : {};
 
@@ -165,6 +193,15 @@ export function normalizeConfig(raw) {
       maxPostsPerMinute: integer(groups.maxPostsPerMinute, defaults.groups.maxPostsPerMinute, 1, 10000),
       retentionDays: integer(groups.retentionDays, defaults.groups.retentionDays, 1, 3650),
       wakeMembers: bool(groups.wakeMembers, defaults.groups.wakeMembers),
+      // Human confirmation. Every field is validated against a closed set, so a typo in the settings file becomes a
+      // visible fallback to the default rather than an unrecognised value reaching the confirmation logic.
+      humanConfirm: Object.freeze({
+        enabled: bool(humanConfirm.enabled, defaults.groups.humanConfirm.enabled),
+        trigger: oneOf(humanConfirm.trigger, ['mention', 'always', 'never'], defaults.groups.humanConfirm.trigger),
+        channel: oneOf(humanConfirm.channel, ['question', 'im'], defaults.groups.humanConfirm.channel),
+        onTimeout: oneOf(humanConfirm.onTimeout, ['never', 'deny', 'allow'], defaults.groups.humanConfirm.onTimeout),
+        timeoutMs: integer(humanConfirm.timeoutMs, defaults.groups.humanConfirm.timeoutMs, 1000, 24 * 3600 * 1000),
+      }),
       publicUrl: stripTrailingSlash(text(groups.publicUrl, defaults.groups.publicUrl)),
       agentName: text(groups.agentName, defaults.groups.agentName),
       gatewayBase: stripTrailingSlash(text(groups.gatewayBase, defaults.groups.gatewayBase)),
