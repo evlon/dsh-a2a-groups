@@ -1062,7 +1062,10 @@ function requireSession(sessionId, tool) {
         groupId: record.groupId,
         name: summary?.name ?? record.groupName ?? record.groupId,
         role: summary?.owner?.personId === record.personId ? 'owner' : record.role,
-        members: summary?.memberCount ?? 0,
+        // `summary` comes from locally hosted groups only. For a remote group it is undefined, and falling back to
+        // 0 made every remote group report 0 members while group_info showed the real count — a mismatch a member
+        // reasonably read as data corruption. The ledger already caches the count from the last info call.
+        members: summary?.memberCount ?? (Number.isFinite(record.memberCount) ? record.memberCount : 0),
         lastSeq: summary?.lastSeq ?? record.lastSeq ?? 0,
         lastMessage: lastMessageOf(summary, record),
       });
