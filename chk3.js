@@ -1,0 +1,1 @@
+(function(){var d=document.querySelector('div[contenteditable=true]');var t=d?(d.innerText||'').trim():'';return JSON.stringify({composerLen:t.length,preview:t.slice(0,40)});})()
