@@ -2863,19 +2863,37 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 			//
 			// These need no invitation: the identity already exists here, and rejoining reuses it. Leading with a
 			// link box would ask a member to prove themselves to a group they never left.
-			const rejoinable = (props !== null && props !== undefined && props.snapshot !== undefined && props.snapshot !== null
-				&& Array.isArray(props.snapshot.groups) ? props.snapshot.groups : [])
-				.filter(function (row) {
-					if (row === null || row === undefined) return false;
+			//
+			// ONE ENTRY PER GROUP, not per ledger record. A person who has moved twice has two or three records for the
+			// same group — one per abandoned working directory — and every one of them passes the "held by another
+			// Session" test. Listing them all showed 「发票与对账平台」 twice with identical labels, reported as
+			// "it says two joined groups and that looks wrong". The reader is choosing a GROUP to re-enter, not a
+			// record to adopt, so the group is the unit here.
+			const rejoinable = (function () {
+				const rows = props !== null && props !== undefined && props.snapshot !== undefined && props.snapshot !== null
+					&& Array.isArray(props.snapshot.groups) ? props.snapshot.groups : [];
+				const seen = {};
+				const out = [];
+				for (const row of rows) {
+					if (row === null || row === undefined) continue;
 					// A credential exists on this machine...
-					if (row.canRejoinAs !== true) return false;
+					if (row.canRejoinAs !== true) continue;
 					// ...but not for this conversation. Without the second half the offer would appear for a group
 					// this conversation is already in, which is the one case where it must not.
 					const holdingSession = row.sessionId === undefined || row.sessionId === null ? "" : row.sessionId;
 					const currentSession = props.sessionId === undefined || props.sessionId === null ? "" : props.sessionId;
-					if (currentSession === "") return holdingSession !== "";
-					return holdingSession !== currentSession;
-				});
+					if (currentSession === "") {
+						if (holdingSession === "") continue;
+					} else if (holdingSession === currentSession) {
+						continue;
+					}
+					const key = String(row.id);
+					if (seen[key] === true) continue;
+					seen[key] = true;
+					out.push(row);
+				}
+				return out;
+			})();
 
 			/** Hand the pasted link to the Session as a ready-to-send instruction. */
 			function joinWithLink() {

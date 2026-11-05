@@ -264,9 +264,21 @@ test('the normaliser carries the rejoin fields to the pane', () => {
 test('the offer is keyed on the CURRENT Session, not on the row', () => {
   const client = readFileSync('client.js', 'utf8');
   // A group this conversation is already in must not offer to rejoin it; one held by ANOTHER conversation must.
-  assert.match(client, /holdingSession !== currentSession/u);
+  assert.match(client, /holdingSession === currentSession/u, 'the pane must compare the holding Session to its own');
   // And the pane needs the current Session passed in, or the comparison has nothing to compare against.
   assert.match(client, /UnboundMembersPane, \{ inputActions: inputActions, snapshot: snapshot, sessionId: sessionId \}/u);
+});
+
+test('the offer lists each GROUP once, however many records it has', () => {
+  // A person who moved twice has several ledger records for one group — one per abandoned working directory — and all
+  // of them pass the "held by another Session" test. Rendering one button each showed 「发票与对账平台」 twice with
+  // identical labels, which read as "it says two joined groups and that cannot be right".
+  const client = readFileSync('client.js', 'utf8');
+  const at = client.indexOf('const rejoinable = (function () {');
+  assert.ok(at > -1, 'the rejoin list must be built explicitly');
+  const body = client.slice(at, client.indexOf('})();', at));
+  assert.match(body, /const seen = \{\}/u, 'dedupe by group id');
+  assert.match(body, /if \(seen\[key\] === true\) continue;/u);
 });
 
 test('the copy no longer says a group will not follow you', () => {
