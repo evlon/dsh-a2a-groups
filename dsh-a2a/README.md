@@ -236,6 +236,7 @@ MCP 配置（stdio）：
 | [FAQ.md](docs/FAQ.md) | **常见问题**：数据不一致时先看这里，按谁能修分类 |
 | [STATE.md](docs/STATE.md) | **成员状态机**：六种状态、收敛规则、为什么 3b 不可恢复 |
 | [HUMAN-AI-COLLABORATION.md](docs/HUMAN-AI-COLLABORATION.md) | **人机协同复盘**：AI 的六个盲区、人的不可替代作用、FDE 操作清单 |
+| [OPENCLI-ADAPTER.md](docs/OPENCLI-ADAPTER.md) | **UI 测试适配器**：opencli 命令驱动 DSH Web，模拟真人点击并读屏校验 |
 | [CHANGELOG.md](CHANGELOG.md) | 变更记录：修过什么、为什么、踩过哪些坑 |
 
 ## 验证
