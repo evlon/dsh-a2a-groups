@@ -499,6 +499,12 @@ window.__ModuleLoader__.load({
 				knownSessionId: pickString(raw.knownSessionId),
 				// Which Session this membership belongs to, when the Host says.
 				sessionId: pickString(firstDefined(raw, ["sessionId", "session"])),
+				// Every Session holding a credential for this group. The Host publishes one row per GROUP now, so this
+				// is how a conversation that is not the newest holder still learns the group is its own — and how the
+				// rejoin offer stays reachable for it.
+				knownSessionIds: (Array.isArray(raw.knownSessionIds) ? raw.knownSessionIds : []).filter(
+					function (id) { return typeof id === "string" && id !== ""; },
+				),
 				// My own person id IN THIS GROUP, when the Host puts it on the membership row
 				// (`lib/index.js` does). It is what lets the pane say "这是你" before any
 				// roster has been fetched, which is the normal state on first open.
@@ -2880,11 +2886,17 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					if (row.canRejoinAs !== true) continue;
 					// ...but not for this conversation. Without the second half the offer would appear for a group
 					// this conversation is already in, which is the one case where it must not.
-					const holdingSession = row.sessionId === undefined || row.sessionId === null ? "" : row.sessionId;
+					//
+					// The Host publishes one row per GROUP, so the row's own `sessionId` is only the newest holder.
+					// `knownSessionIds` lists every Session that holds it, and THIS conversation counts as joined when
+					// it appears anywhere in that set.
 					const currentSession = props.sessionId === undefined || props.sessionId === null ? "" : props.sessionId;
+					const holders = Array.isArray(row.knownSessionIds) && row.knownSessionIds.length > 0
+						? row.knownSessionIds
+						: [row.sessionId === undefined || row.sessionId === null ? "" : row.sessionId];
 					if (currentSession === "") {
-						if (holdingSession === "") continue;
-					} else if (holdingSession === currentSession) {
+						if (holders.every(function (id) { return id === ""; })) continue;
+					} else if (holders.indexOf(currentSession) > -1) {
 						continue;
 					}
 					const key = String(row.id);

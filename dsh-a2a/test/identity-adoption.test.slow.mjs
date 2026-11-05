@@ -264,7 +264,12 @@ test('the normaliser carries the rejoin fields to the pane', () => {
 test('the offer is keyed on the CURRENT Session, not on the row', () => {
   const client = readFileSync('client.js', 'utf8');
   // A group this conversation is already in must not offer to rejoin it; one held by ANOTHER conversation must.
-  assert.match(client, /holdingSession === currentSession/u, 'the pane must compare the holding Session to its own');
+  //
+  // The Host publishes one row per GROUP, so a single `sessionId` is only the newest holder. The comparison therefore
+  // runs against `knownSessionIds` — every Session holding the group — or a conversation in a group it holds but does
+  // not most-recently hold would be offered a pointless rejoin.
+  assert.match(client, /const holders = Array\.isArray\(row\.knownSessionIds\)/u);
+  assert.match(client, /holders\.indexOf\(currentSession\) > -1/u);
   // And the pane needs the current Session passed in, or the comparison has nothing to compare against.
   assert.match(client, /UnboundMembersPane, \{ inputActions: inputActions, snapshot: snapshot, sessionId: sessionId \}/u);
 });

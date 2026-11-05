@@ -382,7 +382,24 @@ const PANEL_FEED_TAIL = 8;
   const publishGroups = () => {
     try {
       const rows = [];
-      for (const record of identities.list()) {
+      // ONE ROW PER GROUP, not per ledger record.
+      //
+      // A person who has moved working directories has several records for the same group. Rendering one row each
+      // made the panel list 「发票与对账平台」 four times with identical labels — reported as 「切换不同的会话，都显示在这
+      // 个群里面」. The reader is looking at groups, not at ledger rows.
+      //
+      // The records still matter for the rejoin offer, so the surviving row carries the OTHER Sessions that hold the
+      // group; the pane compares those against its own Session.
+      const allRecords = identities.list();
+      const byGroup = new Map();
+      for (const record of allRecords) {
+        const existing = byGroup.get(record.groupId);
+        // Newest wins: it is the credential the host most recently issued.
+        if (existing === undefined || (record.touchedAt ?? 0) > (existing.touchedAt ?? 0)) {
+          byGroup.set(record.groupId, record);
+        }
+      }
+      for (const record of byGroup.values()) {
         const hostedHere = groups.has?.(record.groupId) === true;
         const summary = hostedHere ? groups.snapshot({ groupId: record.groupId }) : undefined;
         const lastSeq = summary?.lastSeq ?? record.lastSeq ?? 0;
@@ -434,6 +451,15 @@ const PANEL_FEED_TAIL = 8;
           // Session" — but it can say which one each group belongs to, which is what
           // lets a person tell two memberships in one group apart.
           sessionId: record.sessionId ?? '',
+          // Every Session that holds a credential for THIS group.
+          //
+          // Required because the row above is now one per group: without the full set, a conversation that is not the
+          // newest holder could not tell that the group exists under a different Session, and the rejoin offer would
+          // vanish for exactly the case it was built for.
+          knownSessionIds: allRecords
+            .filter((entry) => entry.groupId === record.groupId)
+            .map((entry) => entry.sessionId)
+            .filter((id) => typeof id === 'string' && id !== ''),
           // Which person this Session is in this group. The panel needs it to mark
           // "me" in the roster: without it there is no way to tell which row is the
           // reader, and the edit affordance has no target. The line above already
