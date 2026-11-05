@@ -1,0 +1,40 @@
+{
+  "at": "2026-11-05T15:55:43.898Z",
+  "execKeys": [
+    "token",
+    "callId",
+    "rootCallId",
+    "name",
+    "signal",
+    "agent",
+    "deferContext",
+    "concludeTurn",
+    "arguments"
+  ],
+  "agentKeys": [
+    "loopCtx",
+    "id",
+    "options",
+    "session",
+    "inbox",
+    "phase",
+    "activityDone",
+    "scope",
+    "ctx",
+    "dispatch",
+    "requestHeaderLogged",
+    "requestSurfaceGeneration",
+    "runtimeContext",
+    "assistantStreamRevision",
+    "assistantAttemptCounter",
+    "systemPrompt",
+    "frozenMessages"
+  ],
+  "agentId": "session-a1fa2b50-6e5b-4ac7-9bcb-5a6fe1b3de06",
+  "agentLooksOwned": false,
+  "agentParentType": "undefined",
+  "seamProbed": true,
+  "seamAvailable": true,
+  "askIsFunction": true,
+  "askTimedIsFunction": true
+}

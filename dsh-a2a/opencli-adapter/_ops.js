@@ -158,6 +158,175 @@ export async function shellReady(page) {
 }
 
 /**
+ * Report which conversation is open, and what else is available.
+ *
+ * WHY THIS IS NEEDED
+ *
+ * A command that navigates to an instance lands on whatever conversation the SPA last had open — often an OLD one that
+ * a previous restart left in a broken state. Measured: a message sent this way reached 「打招呼」 while the operator was
+ * looking at a brand-new empty conversation, and neither side could tell. A test that cannot say WHICH conversation it
+ * drove cannot assert anything about a per-conversation feature.
+ *
+ * The sidebar is the only place the app exposes this: rows carry a stable class SUFFIX `_sessionRow`, and the active
+ * row adds `_selected`. Titles are the row text.
+ *
+ * @param {object} page - browser page handle.
+ * @returns {Promise<object>} `{ active, titles }`.
+ */
+export async function sessionInfo(page) {
+  // Wait for the sidebar to render before reporting.
+  //
+  // Measured: right after navigation `div[class*="_sessionRow"]` matches nothing, because the workspace list arrives a
+  // beat after the shell. Reporting then says 「Visible conversations: 打招呼」 for a page that actually lists seven, which
+  // reads like the selector is wrong when it is only early.
+  await waitFor(
+    async () => {
+      const rows = await evaluate(page, '(function () { return document.querySelectorAll(\'div[class*="_sessionRow"]\').length; })()');
+      return Number(rows) > 0;
+    },
+    { timeoutMs: 8000, intervalMs: 200 },
+  );
+  const result = await evaluate(page, `(function () {
+    var rows = Array.from(document.querySelectorAll('div[class*="_sessionRow"]'));
+    var titles = [];
+    var active = '';
+    // A row's innerText carries the title AND its age on separate lines (「打招呼\\n8小时」). Only the first line is the
+    // name; keeping the age in would make every comparison against a title fail.
+    var clean = function (text) {
+      var first = String(text || '').split(String.fromCharCode(10))[0];
+      return first.trim();
+    };
+    for (var i = 0; i < rows.length; i += 1) {
+      var name = clean(rows[i].innerText);
+      if (name === '') continue;
+      titles.push(name);
+      if (String(rows[i].className).indexOf('_selected') > -1) active = name;
+    }
+    return { active: active, titles: titles };
+  })()`);
+  return {
+    active: typeof result?.active === 'string' ? result.active : '',
+    titles: Array.isArray(result?.titles) ? result.titles : [],
+  };
+}
+
+/**
+ * Open a conversation by its sidebar title, and confirm it became active.
+ *
+ * Clicking is deliberate rather than navigating to a URL: the app is a single-page shell whose address bar never changes
+ * with the conversation, so there is no URL that means "this conversation". A click is also what a person does.
+ *
+ * @param {object} page - browser page handle.
+ * @param {string} title - the row text, matched by prefix (titles are truncated with an age suffix in some states).
+ * @param {object} [options] - `{ timeoutMs }`.
+ * @returns {Promise<object>} `{ ok, active, titles }`.
+ */
+export async function selectSession(page, title, { timeoutMs = 15000 } = {}) {
+  const wanted = String(title ?? '').trim();
+  if (wanted === '') return { ok: false, active: '', titles: [], reason: 'empty title' };
+
+  const clicked = await evaluate(page, `(function () {
+    var want = ${JSON.stringify(wanted)};
+    var rows = Array.from(document.querySelectorAll('div[class*="_sessionRow"]'));
+    var clean = function (text) {
+      return String(text || '').split(String.fromCharCode(10))[0].trim();
+    };
+    for (var i = 0; i < rows.length; i += 1) {
+      var name = clean(rows[i].innerText);
+      if (name !== want && name.indexOf(want) !== 0) continue;
+      rows[i].click();
+      return { ok: true, clicked: name };
+    }
+    return { ok: false, titles: rows.map(function (row) { return clean(row.innerText); }) };
+  })()`);
+
+  if (clicked?.ok !== true) {
+    const info = await sessionInfo(page);
+    return { ok: false, active: info.active, titles: info.titles, reason: 'no such conversation' };
+  }
+
+  // The row gaining `_selected` is the observable proof the switch happened — waiting on the transcript instead would
+  // also pass for a conversation that merely stopped changing.
+  const ok = await waitFor(
+    async () => {
+      const info = await sessionInfo(page);
+      return info.active !== '' && info.active.indexOf(wanted) === 0;
+    },
+    { timeoutMs, intervalMs: 250 },
+  );
+  const info = await sessionInfo(page);
+  return { ok, active: info.active, titles: info.titles };
+}
+
+/** Start a brand-new conversation, so a test never inherits another test's state. */
+export async function newSession(page, { timeoutMs = 20000 } = {}) {
+  const before = await sessionInfo(page);
+  const beforeText = Number(await evaluate(page, '(function () { return ((document.body && document.body.innerText) || "").length; })()') ?? 0);
+
+  // Measure the page in one place, so "did anything happen" is answered the same way every time.
+  const snapshot = async () => evaluate(page, `(function () {
+    var all = document.querySelectorAll('div');
+    var rows = [];
+    for (var i = 0; i < all.length; i += 1) {
+      if (String(all[i].className).indexOf('sessionRow') >= 0) {
+        rows.push(String(all[i].innerText || '').split(String.fromCharCode(10))[0].trim());
+      }
+    }
+    var view = document.querySelector('div[class*="_viewArea"]');
+    return {
+      rows: rows,
+      rowCount: rows.length,
+      view: view === null ? -1 : (view.innerText || '').trim().length,
+      body: ((document.body && document.body.innerText) || '').length,
+      title: document.title.slice(0, 24),
+    };
+  })()`);
+
+  const changed = (now) => {
+    if (now === null || now === undefined) return false;
+    if (Number(now.rowCount) > before.titles.length) return true;
+    // An EMPTY conversation has no view area at all. Measured on a live instance:
+    //   before: rows=4 view=1242 body=1795 title=问候
+    //   after:  rows=5 view=-1   body=201  title=CodeBuddy      (first row is 「新会话」)
+    if (Number(now.view) === -1) return true;
+    return Math.abs(Number(now.body) - beforeText) > 60;
+  };
+
+  // Click, then LOOK, then click again if nothing happened.
+  //
+  // The same click succeeds or fails depending on how long the page has been alive: it worked on a conversation that had
+  // been open for minutes, and silently did nothing on a page freshly navigated by `open`. React has not finished
+  // wiring handlers at that point, and the click is simply dropped. Retrying is what makes the two cases behave alike —
+  // eleven earlier attempts each tried a DIFFERENT click mechanism once and concluded the selector was wrong.
+  let attempts = 0;
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    attempts += 1;
+    await evaluate(page, `(function () {
+      var buttons = Array.from(document.querySelectorAll('button'));
+      for (var j = 0; j < buttons.length; j += 1) {
+        var cls = String(buttons[j].className);
+        var label = (buttons[j].textContent || '').trim();
+        if (cls.indexOf('newSession') > -1 || label.indexOf('新会话') > -1) {
+          buttons[j].click();
+          return true;
+        }
+      }
+      return false;
+    })()`);
+    // Give React a beat, then decide.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    last = await snapshot();
+    if (changed(last)) {
+      return { ok: true, attempts, before, after: { titles: last.rows, active: '' }, snapshot: last };
+    }
+  }
+  return { ok: false, reason: 'clicked but the page never changed', attempts, before, after: before, seen: last };
+}
+
+
+/**
  * Wait until the app shell has mounted.
  *
  * "HTML arrived" is not the same as "the app mounted": the SPA serves an empty div first, and proceeding on that div

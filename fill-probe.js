@@ -1,0 +1,1 @@
+(function(){var d=document.querySelector('div[contenteditable="true"]');if(!d)return 'no-composer';d.focus();d.textContent='\u8bf7\u8c03\u7528 a2a_probe_exec \u5de5\u5177\uff0c\u53ea\u8c03\u7528\u8fd9\u4e00\u4e2a';d.dispatchEvent(new InputEvent('input',{bubbles:true,data:'x'}));return 'filled:'+d.textContent.slice(0,30);})()

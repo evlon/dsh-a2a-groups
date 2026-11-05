@@ -1,0 +1,1 @@
+(function(){var b=document.querySelectorAll('button');var out=[];for(var i=0;i<b.length;i++){var t=b[i].textContent.trim();if(t.length>0&&t.length<20)out.push(t);}return JSON.stringify(out.slice(0,12));})()

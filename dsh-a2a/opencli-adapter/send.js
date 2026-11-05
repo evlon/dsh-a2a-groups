@@ -12,8 +12,11 @@ import {
   ensureOnInstance,
   fail,
   isBusy,
+  newSession,
   pressSend,
   readTranscript,
+  selectSession,
+  sessionInfo,
   tokenFromLog,
   waitFor,
   writeComposer,
@@ -36,8 +39,10 @@ cli({
     { name: 'token', type: 'string', help: 'Access token, when it is not in the log' },
     { name: 'timeout', type: 'int', default: 120, help: 'Seconds to wait for the turn to finish' },
     { name: 'no-wait', type: 'boolean', default: false, help: 'Return as soon as the message is sent' },
+    { name: 'session', type: 'string', help: 'Conversation title to send into (omit to use the open one)' },
+    { name: 'new-session', type: 'boolean', default: false, help: 'Start a fresh conversation and send into it' },
   ],
-  columns: ['sent', 'via', 'typed', 'replied', 'settled'],
+  columns: ['sent', 'via', 'typed', 'replied', 'settled', 'conversation'],
   func: async (page, kwargs) => {
     const text = String(kwargs.text ?? '');
     if (text.trim() === '') fail('Nothing to send: --text is empty.', 'Pass the message with --text "..."');
@@ -48,6 +53,20 @@ cli({
       if (token === '' && typeof kwargs.home === 'string') token = tokenFromLog(kwargs.home) ?? '';
       await ensureOnInstance(page, { port: Number(kwargs.port), token, timeoutMs: 30000 });
     }
+
+    // Send into a NAMED conversation, not "whatever is open".
+    //
+    // Measured failure: without this the message landed in an old conversation that a restart had left in a stopped
+    // state; the reply never came, and the earlier `replied: false` read like a model refusal. Naming the conversation
+    // makes the command's target observable instead of inherited.
+    if (kwargs['new-session'] === true) {
+      const created = await newSession(page);
+      if (created.ok !== true) fail('Could not start a new conversation.', `Visible: ${(created.after?.titles ?? []).join(' | ') || '(none)'}`);
+    } else if (typeof kwargs.session === 'string' && kwargs.session.trim() !== '') {
+      const picked = await selectSession(page, kwargs.session);
+      if (picked.ok !== true) fail(`No conversation titled "${kwargs.session}".`, `Visible: ${picked.titles.join(' | ') || '(none)'}`);
+    }
+    const conversation = (await sessionInfo(page)).active;
 
     const before = await readTranscript(page);
 
@@ -100,6 +119,7 @@ cli({
       typed: written.actual,
       replied: replied === true,
       settled: settled === true,
+      conversation: conversation === '' ? '(unknown)' : conversation,
       grew: after.length - before.length,
       // Diagnostic: what the composer actually holds NOW.
       //

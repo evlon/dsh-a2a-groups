@@ -155,6 +155,12 @@ export function apply(ctx, config) {
   });
 
   const disposers = [];
+  // The user-questions seam, captured by optional injection.
+  //
+  // Cordis will not let a plugin read `ctx.userQuestions` unless it is declared in `inject`; touching it anyway throws
+  // and takes the whole plugin down. Keeping the resolved service here means the tool layer can ask whether the seam
+  // exists without performing an illegal property read.
+  let questionSeam;
   if (settings.server.enabled) {
     const detach = server.attach();
     if (typeof detach === 'function') disposers.push(detach);
@@ -162,6 +168,16 @@ export function apply(ctx, config) {
 
   // --- tool surface --------------------------------------------------------
   if (settings.tools) {
+    // Record which capability seams this Host offers — WITHOUT touching them directly.
+    //
+    // Cordis refuses `ctx.userQuestions` unless the service is declared in `inject`, and it throws
+    // 「cannot get property "userQuestions" without inject」 which takes the WHOLE plugin down at mount. So the probe is
+    // an optional injection: the callback runs only when the service exists, and the plugin mounts either way.
+    ctx.inject(['userQuestions'], (scoped) => {
+      questionSeam = typeof scoped.userQuestions?.ask === 'function' ? scoped.userQuestions : undefined;
+      info(ctx, `a2a: userQuestions seam = ${questionSeam === undefined ? 'absent' : 'available'}`);
+    });
+    info(ctx, 'a2a: seams probed (userQuestions via optional inject)');
     registerTools(ctx, {
       config: settings, registry, bridge, store: groups, identities, server, sessions, logger, inbox,
     });
