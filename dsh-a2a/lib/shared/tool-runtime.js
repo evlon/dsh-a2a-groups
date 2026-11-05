@@ -223,6 +223,32 @@ function requireLocalMembership(identities, groupId, sessionId) {
   }
 
 
+  /**
+   * The personId this instance already uses for a group, from any Session.
+   *
+   * A group identity belongs to the PERSON on this machine, not to one conversation. Work moves between directories,
+   * so the same person joins the same long-lived group from a new Session more than once — and must not appear twice.
+   *
+   * Returns undefined when this is genuinely a first join.
+   *
+   * @param {object} identities - the membership ledger.
+   * @param {string} groupId - which group.
+   * @param {string} sessionId - the joining Session, excluded from the search.
+   * @returns {string|undefined} an existing personId for this group.
+   */
+  function existingPersonFor(identities, groupId, sessionId) {
+    if (identities === undefined || identities === null || typeof identities.list !== 'function') return undefined;
+    const others = identities
+      .list({ groupId })
+      .filter((record) => record.sessionId !== sessionId && typeof record.personId === 'string' && record.personId !== '');
+    if (others.length === 0) return undefined;
+    // Most recently touched wins: if somebody has joined twice for reasons of their own, the newest is the one they
+    // were last working as.
+    others.sort((left, right) => (right.touchedAt ?? 0) - (left.touchedAt ?? 0));
+    return others[0].personId;
+  }
+
+
 function requireMembership(store, identities, groupId, sessionId) {
   const record = identities.get(groupId, sessionId);
   if (record !== undefined) return record;
@@ -816,12 +842,17 @@ function requireSession(sessionId, tool) {
 
     const local = store.has?.(parsed.groupId) === true;
     if (local) {
-      const joined = store.join({
+			// Same person, new working directory: take over the identity this machine already uses for this group
+			// rather than appearing as a second 张三. The host reissues the credential, retiring the old Session's.
+			const adoptPersonId = existingPersonFor(identities, parsed.groupId, sessionId);
+			const joined = store.join({
         groupId: parsed.groupId,
         token: parsed.token,
         displayName,
         // Same reasoning as the remote path: this process knows its own address.
         endpoint: ownEndpointFromConfig(config),
+				// Present only when this machine already belongs to the group from another Session.
+				personId: adoptPersonId,
       });
       identities.upsert({
         sessionId,
@@ -839,6 +870,9 @@ function requireSession(sessionId, tool) {
         groupId: parsed.groupId,
         groupName: joined.group.name,
         personId: joined.member.personId,
+        // Handed out exactly once, at join. Echoing it is what lets the caller act as this member immediately —
+        // without it, identity adoption records the right person but leaves them unable to speak.
+        personKey: joined.personKey,
         remote: false,
         recentMessages: joined.feedTail.length,
       };
@@ -867,6 +901,9 @@ function requireSession(sessionId, tool) {
       forwardProto: config.client.forwardProto,
       protocolVersion: config.client.protocolVersion,
     };
+		// Same person, new working directory. The host resolves it the same way a local join does: reuse the
+		// member row and reissue the credential, so the group keeps ONE 张三 across working directories.
+		const adoptRemotePersonId = existingPersonFor(identities, parsed.groupId, sessionId);
     const result = await bridge.send(target, {
       skill: 'group/join',
       text: `join ${parsed.groupId}`,
@@ -881,6 +918,8 @@ function requireSession(sessionId, tool) {
         // Omitted when unconfigured, which the host reads as "no address" — the honest answer,
         // since nothing can dial a member that has no gateway name.
         endpoint: ownEndpointFromConfig(config),
+			// Omitted on a genuine first join.
+			personId: adoptRemotePersonId,
       },
       timeoutMs: config.client.timeoutMs,
     });

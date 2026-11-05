@@ -806,6 +806,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
         personKey: reissuedKey,
         group: withFeedTail(group, at),
         rejoined: true,
+        // Same shape as a first join. A caller cannot tell the two paths apart from the return value, and
+        // that is deliberate: `rejoined` is the only difference, and every other field must exist on both.
+        feedTail: group.feed.slice(-FEED_TAIL_LIMIT).map((entry) => publicEntry(entry)),
       };
     }
 

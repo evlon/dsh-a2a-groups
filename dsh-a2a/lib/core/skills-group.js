@@ -478,6 +478,10 @@ return {
             token: typeof data.token === 'string' && data.token !== '' ? data.token : undefined,
             displayName: typeof data.displayName === 'string' && data.displayName !== '' ? data.displayName : 'member',
             endpoint,
+			// Present when the caller is taking over an identity this host already knows for that person — the
+			// normal case when somebody opens a new working directory and rejoins a long-lived group. The store
+			// reuses the member row and reissues the credential instead of creating a second 张三.
+			personId: typeof data.personId === 'string' && data.personId !== '' ? data.personId : undefined,
           });
           identities.upsert({
             sessionId: context?.sessionId ?? HOST_SESSION_ID,
