@@ -138,6 +138,58 @@ The stop control appears only while tokens stream, so a slow model start looks i
 message that had already been delivered and answered. Waiting on **the transcript growing** is direct evidence; the
 busy check is now only used to let the answer finish, bounded and best-effort.
 
+### 8. `fillText` only works on a focused box
+
+It returned without error and `send` reported `sent: true` — on a message that was never typed. The box was empty, the
+send button stayed disabled, and the transcript never grew. Measured:
+
+```
+click-ok | fill-ok | value="PROBE-AFTER-FOCUS"     <- after page.click first
+```
+
+`writeComposer` now clicks the composer and pauses before filling.
+
+### 9. `fillText` does not replace existing text
+
+With something already in the box, the new text is NOT written: the old content stays, the send button stays enabled
+for the OLD text, and a second `send` in the same test silently re-sends the first message — the transcript still grows,
+so the test passes while measuring the wrong thing.
+
+```
+before="PROBE-AFTER-FOCUS" | sel-all-ok | del-ok | afterClear="" | afterFill="CLEAR-TEST"
+```
+
+`Control+a` then `Delete` before the fill, with a pause after each step (without the pauses the keys arrive before focus
+takes effect and the clear silently does nothing).
+
+### 10. Enter does not send, and `pressKey` does not report that
+
+`await page.pressKey('Enter')` resolves successfully while the composer keeps its text. `pressSend` returned `ok: true`
+on that basis, so `send` reported `sent: true, replied: false` and the conclusion drawn was "the model did not answer".
+
+The fix is to verify the only observable proof — the box emptying — and fall back to the send button:
+
+```
+press Enter -> composer still has text -> click the button -> composer empty
+```
+
+`send` now reports `composerAfter`, so this failure mode names itself instead of looking like a silent model.
+
+### 11. The transcript reader was reading chips, tables and tool summaries as messages
+
+Entries arrived as one per table cell (「快照层」/「行号、计数、SHA1」), one per terminal-code line, the model picker, the
+token counter, and collapsed tool records (「执行了命令思考…运行命令…思考…」). `--contains` then passed or failed for
+reasons unrelated to the conversation.
+
+`_flowItem` is used for BOTH message bodies and one-line status chips, so position cannot separate them. The reader now:
+
+- locates the container by measurement (the element with the most text-bearing direct children under `_viewArea`),
+  never by `div[class*="_root"]` — the FIRST `_root` on the page is the SIDEBAR, and reading it returned
+  「新会话 | 插件 | 自动化任务 | 协作群」
+- drops status chips (「已完成，用时 18秒」), usage lines (「用量 254K tok」), inbound-task notices, the model picker, and
+  process records — the last by matching 执行了命令 together with 思考 or 运行命令, because those blocks run to hundreds of
+  characters and a length bound lets every one through
+
 ---
 
 ## Rules for editing these files

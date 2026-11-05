@@ -190,13 +190,50 @@ export async function waitForShell(page, timeoutMs = 30000) {
  * Measured on this app: with `fillText` the composer reports `filled: true, verified: true` and the DOM holds the text;
  * with a scripted `textContent` write the DOM held it too, but the send did nothing.
  *
+ * WHY THERE IS A CLICK BEFORE THE FILL
+ *
+ * `fillText` alone is not enough. It returned without error and reported the text written, the composer was empty, the
+ * send button stayed disabled, and the transcript never grew — `send` therefore reported `sent: true, replied: false` on
+ * a message that had never been typed. The box accepts synthetic text only when it already holds focus; clicking it
+ * first was the whole difference:
+ *
+ *   click-ok | fill-ok | value="PROBE-AFTER-FOCUS"
+ *
+ * So: click, then fill, then read back. The read-back is what turns a false positive into a failure.
+ *
  * @param {object} page - browser page handle.
  * @param {string} text - what to write.
  * @returns {Promise<object>} `{ ok, actual }` — the text the DOM holds.
  */
 export async function writeComposer(page, text) {
   try {
+    // A click focuses the box; without a pause the following keys can arrive before the focus took effect, and the
+    // clear silently does nothing while the fill reports success.
+    await page.click('div[contenteditable="true"]');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  } catch {
+    // A missing composer surfaces on the fill below, which reports a usable reason.
+  }
+  // CLEAR, then fill.
+  //
+  // `fillText` does not replace existing content here: a composer already holding something kept it, the new text was
+  // never written, the send button stayed enabled for the OLD text, and `send` returned `sent: true` for a message that
+  // was never typed. Measured:
+  //
+  //   before="PROBE-AFTER-FOCUS" | sel-all-ok | del-ok | afterClear="" | afterFill="CLEAR-TEST"
+  //
+  // Without the clear, a second send in the same test silently re-sends the first message — the worst kind of failure,
+  // because the transcript still grows and the test passes.
+  try {
+    await page.pressKey('Control+a');
+    await page.pressKey('Delete');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  } catch {
+    // A composer that cannot be cleared still gets the fill attempt; the read-back decides.
+  }
+  try {
     await page.fillText('div[contenteditable="true"]', text);
+    await new Promise((resolve) => setTimeout(resolve, 200));
   } catch (error) {
     return { ok: false, actual: '', reason: String((error && error.message) || error) };
   }
@@ -218,11 +255,15 @@ export async function composerIsEmpty(page) {
 }
 
 /**
- * Send the composed message with Enter, falling back to the send button.
+ * Send the composed message with Enter, falling back to the send button — and VERIFY it left the box.
  *
- * Enter is the path people actually use and it survives a restyle of the button. `page.pressKey` dispatches a real
- * keyboard event, which is what the framework listens for; a synthesised `.click()` often does nothing because no
- * trusted pointer sequence was seen.
+ * Enter is the path people actually use and it survives a restyle of the button. But `page.pressKey('Enter')` resolves
+ * without error even when the app never acts on it: the composer still held the text, the transcript never grew, and
+ * `send` reported `sent: true, replied: false` for a message that had never left the box. That false positive is worse
+ * than a failure, because the caller concludes the model stayed silent.
+ *
+ * So the sequence is: press Enter, look at the composer, and if the text is still there, click the button.
+ * `composerAfter: 'STILL-HAS-TEXT'` in the result is the signal that neither path worked.
  *
  * @param {object} page - browser page handle.
  * @returns {Promise<object>} `{ ok, via }`.
@@ -230,7 +271,9 @@ export async function composerIsEmpty(page) {
 export async function pressSend(page) {
   try {
     await page.pressKey('Enter');
-    return { ok: true, via: 'enter' };
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    // The box emptying is the only proof the send was accepted.
+    if (await composerIsEmpty(page)) return { ok: true, via: 'enter' };
   } catch {
     // Fall through to the button.
   }
@@ -270,60 +313,92 @@ export async function pressSend(page) {
  */
 export async function readTranscript(page) {
   const result = await evaluate(page, `(function () {
-    // The transcript. Measured on a live instance:
+    // WHERE THE MESSAGES ACTUALLY ARE — measured, not assumed.
     //
-    //   div._centerCol
-    //     div._root (2 children)
-    //       header   「打招呼 | 标准模式 | 对话 | 轨迹」
-    //       div._body
-    //         div._scrollBody   <- the scrolling message list
-    //         div._widthHandle  (x2, layout only)
+    //   div._scrollBody
+    //     div                       (no class)
+    //       div._viewArea
+    //         div                   (the scroller)
+    //           div._root (5 children — but the FIRST _root on the page is the SIDEBAR)
+    //             header
+    //             div._body
+    //               ... _flowItem ...   <- one entry per turn: message, status chip, or notice
+    //     div._composerSeat         <- the input box; must never be read as a message
     //
-    // TWO TRAPS, both hit while building this:
+    // Three selector mistakes were paid for here, so they are written down:
     //
-    // 1. There are 37 elements whose class contains "_body" — most are empty layout shells. Taking the first one that
-    //    matched happened to be right, but only by document order, so the choice is made explicit below: the widest
-    //    populated one wins.
-    // 2. Reading the center column instead of the scroll body includes the composer and the status bar, which is why an
-    //    earlier attempt returned the placeholder text 「发消息或创建任务…」 and the model name as if they were messages.
-    var scroll = document.querySelector('div[class*="_scrollBody"]');
-    var root = scroll;
-    if (!root) {
-      var candidates = Array.from(document.querySelectorAll('div[class*="_body"]'));
-      var best = null;
-      var bestLen = 0;
-      for (var c = 0; c < candidates.length; c++) {
-        var len = (candidates[c].innerText || '').length;
-        if (len > bestLen) { bestLen = len; best = candidates[c]; }
+    // 1. 'div[class*="_root"]' matches the SIDEBAR first. Reading it returned 「新会话 | 插件 | 自动化任务 | 协作群」 as if
+    //    that were the conversation.
+    // 2. The transcript is not the direct children of '_scrollBody'; it sits two levels deeper under '_viewArea'.
+    // 3. '_flowItem' is used for BOTH message bodies and one-line status chips (「已完成，用时 18秒」, 「用量 254K tok」,
+    //    「收到任务消息」). Position alone cannot separate them, so they are filtered by shape below.
+    var view = document.querySelector('div[class*="_viewArea"]');
+    var root = view !== null ? view : document.querySelector('div[class*="_scrollBody"]');
+    if (root === null) root = document.body;
+
+    // Locate the container whose children are the per-turn blocks: the element with the most text-bearing direct
+    // children inside the view area. Chosen by measurement rather than by class name, so a rebuild that renames the
+    // container does not silently break the reader.
+    var container = null;
+    var bestCount = 0;
+    var all = root.querySelectorAll('div');
+    for (var i = 0; i < all.length; i++) {
+      var kids = all[i].children;
+      var withText = 0;
+      for (var k = 0; k < kids.length; k++) {
+        if ((kids[k].innerText || '').length > 0) withText += 1;
       }
-      root = best || document.querySelector('div[class*="_centerCol"]') || document.body;
+      if (withText > bestCount) {
+        bestCount = withText;
+        container = all[i];
+      }
     }
+    if (container === null) return [];
 
     var out = [];
     var seen = {};
-    // Collect leaf-ish blocks that hold text, then drop the chrome.
-    //
-    // The earlier filter (children.length > 3) was wrong for this DOM: a rendered message is a fairly deep block with
-    // several children (paragraphs, code, tables), so the rule excluded every real message and kept only the small
-    // widgets — the output was the composer placeholder and the model name while the transcript sat right there.
-    var nodes = root.querySelectorAll('div, p, pre, li, td, th, h1, h2, h3, h4');
-    for (var i = 0; i < nodes.length; i++) {
-      var el = nodes[i];
+    var blocks = Array.from(container.children);
+    for (var b = 0; b < blocks.length; b++) {
+      var el = blocks[b];
       if (!el.offsetParent) continue;
-      // Skip a block that only wraps other blocks we will visit anyway: its text would duplicate theirs.
-      if (el.querySelector('div, p, pre, li, td, th') !== null) continue;
-      var text = (el.textContent || '').trim();
-      if (text.length < 2 || text.length > 6000) continue;
+      var text = (el.innerText || el.textContent || '').trim();
+      if (text.length < 2) continue;
       if (seen[text]) continue;
       seen[text] = true;
       out.push(text);
       if (out.length >= 300) break;
     }
+
+    // Drop the chrome that shares the block type with real messages.
+    //
+    // Each rule below was produced by looking at a live transcript, not guessed: these are exactly the entries that
+    // appeared as "messages" and made assertions unreliable.
     return out.filter(function (text) {
-      // The composer's placeholder is part of the shell, not the conversation. It sits inside the scroll body in this
-      // DOM, so it would otherwise appear as the last "message" every time.
+      // The composer's placeholder, inside the seat rather than the transcript.
       if (text.indexOf('发消息或创建任务') === 0) return false;
       if (text.indexOf('Message or create') === 0) return false;
+      // A turn's status chip: 「已完成」/「已完成，用时 18秒」/「深度求索中」. Two lines at most, no body text.
+      if (text.indexOf('已完成') === 0 && text.split(String.fromCharCode(10)).length <= 2) return false;
+      if (text.indexOf('深度求索中') === 0) return false;
+      if (text.indexOf('加载更早') === 0) return false;
+      // A token/usage line: 「用量 254K tok」/「10.5M tok·缓存命中 97%」.
+      if (text.indexOf('用量 ') === 0) return false;
+      if (text.indexOf('tok') > -1 && text.length < 60) return false;
+      // The system notice that a turn was started by an inbound task message.
+      if (text.indexOf('收到任务消息') === 0 && text.split(String.fromCharCode(10)).length <= 2) return false;
+      // A collapsed run of process records: 「执行了命令思考…运行命令…思考…」. The turn view folds the model's reasoning
+      // and its tool calls into the same block, so this arrives looking like a message.
+      //
+      // Matched as a SUBSTRING and WITHOUT a length bound: the live text is hundreds of characters (reasoning plus
+      // several tool runs), so an earlier 'length < 200' test let every one of them through. The phrases themselves are
+      // the signal — a real message does not contain 「思考」 immediately followed by another 「运行命令」.
+      var runCount = (text.match(/运行命令/g) ?? []).length;
+      if (text.indexOf('执行了命令') > -1 && (runCount >= 1 || text.indexOf('思考') > -1)) return false;
+      if (text.indexOf('调用了工具') > -1 && text.indexOf('思考') > -1) return false;
+      if (text.indexOf('Ran command') > -1 && text.indexOf('Thinking') > -1) return false;
+      // The model picker.
+      if (/^[a-z0-9._-]+-(flash|pro|chat)$/i.test(text)) return false;
+      if (/^\d+%\s*$/.test(text)) return false;
       return true;
     });
   })()`);

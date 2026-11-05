@@ -101,6 +101,12 @@ cli({
       replied: replied === true,
       settled: settled === true,
       grew: after.length - before.length,
+      // Diagnostic: what the composer actually holds NOW.
+      //
+      // It should be empty — a send consumes the text. A non-empty value here means the key sequence never reached the
+      // box (the page may be a different one than the caller expects), and that is the difference between "the model
+      // did not answer" and "nothing was ever sent".
+      composerAfter: await composerIsEmpty(page) ? '(empty)' : 'STILL-HAS-TEXT',
     }];
   },
 });
