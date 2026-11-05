@@ -34,6 +34,11 @@ import { createToolRuntime } from '../lib/shared/tool-runtime.js';
 import { createRegistry } from '../lib/core/registry.js';
 
 const LOGGER = { info() {}, warn() {}, debug() {} };
+
+/** A fresh state directory, removed by the caller. */
+function mktempHome(label) {
+  return mkdtempSync(join(tmpdir(), `dsh-a2a-tools-${label}-`));
+}
 const SESSION = 'session-test';
 
 /**
@@ -236,22 +241,44 @@ test('a2a_stream opens a stream rather than a unary call', async () => {
 // ---------------------------------------------------------------------------
 
 test('a2a_person_inbox reads the remote inbox and a2a_person_ack clears it', async () => {
-  const bridge = stubBridge({
-    answer: { data: { messages: [{ dmId: 'dm-1', kind: 'welcome', text: '欢迎' }] } },
+  // A separate Session holding ONLY the remote membership.
+  //
+  // The tool picks its membership with `identities.list({ sessionId })[0]` — the first row, whatever it is — so an
+  // instance in both a hosted and a remote group answers from whichever happens to sort first. That passed here and
+  // failed on CI, and the property is worth knowing rather than hiding: the choice of credential is arbitrary.
+  const home = mktempHome('inbox');
+  const clock = () => Date.now();
+  const config = normalizeConfig({
+    groups: { gatewayBase: 'http://gw/a2a', agentName: 'agent-test' },
+    client: { apiKey: 'k', forwardProto: 'http', timeoutMs: 1000 },
   });
-  const env = harness({ bridge });
+  const store = createGroupStore({ home, logger: LOGGER, clock, config });
+  const identities = createMembershipLedger({ home, logger: LOGGER, clock });
+  identities.upsert({
+    sessionId: 'remote-only',
+    groupId: 'g-remote-1',
+    personId: 'p-remote',
+    personKey: 'mk_remote',
+    local: false,
+    baseUrl: 'http://gw/a2a/host',
+    groupName: '远程群',
+    role: 'member',
+  });
+  const bridge = stubBridge({ answer: { data: { messages: [{ dmId: 'dm-1', kind: 'welcome', text: '欢迎' }] } } });
+  const runtime = createToolRuntime({ store, identities, bridge, config, logger: LOGGER, clock });
+
   try {
-    const inbox = await env.runtime.call('a2a_person_inbox', {}, { sessionId: env.sessionId });
+    const inbox = await runtime.call('a2a_person_inbox', {}, { sessionId: 'remote-only' });
     assert.equal(inbox.messages.length, 1);
     assert.equal(inbox.messages[0].dmId, 'dm-1');
 
-    const acked = await env.runtime.call('a2a_person_ack', { dmIds: ['dm-1'] }, { sessionId: env.sessionId });
+    const acked = await runtime.call('a2a_person_ack', { dmIds: ['dm-1'] }, { sessionId: 'remote-only' });
     assert.ok(acked !== undefined);
     // Both calls must reach the host: an inbox answered locally would show messages that were never delivered.
     assert.ok(bridge.calls.some((call) => call.input.skill === 'person/inbox'));
     assert.ok(bridge.calls.some((call) => call.input.skill === 'person/ack'));
   } finally {
-    env.cleanup();
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
