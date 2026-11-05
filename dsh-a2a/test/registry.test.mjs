@@ -10,7 +10,7 @@
  * @module dsh-a2a/test/registry
  */
 
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, writeFileSync, statSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';

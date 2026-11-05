@@ -9,7 +9,7 @@
  * @module dsh-a2a/test/profile
  */
 
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import { buildProfile, profileField } from '../lib/dsh/profile.js';

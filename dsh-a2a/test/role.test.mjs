@@ -13,7 +13,7 @@
  * @module dsh-a2a/test/role
  */
 
-import { test } from 'node:test';
+import { test, onTestFinished } from 'vitest';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -25,7 +25,7 @@ import { normalizeConfig } from '../lib/core/config.js';
 /** A store with its own temp directory, removed when the test ends. */
 function makeStore(t) {
   const home = mkdtempSync(join(tmpdir(), 'dsh-a2a-role-'));
-  t.after(() => rmSync(home, { recursive: true, force: true }));
+  onTestFinished(() => rmSync(home, { recursive: true, force: true }));
   return createGroupStore({
     home,
     logger: { info() {}, warn() {}, error() {} },

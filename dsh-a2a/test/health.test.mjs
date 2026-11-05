@@ -12,7 +12,7 @@
  *     copy a stale file and believe it succeeded.
  */
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 
 import { HEALTH_PATH } from '../lib/core/server.js';
 import { createServer } from '../lib/core/server.js';

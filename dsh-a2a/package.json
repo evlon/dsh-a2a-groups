@@ -52,8 +52,10 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/*.test.mjs",
-    "strip:invisible": "node scripts/strip-invisible.mjs client.js"
+    "test": "vitest run",
+    "strip:invisible": "node scripts/strip-invisible.mjs client.js",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "dsh": {
     "bundle": {
@@ -69,7 +71,9 @@
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
-    "typescript": "^7.0.2"
+    "@vitest/coverage-v8": "^5.1.0",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.0"
   },
   "publishConfig": {
     "access": "public"

@@ -22,7 +22,7 @@
  * @module dsh-a2a/test/integration-failure
  */
 
-import { after, test } from 'node:test';
+import { test, afterAll } from 'vitest';
 import assert from 'node:assert/strict';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
@@ -41,7 +41,7 @@ import { createToolRuntime } from '../lib/shared/tool-runtime.js';
 import { TaskStore } from '../lib/core/wire.js';
 
 const created = [];
-after(() => {
+afterAll(() => {
   for (const path of created) {
     try {
       rmSync(path, { recursive: true, force: true });

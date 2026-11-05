@@ -8,7 +8,7 @@
  * instead of the arguments we happened to pass to a mocked handler.
  */
 
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 

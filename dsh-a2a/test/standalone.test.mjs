@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 import { createServer as createHttpServer } from 'node:http';
 
 import { createHttpRegistrar, parseFlags } from '../bin/agent-groups.js';

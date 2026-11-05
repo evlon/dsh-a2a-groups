@@ -16,7 +16,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 const SOURCE = readFileSync(new URL('../lib/index.js', import.meta.url), 'utf8');

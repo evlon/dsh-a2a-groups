@@ -9,7 +9,7 @@
  * the exact `/a2a-join <link>` line, because a user's paste-and-send path
  * depends on it byte for byte.
  */
-import test from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import {

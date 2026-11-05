@@ -15,7 +15,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 
 import { buildJoinInstruction, renderJoinPage } from '../lib/core/join-page.js';
 

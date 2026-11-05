@@ -8,7 +8,7 @@
  * trace that the next attempt would mistake for success.
  */
 
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 
 import { createDeliverer } from '../lib/dsh/deliver.js';

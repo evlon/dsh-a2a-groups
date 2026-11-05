@@ -13,7 +13,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 
 import { deriveJoinUrl } from '../lib/core/derive-join-url.js';
 

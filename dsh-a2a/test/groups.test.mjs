@@ -16,7 +16,7 @@
  * Everything runs against a real temporary directory with an injected clock, so
  * expiry and retention are tested by travelling in time rather than sleeping.
  */
-import test from 'node:test';
+import { test, afterAll } from 'vitest';
 import assert from 'node:assert/strict';
 import {
   existsSync,
@@ -54,7 +54,7 @@ const isWindows = process.platform === 'win32';
 /** Paths created by a test, removed afterwards. */
 const temporaries = [];
 
-test.after(() => {
+afterAll(() => {
   for (const directory of temporaries) rmSync(directory, { recursive: true, force: true });
 });
 

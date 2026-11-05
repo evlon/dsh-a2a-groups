@@ -21,7 +21,7 @@
  * @module dsh-a2a/test/integration
  */
 
-import { after, test } from 'node:test';
+import { test, afterAll } from 'vitest';
 import assert from 'node:assert/strict';
 import { createServer as createHttpServer } from 'node:http';
 import { mkdtempSync, existsSync, readFileSync, rmSync } from 'node:fs';
@@ -44,7 +44,7 @@ import { TaskStore } from '../lib/core/wire.js';
 
 /** Temporary directories created by this file, removed when it finishes. */
 const created = [];
-after(() => {
+afterAll(() => {
   for (const path of created) {
     try {
       rmSync(path, { recursive: true, force: true });

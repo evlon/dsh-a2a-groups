@@ -7,7 +7,7 @@
  * dependent on `setTimeout` luck.
  */
 
-import { test } from 'node:test';
+import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -354,7 +354,7 @@ test('TaskStore: flush writes JSON that a fresh store restores', () => {
 
 test('TaskStore: the persisted file is not world-readable where the OS honours it', (t) => {
   if (process.platform === 'win32') {
-    t.diagnostic('POSIX file modes are not enforced on win32; skipping the 0o600 assertion');
+    console.log('POSIX file modes are not enforced on win32; skipping the 0o600 assertion');
     return;
   }
   const dir = mkdtempSync(join(tmpdir(), 'a2a-wire-mode-'));

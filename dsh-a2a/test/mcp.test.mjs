@@ -12,7 +12,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
+import { test } from 'vitest';
 
 import { createMcpHandler, MCP_PROTOCOL_VERSION } from '../lib/mcp-server.js';
 import { createMcpHandler as handlerFactory } from '../lib/mcp-server.js';
