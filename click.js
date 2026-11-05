@@ -1,0 +1,1 @@
+(function(){var bs=Array.from(document.querySelectorAll('button'));var mine=bs.filter(function(b){return b.textContent.indexOf('发票与对账')>-1;});if(mine.length===0)return 'no-button';mine[0].click();return 'clicked';})()

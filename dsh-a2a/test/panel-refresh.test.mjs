@@ -101,3 +101,27 @@ test('a refresh reports its outcome either way', () => {
   assert.match(CLIENT, /setRefreshNote\("已刷新。"\)/u);
   assert.match(CLIENT, /刷新失败/u);
 });
+
+test('the groups endpoint returns an ARRAY, not the whole snapshot', () => {
+  // THE MOST EXPENSIVE BUG OF THIS PROJECT, and it looked like success.
+  //
+  // `publishGroups()` returns `{ selfVersion, updatedAt, groups: rows, cards, unreadTotal }`. The endpoint passed
+  // that whole object under the key `groups`:
+  //
+  //     value: { groups: publishGroups(), at: clock() }        // wrong — value.groups is an OBJECT
+  //
+  // so the panel received `ok: true` with `value.groups` = a snapshot object. `replaceGroups` requires an array and
+  // refused it, so EVERY poll wrote nothing — reporting success while changing nothing. The page therefore kept the
+  // snapshot injected at load time, forever.
+  //
+  // That is why 「操作时看不到，刷新页面才看到」 survived several rounds of "fixes": each fix was real, and each was
+  // invisible, because the channel that delivers them was quietly discarding everything.
+  const index = readFileSync('lib/index.js', 'utf8');
+  const at = index.indexOf("if (name === 'groups') {");
+  assert.ok(at > -1, 'the endpoint must exist');
+  const body = index.slice(at, index.indexOf('}', index.indexOf('return { ok: true', at)));
+  // It must reach INTO the snapshot.
+  assert.match(body, /groups: snapshot\.groups/u, 'the endpoint must return the array, not the snapshot');
+  // And must not hand the snapshot itself over under that key.
+  assert.doesNotMatch(body, /groups: publishGroups\(\)/u, 'that shape is the bug');
+});

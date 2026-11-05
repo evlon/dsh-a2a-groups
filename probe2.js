@@ -1,0 +1,1 @@
+(function(){var k=Object.keys(window).filter(function(x){return x.indexOf('A2A')>-1;});var s=window[k[0]];return JSON.stringify({keys:k,groups:(s&&s.groups||[]).map(function(g){return {id:g.groupId,joined:g.joined,sess:g.sessionId}})});})()

@@ -1,0 +1,1 @@
+(function(){var d=document.documentElement.getAttribute('data-a2a-pane-session');var gk=Object.keys(window).filter(function(x){return x.indexOf('A2A_GROUPS')>-1;});var s=window[gk[0]];return JSON.stringify({paneSession:d,snapshot:(s&&s.groups||[]).map(function(g){return {sess:g.sessionId,joined:g.joined}})});})()

@@ -1,0 +1,1 @@
+(function(){var bs=Array.from(document.querySelectorAll('button'));var s=bs.filter(function(b){return b.getAttribute('aria-label')==='发送消息';});if(s.length===0)return 'no-send';s[0].click();return 'sent';})()

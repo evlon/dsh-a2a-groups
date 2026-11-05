@@ -1,0 +1,1 @@
+(function(){var out={};try{var m=document.querySelectorAll('*');out.url=location.href;var t=document.body.innerText;var i=t.indexOf('问候');out.title=i>-1?t.slice(0,20):'?';}catch(e){out.err=String(e);}return JSON.stringify(out);})()

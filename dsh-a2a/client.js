@@ -916,6 +916,13 @@ window.__ModuleLoader__.load({
 						if (disposed) return;
 						if (result !== null && result !== undefined && result.ok === true) {
 							const groups = result.value !== undefined && result.value !== null ? result.value.groups : undefined;
+							// `replaceGroups` refuses anything that is not an array, and that refusal is what made this
+							// whole fix do nothing for an hour: the endpoint reported success while handing back the
+							// wrong object, so every poll wrote nothing and the page kept its load-time snapshot. Warn
+							// rather than fail silently — an unusable body is a broken endpoint, not a quiet no-op.
+							if (!Array.isArray(groups)) {
+								warn("panel poll returned no group array", result.value);
+							}
 							replaceGroups(groups);
 						}
 						readLocal();

@@ -1,0 +1,1 @@
+(function(){var ta=document.querySelector('textarea, [contenteditable=true]');var v=ta?(ta.value||ta.textContent||''):'';return JSON.stringify({len:v.length,count:(v.match(/a2a_group_join/g)||[]).length,draft:v.slice(0,160)});})()

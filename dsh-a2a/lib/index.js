@@ -737,7 +737,15 @@ const PANEL_FEED_TAIL = 8;
             // invisible until a full page reload. Reported as "I could not see the members while operating, only after
             // refreshing", which is exactly what a poll over static data produces.
             if (name === 'groups') {
-              return { ok: true, value: { groups: publishGroups(), at: clock() } };
+              // `.groups`, not the whole snapshot.
+              //
+              // `publishGroups()` returns `{ selfVersion, updatedAt, groups: rows, cards, unreadTotal }`. Handing that
+              // object to the panel under the key `groups` made the response shape `value.groups === {…}`, so
+              // `Array.isArray` was false, `replaceGroups` refused it, and EVERY POLL SILENTLY WROTE NOTHING — while
+              // still reporting `ok: true`. The page therefore kept the snapshot injected at load time forever, which
+              // is exactly the reported behaviour: 「操作的时候看不到，重新打开刷新以后能看到」.
+              const snapshot = publishGroups();
+              return { ok: true, value: { groups: snapshot.groups, at: clock() } };
             }
             if (name === 'profile') {
               return await setPanelProfile(payload);

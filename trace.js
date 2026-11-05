@@ -1,0 +1,1 @@
+(function(){var t=window.__a2aPollTrace;var gk=Object.keys(window).filter(function(x){return x.indexOf('A2A_GROUPS')>-1;});var s=window[gk[0]];return JSON.stringify({trace:t,hasGlobal:gk.length>0,globalType:typeof s,groupCount:(s&&s.groups)?s.groups.length:'nogroups',keys:s?Object.keys(s):[]});})()
