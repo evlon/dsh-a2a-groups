@@ -1,0 +1,8 @@
+{
+  "vitest.enable": true,
+  "vitest.commandLine": "npx vitest",
+  "testing.automaticallyOpenTestResults": "neverOpen",
+  "files.associations": {
+    "*.test.mjs": "javascript"
+  }
+}

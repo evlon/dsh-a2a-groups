@@ -52,10 +52,11 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "vitest run",
-    "strip:invisible": "node scripts/strip-invisible.mjs client.js",
-    "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test": "vitest run --exclude=\"**/*.slow.mjs\"",
+    "test:all": "vitest run",
+    "test:watch": "vitest --exclude=\"**/*.slow.mjs\"",
+    "test:coverage": "node scripts/coverage.mjs --check",
+    "strip:invisible": "node scripts/strip-invisible.mjs client.js"
   },
   "dsh": {
     "bundle": {
