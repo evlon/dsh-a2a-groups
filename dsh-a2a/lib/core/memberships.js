@@ -228,6 +228,11 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       // draw people without a network call, and stamped so a stale list is visibly stale.
       members: Array.isArray(input.members) ? input.members : previous.members,
       rosterCachedAt: typeof input.rosterCachedAt === 'number' ? input.rosterCachedAt : previous.rosterCachedAt,
+      // Set when the host answered as if this membership did not exist. NOT a deletion: the credential lives
+      // only here, so dropping the row would make the group unreachable forever. Cleared by the next success.
+      unreachableAt: typeof input.unreachableAt === 'number'
+        ? input.unreachableAt
+        : (input.reachable === true ? undefined : previous.unreachableAt),
       addedAt: previous.addedAt ?? clock(),
       touchedAt: clock(),
     };
@@ -344,6 +349,9 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
         members: Array.isArray(entry.members) ? entry.members : undefined,
         rosterCachedAt: Number.isFinite(entry.rosterCachedAt) ? entry.rosterCachedAt : undefined,
         addedAt: Number.isFinite(entry.addedAt) ? entry.addedAt : 0,
+        // A stamp that only lived in memory would be lost on restart — exactly when a host is most likely to
+        // come back with its real data, which is when recovery has to work.
+        unreachableAt: Number.isFinite(entry.unreachableAt) ? entry.unreachableAt : undefined,
         touchedAt: Number.isFinite(entry.touchedAt) ? entry.touchedAt : 0,
       });
     }

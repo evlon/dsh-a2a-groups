@@ -1315,29 +1315,87 @@ function requireSession(sessionId, tool) {
    * @param {object} caller - `{ sessionId }`.
    * @returns {boolean} whether a record was removed.
    */
+  /**
+   * Clear the unreachable stamp after a call that worked.
+   *
+   * The counterpart to {@link reapStaleMembership}: that one records doubt, this one retracts it. Both exist so the
+   * ledger reflects what we currently believe rather than what once happened — a host restarted against the wrong
+   * data directory then comes back with the right one, and nobody should have to repair their own state.
+   *
+   * @param {object} args - tool arguments, for the group id.
+   * @param {object} caller - 
+ormalised, with sessionId.
+   * @returns {void}
+   */
+  function clearUnreachable(args, caller) {
+    if (identities === undefined || identities === null || typeof identities.upsert !== 'function') return;
+    const groupId = typeof args?.groupId === 'string' ? args.groupId : '';
+    const sessionId = typeof caller?.sessionId === 'string' ? caller.sessionId : '';
+    if (groupId === '' || sessionId === '') return;
+    try {
+      const existing = typeof identities.get === 'function' ? identities.get(groupId, sessionId) : undefined;
+      // Only worth a write when there is a stamp to retract; otherwise every tool call would persist the file.
+      if (existing === undefined || existing.unreachableAt === undefined) return;
+      identities.upsert({
+        sessionId,
+        groupId,
+        personId: existing.personId,
+        personKey: existing.personKey,
+        local: existing.local,
+        baseUrl: existing.baseUrl,
+        groupName: existing.groupName,
+        role: existing.role,
+        lastSeq: existing.lastSeq,
+        reachable: true,
+      });
+      if (typeof identities.flush === 'function') {
+        Promise.resolve(identities.flush()).catch(() => {});
+      }
+      logger?.info?.('a2a: cleared the unreachable mark for ' + groupId);
+    } catch {
+      // A retraction that fails leaves the stamp in place, which is the safe direction: the group stays
+      // visible-but-marked rather than silently disappearing.
+    }
+  }
+
   function reapStaleMembership(error, args, caller) {
     const code = typeof error?.code === 'string' ? error.code : '';
     // `not_member` is the host saying "this credential is not one of mine".
-    // `unknown_group` covers a group that was deleted, or a cache pointing at a host that
-    // no longer has it.
+    // `unknown_group` covers a group that was deleted, a cache pointing at a host that no longer has it, and a
+    // host briefly serving the wrong data directory.
     if (code !== 'not_member' && code !== 'unknown_group') return false;
     const groupId = typeof args?.groupId === 'string' ? args.groupId : '';
     const sessionId = typeof caller?.sessionId === 'string' ? caller.sessionId : '';
     if (groupId === '' || sessionId === '') return false;
-    if (identities === undefined || identities === null || typeof identities.remove !== 'function') return false;
+    if (identities === undefined || identities === null || typeof identities.upsert !== 'function') return false;
+
+    // NOT a deletion. `personKey` exists only in this row, so removing it would make the group unreachable
+    // forever — and the evidence is one answer from one call, which a restarted host or a misdirected gateway
+    // produces just as readily as a real removal. Stamping keeps the credential and lets the next success clear
+    // the mark, so recovery needs no user action.
     try {
-      const removed = identities.remove({ groupId, sessionId });
-      if (removed > 0) {
-        // flush() is fire-and-forget: the in-memory ledger is already correct, and making a
-        // failed disk write turn a clear error into a different one would help nobody.
-        if (typeof identities.flush === 'function') {
-          Promise.resolve(identities.flush()).catch(() => {});
-        }
-        logger?.info?.(
-          `a2a: dropped the local membership for ${groupId} after the host answered ${code}`,
-        );
+      const existing = typeof identities.get === 'function' ? identities.get(groupId, sessionId) : undefined;
+      if (existing === undefined) return false;
+      const at = Date.now();
+      identities.upsert({
+        sessionId,
+        groupId,
+        personId: existing.personId,
+        personKey: existing.personKey,
+        local: existing.local,
+        baseUrl: existing.baseUrl,
+        groupName: existing.groupName,
+        role: existing.role,
+        lastSeq: existing.lastSeq,
+        unreachableAt: at,
+      });
+      if (typeof identities.flush === 'function') {
+        Promise.resolve(identities.flush()).catch(() => {});
       }
-      return removed > 0;
+      logger?.info?.(
+        `a2a: marked the membership for ${groupId} unreachable after the host answered ${code}; the credential is kept`,
+      );
+      return true;
     } catch {
       return false;
     }
@@ -1356,13 +1414,16 @@ function requireSession(sessionId, tool) {
     if (typeof handler !== 'function') throw new Error(`unknown tool: ${name}`);
     const normalised = normaliseCaller(caller);
     try {
-      return await handler(args ?? {}, normalised);
+      const result = await handler(args ?? {}, normalised);
+      // A call that reached the group clears any earlier "unreachable" stamp, so recovery from a host restart needs
+      // no user action and no repair step. Scoped to this group: success here says nothing about the others.
+      clearUnreachable(args, normalised);
+      return result;
     } catch (error) {
-      // One funnel for "your membership is gone", so the twelve group tools do not each
-      // need their own copy of the same eight lines.
+      // One funnel for "this membership looks gone", so twelve group tools do not each carry their own copy.
       if (reapStaleMembership(error, args, normalised)) {
-        // Annotate rather than replace: the caller still needs the original code, and the
-        // new field is what a UI can use to say "you were removed" instead of "not a member".
+        // Annotate rather than replace: the caller still needs the original code, and this flag is what a UI can
+        // use to say "this group is unreachable" instead of "not a member".
         if (error !== null && typeof error === 'object') error.membershipDropped = true;
       }
       throw error;
