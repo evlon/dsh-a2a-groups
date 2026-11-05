@@ -1007,7 +1007,11 @@ function requireSession(sessionId, tool) {
       lastSeq: meta.lastSeq ?? sinceSeq,
       entries: (meta.entries ?? []).map((entry) => ({
         seq: entry.seq,
-        from: entry.from,
+        // The host produces from as { personId, displayName }, but this tool schema declares a plain
+        // string — the same shape the local branch above already collapses to. Passing the object through
+        // made every entry fail client-side validation, which is how reading group history broke for
+        // every remote group while local groups kept working.
+        from: typeof entry.from === 'string' ? entry.from : (entry.from?.displayName ?? ''),
         text: entry.text,
         at: entry.atIso ?? entry.at,
       })),
