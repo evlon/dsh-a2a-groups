@@ -467,6 +467,19 @@ const PANEL_FEED_TAIL = 8;
       // "可加入" means, and they are readable without a network call because the store is
       // local. A group hosted elsewhere is discovered through a2a_group_directory instead.
       try {
+        // Groups this machine already belongs to, from ANY Session. Work moves between directories, so a person
+        // rejoining a long-lived group usually has a ledger row already — and needing a fresh invite for it is
+        // both unnecessary and, for them, impossible without asking the owner again.
+        const knownByGroup = new Map();
+        for (const record of identities.list()) {
+          if (typeof record.groupId !== 'string' || record.groupId === '') continue;
+          const existing = knownByGroup.get(record.groupId);
+          // Most recently touched wins: if there are several, the newest is the one they last worked as.
+          if (existing === undefined || (record.touchedAt ?? 0) > (existing.touchedAt ?? 0)) {
+            knownByGroup.set(record.groupId, record);
+          }
+        }
+
         const joinedIds = new Set(rows.map((row) => row.groupId));
         for (const summary of groups.list() ?? []) {
           if (joinedIds.has(summary.groupId)) continue;
@@ -476,6 +489,10 @@ const PANEL_FEED_TAIL = 8;
             groupId: summary.groupId,
             joined: false,
             discovered: true,
+            // Whether this machine can rejoin WITHOUT a link, and who it would rejoin as.
+            knownAs: knownByGroup.get(summary.groupId)?.groupName ?? '',
+            knownSessionId: knownByGroup.get(summary.groupId)?.sessionId ?? '',
+            canRejoinAs: knownByGroup.has(summary.groupId),
             name: summary.name,
             topic: summary.topic ?? '',
             role: 'member',
@@ -491,6 +508,43 @@ const PANEL_FEED_TAIL = 8;
           lastIsSystem: false,
           });
         }
+        // Groups this machine belongs to from a Session other than the current one.
+        //
+        // Built from the LEDGER, not from `groups.list()`: a member instance hosts nothing, so its hosted list is
+        // empty — and that is exactly the case this feature exists for ("I changed working directory and need to
+        // rejoin"). The ledger knows every group this machine holds a credential for, whoever hosts it, and it
+        // caches the name and counts, which is enough to draw the row.
+        for (const [groupId, record] of knownByGroup) {
+          if (joinedIds.has(groupId)) continue;
+          rows.push({
+            id: groupId,
+            groupId,
+            joined: false,
+            discovered: true,
+            canRejoinAs: true,
+            knownAs: typeof record.groupName === 'string' ? record.groupName : '',
+            knownSessionId: typeof record.sessionId === 'string' ? record.sessionId : '',
+            name: typeof record.groupName === 'string' && record.groupName !== '' ? record.groupName : groupId,
+            topic: typeof record.groupTopic === 'string' ? record.groupTopic : '',
+            role: typeof record.role === 'string' ? record.role : 'member',
+            memberCount: Number.isFinite(record.memberCount) ? record.memberCount : 0,
+            onlineCount: Number.isFinite(record.onlineCount) ? record.onlineCount : 0,
+            unreadCount: 0,
+            lastSeq: Number.isFinite(record.lastSeq) ? record.lastSeq : 0,
+            lastTime: Number.isFinite(record.lastTime) ? record.lastTime : 0,
+            // The Session that HOLDS this credential, not an empty string.
+            //
+            // An empty `sessionId` is read by the pane as "belongs to every Session", which made these rows look
+            // already-joined and silently filtered the rejoin offer out of the one pane that needed it.
+            sessionId: typeof record.sessionId === 'string' ? record.sessionId : '',
+            local: record.local === true,
+            roster: Array.isArray(record.members) ? record.members : [],
+            rosterInSession: true,
+            lastFromName: '',
+            lastIsSystem: false,
+          });
+        }
+
       } catch (error) {
         // A discover list is a convenience; failing to build it must not blank the panel.
         info(ctx, `a2a: could not list discoverable groups (${describe(error)})`);

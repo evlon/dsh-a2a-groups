@@ -2657,6 +2657,21 @@ window.__ModuleLoader__.load({
 			// Small and quiet: the version is reference, not a status. It must be legible when looked for and
 			// invisible when not.
 			// A per-row version chip: reference information that must be legible when looked for.
+			// A one-click rejoin. Sized like a row rather than a form control: it is the primary action on this
+			// pane for anybody who is already a member.
+			rejoinButton: {
+				width: "100%",
+				textAlign: "left",
+				fontSize: "12px",
+				lineHeight: "1.5",
+				padding: "6px 10px",
+				margin: "0 0 4px 0",
+				borderRadius: "6px",
+				border: "1px solid rgba(128, 128, 128, 0.35)",
+				background: "transparent",
+				color: "inherit",
+				cursor: "pointer"
+			},
 			versionChip: {
 				fontSize: "10px",
 				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -2753,6 +2768,14 @@ window.__ModuleLoader__.load({
 			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
 			const [link, setLink] = react.useState("");
 
+			// Groups this machine already belongs to, from a working directory this conversation does not serve.
+			//
+			// These need no invitation: the identity already exists here, and rejoining reuses it. Leading with a
+			// link box would ask a member to prove themselves to a group they never left.
+			const rejoinable = (props !== null && props !== undefined && props.snapshot !== undefined && props.snapshot !== null
+				&& Array.isArray(props.snapshot.groups) ? props.snapshot.groups : [])
+				.filter(function (row) { return row !== null && row !== undefined && row.canRejoinAs === true; });
+
 			/** Hand the pasted link to the Session as a ready-to-send instruction. */
 			function joinWithLink() {
 				const trimmed = String(link ?? "").trim();
@@ -2780,7 +2803,33 @@ window.__ModuleLoader__.load({
 						"这个会话还没有加入协作群。协作群是几个同事一起干活的地方：消息、分工和上下文都留在群里，谁进来都能看到前因后果。"
 					),
 					// 2a. The common case: somebody sent me a link.
-					h("div", { style: membersLayout.unboundStep }, "① 同事给了你邀请链接"),
+					// Rejoining comes FIRST. The link box is right exactly once — the first time — and wrong for everybody
+					// who changed working directory while remaining a member. Their link is spent, and asking the owner
+					// for a new one asks them to prove themselves to a group they never left.
+					rejoinable.length === 0
+						? null
+						: h("div", null,
+							h("div", { style: membersLayout.unboundStep }, "你已经在这些群里"),
+							h("p", { style: membersLayout.unboundHint }, "这些群本机已经加入过，只是属于另一个会话（通常是上一个工作目录）。用同一个身份加入即可，不需要新邀请，群里也不会多出一个人。"),
+							rejoinable.map(function (row) {
+								return h(
+									"button",
+									{
+										key: "rejoin-" + row.id,
+										type: "button",
+										style: membersLayout.rejoinButton,
+										title: "用本机已有的身份加入，不需要邀请链接",
+										onClick: function () {
+											// An instruction rather than a direct call: joining needs a credential lookup the page does
+											// not do, and the Session is where that lives.
+											fillDraft(inputActions, "用 a2a_group_join 重新加入「" + row.name + "」（群 id " + row.id + "，我本机已经有身份，不需要邀请链接）");
+										}
+									},
+									row.name + (row.knownAs === "" ? "" : "（本机身份：" + row.knownAs + "）"),
+								);
+							}),
+						),
+					h("div", { style: membersLayout.unboundStep }, "② 或者，同事给了你邀请链接"),
 					h(
 						"p",
 						{ style: membersLayout.unboundHint },
@@ -2815,7 +2864,7 @@ window.__ModuleLoader__.load({
 						"填入会话"
 					),
 					// 2b. The other route, for somebody with no link.
-					h("div", { style: membersLayout.unboundStep }, "② 自己找群"),
+					h("div", { style: membersLayout.unboundStep }, "③ 自己找群"),
 					h(
 						"p",
 						{ style: membersLayout.unboundHint },
@@ -2826,7 +2875,7 @@ window.__ModuleLoader__.load({
 					h(
 						"p",
 						{ style: membersLayout.unboundFootnote },
-						"已经有别的会话加入过群？那个群属于那个会话，不会自动跟过来——在这里加入同一个群即可，两边看到的是同一份消息。"
+						"已经在别的会话里加入过群？那些群会出现在上面的「你已经在这些群里」，点一下就能用同一个身份进来——群里不会多出一个人，两边看到的是同一份消息。"
 					)
 				)
 			);
@@ -3142,7 +3191,7 @@ window.__ModuleLoader__.load({
 				// A real pane, not one sentence: the entry point exists, so it owes the reader the three
 				// answers a new conversation needs — what this is, how to join, and the one-step path
 				// for somebody who already has a link.
-				return h(UnboundMembersPane, { inputActions: inputActions });
+				return h(UnboundMembersPane, { inputActions: inputActions, snapshot: snapshot });
 			}
 
 			// The snapshot may be normalized (`members`) or raw (`roster`); ask once, here.
