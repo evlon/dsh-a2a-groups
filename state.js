@@ -1,0 +1,1 @@
+(function(){var t=document.body.innerText;var i=t.indexOf('\u534f\u4f5c\u7fa4');return JSON.stringify({url:location.href,title:document.title.slice(0,40),hasUnjoined:t.indexOf('\u672a\u52a0\u5165')>-1,hasRejoin:t.indexOf('\u4f60\u5df2\u7ecf\u5728\u8fd9\u4e9b\u7fa4\u91cc')>-1});})()

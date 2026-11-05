@@ -1,0 +1,1 @@
+(function(){var t=Array.from(document.querySelectorAll('[role=tab]'));var info=t.map(function(x){return x.textContent.trim();});var m=t.filter(function(x){return x.textContent.indexOf('\u7fa4\u6210\u5458')>-1;});if(m.length>0){m[0].click();return JSON.stringify({tabs:info,clicked:true});}return JSON.stringify({tabs:info,clicked:false});})()

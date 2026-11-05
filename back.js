@@ -1,0 +1,1 @@
+(function(){var e=Array.from(document.querySelectorAll('*')).filter(function(x){return x.textContent.trim()==='\u6253\u62db\u547c' && x.children.length===0;});if(e.length===0)return 'not-found';e[e.length-1].click();return 'clicked';})()

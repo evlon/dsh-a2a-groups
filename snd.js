@@ -1,0 +1,1 @@
+(function(){var bs=Array.from(document.querySelectorAll('button'));var s=bs.filter(function(b){return (b.getAttribute('aria-label')||'')==='\u53d1\u9001\u6d88\u606f';});if(s.length===0)return 'no-send';s[0].click();return 'sent';})()
