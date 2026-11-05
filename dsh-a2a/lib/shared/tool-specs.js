@@ -1010,6 +1010,39 @@ topic: ${value.topic}`),
   runtime: 'a2a_group_rename',
   },
   {
+    name: 'a2a_group_leave',
+    description:
+      'Leave a group and give up my membership. For a locally hosted group this removes my row here; for a remote group it asks the host FIRST and only then drops the local credential — so a failed call is retryable rather than final. Safe to call twice: a second call retries the host instead of claiming you already left. Never removes anybody else; that is a2a_group_remove.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          left: { type: 'boolean' },
+          pending: { type: 'boolean' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: value.left === true
+          ? 'Left the group.'
+          : (value.pending === true
+              ? 'Could not reach the host yet; the membership is marked for retry and the credential is kept.'
+              : 'You are not in that group.'),
+      }],
+    },
+    runtime: 'a2a_group_leave',
+  },
+  {
     name: 'a2a_group_archive',
     description:
       'Archive a group (or reopen it). Owner only. Archived means readable but not writable, and absent from the directory. Deliberately not a delete: a finished project conversation is worth keeping, and reopening an archive by mistake must be possible.',

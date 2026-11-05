@@ -385,10 +385,14 @@ function requireSession(sessionId, tool) {
     };
   },
   'a2a_send': async function a2a_send(args, exec) {
+    // The schema marks message required, but the schema is enforced by whichever caller builds the arguments —
+    // a model composing a call is not a validator. Without this a missing message reaches the peer as an empty
+    // body, and the failure surfaces there instead of here.
+    const message = requireText(args.message, 'message');
     const target = resolveTarget(registry, config, args.agent);
     const result = await bridge.send(target, {
       skill: args.skill ?? 'session/ask',
-      text: args.message,
+      text: message,
       data: parseJsonObject(args.data),
       timeoutMs: args.timeoutMs ?? config.client.timeoutMs,
       from: senderOf(exec).id,
@@ -1173,6 +1177,61 @@ function requireSession(sessionId, tool) {
     return { groupId, personId: meta.personId ?? targetPersonId, displayName: meta.displayName ?? targetPersonId };
   },
 
+  'a2a_group_leave': async function a2a_group_leave(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_leave');
+    const membership = identities.get(groupId, sessionId);
+    if (membership === undefined) {
+      // Nothing to withdraw: the caller has no membership row, which is the desired end state.
+      return { groupId, left: true, pending: false };
+    }
+
+    if (membership.local === true) {
+      // A hosted group: this instance `is` the authority, so the store call is the whole operation.
+      try {
+        store.leave({ groupId, member: { personId: membership.personId, personKey: membership.personKey } });
+      } catch (error) {
+        // Already absent counts as left; any other refusal is real and must reach the caller.
+        if (error?.code !== 'not_member') throw error;
+      }
+      identities.remove({ groupId, sessionId });
+      await store.flush();
+      return { groupId, left: true, pending: false };
+    }
+
+    // A remote group: the credential is the only thing that can withdraw the row on the host, so it must be used
+    // BEFORE the local copy is deleted. Deleting first is what created the unrecoverable state.
+    try {
+      await bridge.send(targetOf(membership, config), {
+        skill: 'group/leave',
+        text: `leave ${groupId}`,
+        data: {
+          groupId,
+          personId: membership.personId,
+          personKey: membership.personKey,
+        },
+        timeoutMs: config.client.timeoutMs,
+      });
+    } catch (error) {
+      const code = typeof error?.code === 'string' ? error.code : (typeof error?.data === 'string' ? error.data : '');
+      // "You are already not a member" is the outcome we wanted, however it arrives.
+      if (code !== 'not_member' && code !== 'unknown_group') {
+        // Keep the row, record the intent, and let the caller retry. This is the branch that makes leave safe.
+        identities.upsert({
+          sessionId,
+          groupId,
+          personId: membership.personId,
+          personKey: membership.personKey,
+          leavingAt: Date.now(),
+        });
+        return { groupId, left: false, pending: true };
+      }
+    }
+
+    // The host no longer has this member — or has no such group — so the local credential is spent either way.
+    identities.remove({ groupId, sessionId });
+    return { groupId, left: true, pending: false };
+  },
   'a2a_group_rename': async function a2a_group_rename(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_rename');

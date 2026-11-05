@@ -243,6 +243,11 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       unreachableAt: typeof input.unreachableAt === 'number'
         ? input.unreachableAt
         : (input.reachable === true ? undefined : previous.unreachableAt),
+      // The intent to leave, recorded when the host could not be told. Kept rather than acted on locally: the
+      // remote row still exists, and only a successful call can withdraw it. Cleared on the next success.
+      leavingAt: typeof input.leavingAt === 'number'
+        ? input.leavingAt
+        : (input.leaveCompleted === true ? undefined : previous.leavingAt),
       addedAt: previous.addedAt ?? clock(),
       touchedAt: clock(),
     };
@@ -362,6 +367,7 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
         // A stamp that only lived in memory would be lost on restart — exactly when a host is most likely to
         // come back with its real data, which is when recovery has to work.
         unreachableAt: Number.isFinite(entry.unreachableAt) ? entry.unreachableAt : undefined,
+        leavingAt: Number.isFinite(entry.leavingAt) ? entry.leavingAt : undefined,
         touchedAt: Number.isFinite(entry.touchedAt) ? entry.touchedAt : 0,
       });
     }
