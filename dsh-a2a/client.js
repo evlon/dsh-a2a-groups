@@ -471,6 +471,13 @@ window.__ModuleLoader__.load({
 				topic: pickString(firstDefined(raw, ["topic", "description"])),
 				memberCount: declaredMemberCount > 0 ? Math.round(declaredMemberCount) : members.length,
 				unreadCount: unreadCount,
+				// The group's message head.
+				//
+				// SEVENTH field lost to this exact shape of bug: the Host publishes it, this whitelist mapper does not
+				// copy it, so every reader sees `undefined`. Here the consequence was a change signature that could not
+				// notice a new message — the panel received fresh data, computed the same signature, and re-rendered
+				// nothing. Reported as 「群成员没有刷新」, which looked like a data problem and was a mapper problem.
+				lastSeq: typeof raw.lastSeq === "number" && Number.isFinite(raw.lastSeq) ? raw.lastSeq : 0,
 				lastMessage: lastMessage,
 				lastTime: lastMessage === undefined ? 0 : lastMessage.time,
 				members: members,
@@ -590,6 +597,11 @@ window.__ModuleLoader__.load({
 			let signature = String(snapshot.groups.length) + "|" + String(snapshot.unreadTotal);
 			for (const group of snapshot.groups) {
 				signature += "|" + group.id + ":" + String(group.memberCount) + ":" + String(group.unreadCount) + ":" + String(group.lastTime);
+				// `lastSeq` is the group head. It moves on every post and is what the user actually watches for —
+				// 「有新消息了吗」. It was NOT in the signature, so a new message left every field here unchanged
+				// (same member count, same lastTime when the snapshot's cached tail had not caught up) and the panel
+				// kept the old rendering: reported as "the list does not refresh while I am operating".
+				signature += ":q" + String(group.lastSeq);
 				// A refresh can change the roster WITHOUT changing any of the fields above — same member count, same
 				// last activity, different names or brand-new presence timestamps. Without these two the panel would
 				// receive the new data, compute the same signature, and stay on the old rendering.
