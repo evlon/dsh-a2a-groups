@@ -86,6 +86,9 @@ export function confirmationQuestion({ groupName, sender, text }) {
   return {
     questions: [
       {
+        // `id` is REQUIRED by the seam and is echoed back in the answer. Omitting it made `ask()` reject the request
+        // outright, which surfaced as 「没有许可（error）」 and no dialog at all — measured on a live run.
+        id: 'a2a-human-confirm',
         question: `${who} 在${where}发来：\n\n${quoted === '' ? '(没有正文)' : quoted}\n\n是否让这个会话开始处理？`,
         options: [
           { label: '允许', description: '这个会话会立即开始处理这条任务' },
@@ -134,24 +137,23 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
       const answer = await seam.ask({ ...question, agent });
       return { outcome: 'answered', answer };
     }
-    // A bounded wait uses askTimed, whose contract already maps a client-side countdown to a `pending` result — which is
-    // the same shape the Host uses when no client claims the request. Reusing it keeps one definition of "timed out".
+    // A bounded wait uses askTimed, whose contract already maps a client-side countdown to a `pending` result.
+    //
+    // DO NOT pass an abort signal here. askTimed owns the bound: it takes `timeoutMs` and returns `{ pending: true }`
+    // when the window closes. Supplying our own AbortController made every call fail immediately with `ASK_ABORTED`
+    // (measured: code ASK_ABORTED, 「ask_user_question was aborted before the user answered」, from Proxy.askTimed) —
+    // the signal was being read as "the caller has already given up", so no dialog ever appeared.
     if (typeof seam.askTimed === 'function') {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        const result = await seam.askTimed(
-          { ...question, agent, signal: controller.signal },
-          `${Date.now()}`,
-          timeoutMs,
-        );
-        if (result !== null && typeof result === 'object' && result.pending === true) {
-          return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
-        }
-        return { outcome: 'answered', answer: result };
-      } finally {
-        clearTimeout(timer);
+      const result = await seam.askTimed(
+        { ...question, agent },
+        // The call id keys the client card. Any stable string works; the seam only needs it to match the answer back.
+        `a2a-confirm-${Date.now()}`,
+        timeoutMs,
+      );
+      if (result !== null && typeof result === 'object' && result.pending === true) {
+        return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
       }
+      return { outcome: 'answered', answer: result };
     }
     // No askTimed, or an unbounded wait was requested on a seam that only offers askTimed.
     if (typeof seam.ask !== 'function') {
@@ -178,12 +180,39 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
       clearTimeout(timer);
     }
   } catch (error) {
-    return { outcome: 'error', error: String(error?.message ?? error) };
+    // Record the real reason, not just its message.
+    //
+    // A bare `String(error.message)` produced 「没有许可（error）」 with nothing to act on: the seam's rejection carries a
+    // documented code (BAD_ANSWER / CALLER_NOT_LIVE / DELEGATED_CALLER / ASK_ABORTED) and that code is the whole
+    // diagnosis. Written to a file because the Host's stderr is not where a plugin error ends up.
+    const detail = {
+      at: new Date().toISOString(),
+      message: String(error?.message ?? error),
+      code: error?.code ?? null,
+      name: error?.name ?? null,
+      stack: typeof error?.stack === 'string' ? error.stack.split('\n').slice(0, 4).join(' | ') : null,
+      questionShape: JSON.stringify(question ?? {}).slice(0, 300),
+      hasAgent: agent !== undefined && agent !== null,
+      onTimeout,
+      timeoutMs,
+    };
+    try {
+      const { writeFileSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      writeFileSync(join(tmpdir(), 'a2a-human-confirm-error.json'), JSON.stringify(detail, null, 2), 'utf8');
+    } catch {
+      // Diagnostics must never be the reason a refusal fails to happen.
+    }
+    return { outcome: 'error', error: detail.message, code: detail.code };
   }
 }
 
 /**
  * Turn an ask outcome into the decision the caller acts on.
+ *
+ * The seam's answer shape is `{ answers: [{ id, selected: string[], custom? }] }` — NOT a flat label. Reading
+ * `item.label` (as an earlier version did) always found nothing, which would have treated every approval as a denial.
  *
  * @param {object} result - what `askHuman` returned.
  * @returns {{ proceed: boolean, reason: string }} decision.
@@ -197,13 +226,24 @@ export function decideFromAnswer(result) {
     // approval would make the check meaningless exactly when it matters.
     return { proceed: false, reason: outcome ?? 'unknown' };
   }
-  const answers = result?.answer?.answers ?? result?.answer ?? [];
-  const list = Array.isArray(answers) ? answers : [answers];
+  const raw = result?.answer;
+  // Accept the documented shape, plus the two shapes a caller may reasonably hand in (a bare array, or one item).
+  const list = Array.isArray(raw?.answers)
+    ? raw.answers
+    : (Array.isArray(raw) ? raw : (raw === undefined || raw === null ? [] : [raw]));
   for (const item of list) {
-    const label = typeof item === 'string' ? item : (item?.label ?? item?.value ?? '');
-    if (String(label).indexOf('允许') > -1 || String(label).toLowerCase() === 'allow') {
-      return { proceed: true, reason: 'approved' };
+    const selected = Array.isArray(item?.selected)
+      ? item.selected
+      : (Array.isArray(item?.labels) ? item.labels : []);
+    for (const label of selected) {
+      const text = String(label ?? '');
+      if (text.indexOf('允许') > -1 || text.toLowerCase() === 'allow') {
+        return { proceed: true, reason: 'approved' };
+      }
     }
+    // A free-text answer counts too, when it is an approval.
+    const custom = String(item?.custom ?? '');
+    if (custom.indexOf('允许') > -1) return { proceed: true, reason: 'approved' };
   }
   return { proceed: false, reason: 'denied' };
 }

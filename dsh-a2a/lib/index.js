@@ -184,6 +184,9 @@ export function apply(ctx, config) {
     info(ctx, 'a2a: seams probed (userQuestions via optional inject)');
     registerTools(ctx, {
       config: settings, registry, bridge, store: groups, identities, server, sessions, logger, inbox,
+      // The tool gate needs per-Session settings, not just the profile default: a person who enabled confirmation for
+      // one conversation must have it honoured for that conversation.
+      panelSettings,
     });
   }
 

@@ -80,8 +80,19 @@ export function registerTools(ctx, deps) {
     const inbound = typeof args?.replyTo === 'number';
     if (inbound !== true) return null;
 
+    // THE SESSION'S settings, not the profile's.
+    //
+    // This looked up `deps.config` only, which holds the profile default — `enabled: false` — so a person who enabled
+    // confirmation for THIS conversation saw nothing happen: the gate read the default, decided "not enabled", and let
+    // the reply through. Measured: a woken Session answered a colleague's message with replyTo set and no prompt
+    // appeared, while session-settings.json clearly said enabled=true, trigger=always.
+    const sessionId = typeof exec?.agent?.id === 'string' ? exec.agent.id : '';
+    const profileDefault = deps.config?.groups?.humanConfirm ?? {};
+    const resolved = deps.panelSettings !== undefined && deps.panelSettings !== null && sessionId !== ''
+      ? deps.panelSettings.effectiveFor(sessionId, profileDefault)
+      : { inherit: true, effective: profileDefault };
     const verdict = confirmationPolicy({
-      settings: deps.config,
+      settings: { groups: { humanConfirm: resolved.effective } },
       post: args,
       grade: args?.replyTo === undefined ? 'notice' : 'mention',
     });

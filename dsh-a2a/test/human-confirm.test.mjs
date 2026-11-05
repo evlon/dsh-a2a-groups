@@ -123,14 +123,14 @@ test('a missing agent is unavailable, never approval', async () => {
 });
 
 test('an answered question reports approval when the human chose 允许', async () => {
-  const seam = { ask: async () => ({ answers: [{ label: '允许' }] }) };
+  const seam = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['允许'] }] }) };
   const result = await askHuman({ seam, agent: {}, question: {}, onTimeout: 'never' });
   assert.equal(result.outcome, 'answered');
   assert.deepEqual(decideFromAnswer(result), { proceed: true, reason: 'approved' });
 });
 
 test('an answered question reports denial when the human chose 拒绝', async () => {
-  const seam = { ask: async () => ({ answers: [{ label: '拒绝' }] }) };
+  const seam = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] }) };
   const result = await askHuman({ seam, agent: {}, question: {}, onTimeout: 'never' });
   assert.deepEqual(decideFromAnswer(result), { proceed: false, reason: 'denied' });
 });
@@ -175,8 +175,25 @@ test('without askTimed the wait is still bounded by the setting', async () => {
 test('onTimeout never waits indefinitely and does not report success', async () => {
   // The setting says wait forever. It must actually wait — and it must never be mistaken for approval.
   const seam = {
-    ask: async () => await new Promise((resolve) => setTimeout(() => resolve({ answers: [{ label: '允许' }] }), 30)),
+    ask: async () => await new Promise((resolve) => setTimeout(() => resolve({ answers: [{ id: 'a2a-human-confirm', selected: ['允许'] }] }), 30)),
   };
   const result = await askHuman({ seam, agent: {}, question: {}, onTimeout: 'never' });
   assert.equal(result.outcome, 'answered');
+});
+
+test('the question carries an id, which the seam requires', () => {
+  // Measured: `ask()` rejects a question without `id`, and the rejection surfaced as 「没有许可（error）」 with no
+  // dialog ever appearing — the gate looked like it worked while the human was never actually asked.
+  const built = confirmationQuestion({ groupName: 'G', sender: 'S', text: 't' });
+  assert.equal(typeof built.questions[0].id, 'string');
+  assert.ok(built.questions[0].id.length > 0);
+});
+
+test('an approval is read from `selected`, which is the shape the seam returns', () => {
+  // The seam answers `{ answers: [{ id, selected: [...] }] }`. Reading `item.label` (an earlier version) found
+  // nothing and turned every approval into a denial.
+  const approved = decideFromAnswer({ outcome: 'answered', answer: { answers: [{ id: 'q', selected: ['允许'] }] } });
+  assert.equal(approved.proceed, true);
+  const denied = decideFromAnswer({ outcome: 'answered', answer: { answers: [{ id: 'q', selected: ['拒绝'] }] } });
+  assert.equal(denied.proceed, false);
 });

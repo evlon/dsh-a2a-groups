@@ -25,7 +25,7 @@ import { normalizeConfig } from '../lib/core/config.js';
  * @param {object} options - `{ humanConfirm, seam }`.
  * @returns {object} `{ ctx, tools, calls }`.
  */
-function harness({ humanConfirm, seam } = {}) {
+function harness({ humanConfirm, seam, panelSettings } = {}) {
   const tools = new Map();
   const calls = [];
   const injections = [];
@@ -74,6 +74,7 @@ function harness({ humanConfirm, seam } = {}) {
     logger: { info: () => {}, warn: () => {}, debug: () => {} },
     inbox: undefined,
   };
+  if (panelSettings !== undefined) runtimeDeps.panelSettings = panelSettings;
   const registered = registerTools(ctx, runtimeDeps);
   return { tools, calls, registered, injections };
 }
@@ -91,7 +92,7 @@ test('the seam is resolved through inject, never by a direct property read', () 
 });
 
 test('a reading tool is never gated, even with confirmation enabled', async () => {
-  const { tools } = harness({ humanConfirm: { enabled: true, trigger: 'always' }, seam: { ask: async () => ({ answers: [{ label: '拒绝' }] }) } });
+  const { tools } = harness({ humanConfirm: { enabled: true, trigger: 'always' }, seam: { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] }) } });
   // a2a_groups does a listing; it must run without asking. It will fail for unrelated reasons (no groups), which is
   // fine — the point is that no confirmation error was raised.
   let refusal;
@@ -107,7 +108,7 @@ test('a reading tool is never gated, even with confirmation enabled', async () =
 
 test('posting a NEW message is not gated: it is the person’s own words', async () => {
   // No replyTo means this Session started the conversation, so there is nothing to approve.
-  const { tools } = harness({ humanConfirm: { enabled: true, trigger: 'always' }, seam: { ask: async () => ({ answers: [{ label: '拒绝' }] }) } });
+  const { tools } = harness({ humanConfirm: { enabled: true, trigger: 'always' }, seam: { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] }) } });
   let refusal;
   try {
     await tools.get('a2a_group_post').execute({ groupId: 'g-1', message: 'hello' }, exec());
@@ -124,7 +125,7 @@ test('replying to a colleague is gated, and a denial reaches the model as an err
   const seam = {
     ask: async (request) => {
       asked.push(request);
-      return { answers: [{ label: '拒绝' }] };
+      return { answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] };
     },
   };
   const { tools } = harness({
@@ -146,7 +147,7 @@ test('replying to a colleague is gated, and a denial reaches the model as an err
 });
 
 test('an approval lets the call through', async () => {
-  const seam = { ask: async () => ({ answers: [{ label: '允许' }] }) };
+  const seam = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['允许'] }] }) };
   const { tools } = harness({ humanConfirm: { enabled: true, trigger: 'mention', onTimeout: 'never' }, seam });
   let error;
   try {
@@ -181,4 +182,38 @@ test('a missing seam refuses rather than proceeding', async () => {
       return true;
     },
   );
+});
+
+test('the gate reads the SESSION setting, not only the profile default', () => {
+  // Measured bug: the gate consulted `deps.config` alone. That holds the profile default (`enabled: false`), so a
+  // person who turned confirmation on for one conversation got nothing — a woken Session answered a colleague's
+  // message with `replyTo` set and no prompt appeared, while session-settings.json said enabled=true,
+  // trigger=always. The per-Session store has to be consulted or the whole feature is decorative.
+  const { tools } = harness({
+    humanConfirm: { enabled: false },
+    seam: { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] }) },
+    // This Session overrode the profile.
+    panelSettings: {
+      effectiveFor: () => ({ inherit: false, effective: { enabled: true, trigger: 'mention', channel: 'question', onTimeout: 'never', timeoutMs: 5000 }, override: {} }),
+    },
+  });
+  return assert.rejects(
+    () => tools.get('a2a_group_post').execute({ groupId: 'g-1', message: '收到', replyTo: 9 }, exec()),
+    (error) => {
+      assert.equal(error.code, 'human_confirm_refused', 'the Session asked to be stopped; it must be stopped');
+      return true;
+    },
+  );
+});
+
+test('a Session that inherits follows the profile default', () => {
+  const { tools } = harness({
+    humanConfirm: { enabled: false },
+    seam: { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['允许'] }] }) },
+    panelSettings: { effectiveFor: () => ({ inherit: true, effective: { enabled: false, trigger: 'mention', channel: 'question', onTimeout: 'deny', timeoutMs: 5000 }, override: null }) },
+  });
+  // Nothing to ask, so it must not be a refusal.
+  return tools.get('a2a_group_post').execute({ groupId: 'g-1', message: '收到', replyTo: 9 }, exec())
+    .catch((error) => { assert.notEqual(error.code, 'human_confirm_refused'); })
+    .then(() => assert.ok(true));
 });
