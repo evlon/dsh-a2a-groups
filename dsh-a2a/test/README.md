@@ -1,6 +1,8 @@
 # 测试说明
 
-> 48 个文件，637 个测试。分两层：**快层 0.8 秒**，全量 **3.6 秒**。
+> 50 个文件，674 个测试。分两层：**快层 0.8 秒**，全量 **3.2 秒**。
+>
+> **改 UI 相关代码时，光跑这些测试不够** —— 见「一·五、UI 相关改动：必须用浏览器实操验证」。
 
 ---
 
@@ -14,6 +16,99 @@
 | `npm run test:coverage` | 全量 + 覆盖率门槛 | ~20s | 发版前 |
 
 **CI 跑的是 `test:all`。** 只跑快层会让慢层的回归漏到 tag 上。
+
+---
+
+## 一·五、UI 相关改动：必须用浏览器实操验证
+
+**单元测试和集成测试看不到「用户点了之后会发生什么」。** 这不是补充手段，是**唯一能发现某类 bug 的方法**。
+
+### 为什么必须这样
+
+本项目真实发生过的例子：
+
+| 现象 | 测试状态 | 真正的原因 |
+|---|---|---|
+| 接手按钮填了提示词，执行失败 | 全部绿 | 填的句子后端不接受（缺 token），**没人执行过它** |
+| 点两次按钮，输入框里两句话 | 全部绿 | `fillDraft` 是插入不是替换，**没人点过两次** |
+| 面板永远不刷新 | 全部绿 | 轮询返回 `ok:true` 但数据不是数组，**没人看过轮询的返回体** |
+| 面板空白 | 650 个测试全绿 | `versionMismatch` 用在了声明之前，**只有打开页面才会崩** |
+
+**共同点**：每一层都「对」，中间那条路是断的。读代码、跑测试都发现不了。
+
+### 怎么做
+
+用 **opencli** 驱动真实浏览器，像真人一样点击，同时观察网络与页面状态。
+
+```bash
+# 1. 绑定/打开目标实例（一个会话只开一个，用完关掉，别留空白页）
+opencli browser <session> open http://127.0.0.1:3096/
+
+# 2. 先看有哪些可点的东西——不要猜选择器
+opencli browser <session> state
+opencli browser <session> extract        # 页面文本，用来抓基线
+
+# 3. 点击
+opencli browser <session> eval "<单行表达式>"
+#    或  opencli browser <session> click <index>
+
+# 4. 立刻读回结果，做前后对比
+opencli browser <session> extract
+opencli browser <session> network        # 网络请求
+opencli browser <session> console        # 控制台错误
+opencli browser <session> screenshot out.png
+```
+
+### 三条硬性要求
+
+**1. 点击前先抓基线**
+
+```bash
+opencli browser <s> extract > before.txt      # 页面文本
+opencli browser <s> eval "JSON.stringify(window.__myState)"   # 内部状态
+```
+
+点击后再抓一次，**对比差异**。没有基线就无法判断「变了没有」。
+
+**2. 埋点，不要猜**
+
+当页面行为不符合预期时，**在客户端代码里写一行可观测的值**，而不是分析代码：
+
+```js
+// 例：确认轮询真的在跑、返回体到底是什么形状
+const trace = window.__pollTrace = window.__pollTrace ?? { calls: 0 };
+trace.calls += 1;
+trace.groupsIsArray = Array.isArray(result?.value?.groups);
+trace.groupsType = typeof result?.value?.groups;
+```
+
+然后从页面读回来：
+
+```bash
+opencli browser <s> eval "JSON.stringify(window.__pollTrace)"
+# → {"calls":30,"lastOk":true,"groupsIsArray":false}     ← 一句话说明全部
+```
+
+**这个 bug 靠读代码查了三轮都没找到，埋点一次就定位了。**
+
+埋点用完**必须删掉**再提交。
+
+**3. 不要反复刷新页面**
+
+- 刷新会丢掉用户准备好的状态，也丢掉你刚建立的基线
+- 需要干净页面时，**先在对话里说明再开**
+- 一个测试会话用一个浏览器 session，用完 `close`
+
+### 什么时候必须做浏览器验证
+
+| 判定 | 例子 |
+|---|---|
+| 改了 `client.js` 的任何渲染逻辑 | 面板、按钮、标签 |
+| 改了面板 ↔ Host 的 RPC 端点 | 返回值形状、错误处理 |
+| 加了新的用户可见交互 | 按钮、对话框、跳转 |
+| 修的是「用户报的界面问题」 | **无条件**——用户看到的现象就是唯一判据 |
+
+**不需要**的场合：纯 core 逻辑（用慢层测试更快更可靠）。
 
 ---
 
@@ -77,6 +172,8 @@ leave.test.mjs      →  tool-runtime + memberships + config
 | `feed-field-parity.test.mjs` | 字段被白名单 mapper 丢弃（**出现 5 次**） |
 | `reaping.test.slow.mjs` | 一次误判就永久删除成员凭证 |
 | `reply-to.test.slow.mjs` | 回复没有 @ 原提问者，对方永远不知道 |
+| `panel-refresh.test.mjs` | **轮询每次「成功」却什么都没写**（端点返回整个快照而非数组，客户端拒绝后静默返回） |
+| `identity-adoption.test.slow.mjs` | 接手时 skill 层丢掉 `personKey`；旧会话记录不清理，导致每个会话都显示已加入 |
 
 ### 新增回归测试的写法
 

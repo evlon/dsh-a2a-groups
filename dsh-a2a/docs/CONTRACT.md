@@ -575,10 +575,13 @@ from: { personId: entry.from.personId, displayName: entry.from.displayName },
 
 ## 4. 测试约定
 
-- 每个分支自带 `test/<area>.test.mjs`，用 `node --test`。
+- 每个分支自带 `test/<area>.test.mjs`，用 **Vitest**（`npm test` / `npm run test:all`）。
 - **不依赖真实网络/真实 DSH**：`webServer`、`sessionController`、`fs` 都用假对象注入。
-- 需要 HTTP 的地方用 `node:http` 起临时端口（`listen(0)`），不引测试框架。
+- 需要 HTTP 的地方用 `node:http` 起临时端口（`listen(0)`）。
 - 断言必须验证**行为**（投递了几次、状态怎么变、密钥有没有泄漏），不是「函数被调用了」。
+- **改 UI 相关代码必须做浏览器实操验证**（opencli 驱动真实点击 + 埋点观测），单元测试不算完成。细则见 `test/README.md` 一·五。
+
+  > 这条是血写的：面板不刷新、按钮点两次出两句、接手提示词执行失败——四个 bug 全部在「测试全绿」的状态下存在，因为**没有任何测试真的点过那个按钮**。
 
 ## 5. 写域（并行不冲突）
 
