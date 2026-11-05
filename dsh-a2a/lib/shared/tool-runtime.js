@@ -236,16 +236,29 @@ function requireLocalMembership(identities, groupId, sessionId) {
    * @param {string} sessionId - the joining Session, excluded from the search.
    * @returns {string|undefined} an existing personId for this group.
    */
-  function existingPersonFor(identities, groupId, sessionId) {
+  /**
+   * The ledger record this instance already holds for a group, from any Session.
+   *
+   * A group identity belongs to the PERSON on this machine, not to one conversation. Work moves between directories,
+   * so the same person rejoins the same long-lived group from a new Session — and must not appear twice.
+   *
+   * Returns the whole record, not just the id: rejoining without an invite token requires the credential as proof, and
+   * a bare personId is a claim, not evidence.
+   *
+   * @param {object} identities - the membership ledger.
+   * @param {string} groupId - which group.
+   * @param {string} sessionId - the joining Session, excluded from the search.
+   * @returns {object|undefined} an existing membership for this group.
+   */
+  function existingMembershipFor(identities, groupId, sessionId) {
     if (identities === undefined || identities === null || typeof identities.list !== 'function') return undefined;
     const others = identities
       .list({ groupId })
       .filter((record) => record.sessionId !== sessionId && typeof record.personId === 'string' && record.personId !== '');
     if (others.length === 0) return undefined;
-    // Most recently touched wins: if somebody has joined twice for reasons of their own, the newest is the one they
-    // were last working as.
+    // Most recently touched wins: the newest is the one they were last working as.
     others.sort((left, right) => (right.touchedAt ?? 0) - (left.touchedAt ?? 0));
-    return others[0].personId;
+    return others[0];
   }
 
 
@@ -844,7 +857,9 @@ function requireSession(sessionId, tool) {
     if (local) {
 			// Same person, new working directory: take over the identity this machine already uses for this group
 			// rather than appearing as a second 张三. The host reissues the credential, retiring the old Session's.
-			const adoptPersonId = existingPersonFor(identities, parsed.groupId, sessionId);
+			const adopt = existingMembershipFor(identities, parsed.groupId, sessionId);
+			const adoptPersonId = adopt === undefined ? undefined : adopt.personId;
+			const adoptPersonKey = adopt === undefined ? undefined : adopt.personKey;
 			const joined = store.join({
         groupId: parsed.groupId,
         token: parsed.token,
@@ -853,6 +868,9 @@ function requireSession(sessionId, tool) {
         endpoint: ownEndpointFromConfig(config),
 				// Present only when this machine already belongs to the group from another Session.
 				personId: adoptPersonId,
+				// The proof, not just the claim: the store accepts an existing-identity join only when the caller
+				// presents the credential it already holds. A bare personId would let anybody rejoin as anybody.
+				personKey: adoptPersonKey,
       });
       identities.upsert({
         sessionId,
@@ -903,7 +921,9 @@ function requireSession(sessionId, tool) {
     };
 		// Same person, new working directory. The host resolves it the same way a local join does: reuse the
 		// member row and reissue the credential, so the group keeps ONE 张三 across working directories.
-		const adoptRemotePersonId = existingPersonFor(identities, parsed.groupId, sessionId);
+		const adoptRemote = existingMembershipFor(identities, parsed.groupId, sessionId);
+		const adoptRemotePersonId = adoptRemote === undefined ? undefined : adoptRemote.personId;
+		const adoptRemotePersonKey = adoptRemote === undefined ? undefined : adoptRemote.personKey;
     const result = await bridge.send(target, {
       skill: 'group/join',
       text: `join ${parsed.groupId}`,
@@ -920,6 +940,8 @@ function requireSession(sessionId, tool) {
         endpoint: ownEndpointFromConfig(config),
 			// Omitted on a genuine first join.
 			personId: adoptRemotePersonId,
+			// Same reasoning as the local path: the host needs proof, not a claim.
+			personKey: adoptRemotePersonKey,
       },
       timeoutMs: config.client.timeoutMs,
     });

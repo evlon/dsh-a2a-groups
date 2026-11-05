@@ -225,8 +225,10 @@ test('both join paths resolve an existing identity', async () => {
   const runtime = (await import('node:fs')).readFileSync('lib/shared/tool-runtime.js', 'utf8');
   // `adoptPersonId` for a hosted group, `adoptRemotePersonId` for one reached over the wire. Two spellings because
   // the variable belongs to two different branches, but one rule.
-  assert.match(runtime, /const adoptPersonId = existingPersonFor/u);
-  assert.match(runtime, /const adoptRemotePersonId = existingPersonFor/u);
+  // The helper returns the whole LEDGER RECORD, not just the id: rejoining without an invite requires the credential
+  // as proof, and a bare personId is a claim rather than evidence.
+  assert.match(runtime, /const adopt = existingMembershipFor/u);
+  assert.match(runtime, /const adoptRemote = existingMembershipFor/u);
 });
 
 test('the host accepts a personId when joining', async () => {
@@ -272,4 +274,81 @@ test('the copy no longer says a group will not follow you', () => {
   // That sentence described the behaviour before identity adoption, and contradicts the offer rendered above it.
   assert.equal(/不会自动跟过来/u.test(client), false, 'the old wording must be gone');
   assert.match(client, /你已经在这些群里/u, 'and the offer must be named');
+});
+// ---------------------------------------------------------------------------
+// The prefill must actually run
+// ---------------------------------------------------------------------------
+
+/**
+ * REGRESSION: the rejoin button filled the composer with an instruction that could not succeed.
+ *
+ * ROOT CAUSE: `join` accepted exactly one proof of right-to-enter, an invite token. A member changing working
+ * directory has no token — theirs is spent — so the prefilled `a2a_group_join` call failed with `invite_invalid`.
+ * The panel looked right, the backend looked right, and the path between them was broken.
+ *
+ * Found by clicking the button and running what it said, which is the only way this class of bug surfaces.
+ */
+test('a member can rejoin with their own credential and no invite token', () => {
+  const env = harness();
+  try {
+    const rejoined = env.store.join({
+      groupId: env.groupId,
+      displayName: '张三',
+      // No token at all: the credential IS the proof.
+      personId: env.ownerPersonId,
+      personKey: env.ownerKey,
+    });
+
+    assert.equal(rejoined.member.personId, env.ownerPersonId, 'same person');
+    assert.equal(typeof rejoined.personKey, 'string', 'and a usable credential comes back');
+    assert.equal(env.store.snapshot({ groupId: env.groupId }).memberCount, 1, 'the group gains nobody');
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a wrong credential is refused without a token', () => {
+  const env = harness();
+  try {
+    // Accepting a bare personId, or a wrong key, would let anybody rejoin as anybody.
+    assert.throws(
+      () => env.store.join({ groupId: env.groupId, displayName: '冒充', personId: env.ownerPersonId, personKey: 'mk_wrong' }),
+      (error) => error.code === 'not_member',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a bare personId is still not enough', () => {
+  const env = harness();
+  try {
+    // The claim without the proof must fall back to requiring an invite.
+    assert.throws(
+      () => env.store.join({ groupId: env.groupId, displayName: '冒充', personId: env.ownerPersonId }),
+      (error) => error.code === 'invite_invalid' || error.code === 'not_member',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a genuine newcomer still needs an invite token', () => {
+  const env = harness();
+  try {
+    // The takeover path must not have opened a hole for people who were never members.
+    assert.throws(
+      () => env.store.join({ groupId: env.groupId, displayName: '路人' }),
+      (error) => error.code === 'invite_invalid',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('the tool sends the credential, not just the id', () => {
+  const runtime = readFileSync('lib/shared/tool-runtime.js', 'utf8');
+  // A bare personId would be a claim; the store needs the secret to accept a tokenless join.
+  assert.match(runtime, /personKey: adoptPersonKey/u);
+  assert.match(runtime, /personKey: adoptRemotePersonKey/u);
 });

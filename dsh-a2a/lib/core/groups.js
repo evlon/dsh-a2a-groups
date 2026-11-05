@@ -764,22 +764,46 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
 
     // A token is the ONLY way in by this path. There is no password to fall back
     // on, so the check is unconditional rather than gated on a join policy.
+    // Two ways in, and only ever one of them.
+    //
+    //   a NEW member presents an invite token            (unchanged)
+    //   an EXISTING member, in a new Session, presents their OWN credential
+    //
+    // The second path exists because a person who moved to a new working directory is still a member: their token
+    // is spent, and making them ask the owner for another asks the group to vouch for somebody it already knows.
+    // The proof is their own personKey — the same secret every other call carries — so `personId` alone is still a
+    // bare claim that gets nobody in.
     const token = optionalText(input.token, 2048, '邀请令牌');
-    if (token === undefined) {
+    const claimsExisting = typeof input.personId === 'string' && input.personId !== ''
+      && typeof input.personKey === 'string' && input.personKey !== '';
+    if (token === undefined && claimsExisting === false) {
       throw new GroupError('invite_invalid', '缺少邀请令牌：入群需要凭群主给你的邀请链接。');
     }
-    const usedInvite = findInvite(group, token);
-    if (usedInvite === undefined) {
-      throw new GroupError('invite_invalid', '邀请无效：这个令牌不存在，可能已被群主撤销或删除了。');
+    if (token === undefined) {
+      // Verified exactly as `resolveMember` would verify it: a wrong key must fail the way a wrong token does.
+      const existing = group.members.find((entry) => entry.personId === input.personId);
+      if (existing === undefined || !compareSecrets(sha256Hex(input.personKey), existing.keyHash)) {
+        throw new GroupError('not_member', '这个身份不在群里，或凭证已失效：需要邀请链接才能重新加入。');
+      }
     }
-    if (usedInvite.revoked === true) {
-      throw new GroupError('invite_revoked', '该邀请已被群主撤销，请让群主重新生成一个。', { inviteId: usedInvite.inviteId });
-    }
-    // `expiresAt === null` is a link minted as permanent on purpose.
-    if (usedInvite.expiresAt !== null && usedInvite.expiresAt <= at) {
-      throw new GroupError('invite_expired', '该邀请已过期，请让群主重新生成一个。', {
-        expiresAt: new Date(usedInvite.expiresAt).toISOString(),
-      });
+    // Skipped entirely for an identity takeover: there is no token to validate, and the credential was already
+    // checked above. Running `findInvite(undefined)` here is what produced 「邀请无效」 for a member who was
+    // simply in a new working directory.
+    let usedInvite;
+    if (claimsExisting === false) {
+      const usedInvite = findInvite(group, token);
+      if (usedInvite === undefined) {
+        throw new GroupError('invite_invalid', '邀请无效：这个令牌不存在，可能已被群主撤销或删除了。');
+      }
+      if (usedInvite.revoked === true) {
+        throw new GroupError('invite_revoked', '该邀请已被群主撤销，请让群主重新生成一个。', { inviteId: usedInvite.inviteId });
+      }
+      // `expiresAt === null` is a link minted as permanent on purpose.
+      if (usedInvite.expiresAt !== null && usedInvite.expiresAt <= at) {
+        throw new GroupError('invite_expired', '该邀请已过期，请让群主重新生成一个。', {
+          expiresAt: new Date(usedInvite.expiresAt).toISOString(),
+        });
+      }
     }
 
     // IDEMPOTENT PER PERSON. The caller may name an identity it already holds; if that identity is already a

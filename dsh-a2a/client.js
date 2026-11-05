@@ -2749,6 +2749,35 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 		}
 
 		/**
+		 * Put a complete instruction in the composer, REPLACING whatever is there.
+		 *
+		 * `fillDraft` inserts at the caret, which is right for "@李四 " — you may be typing something around it. It is
+		 * wrong for an instruction that is complete in itself: clicking the same button twice produced
+		 *
+		 *   用 a2a_group_join …  用 a2a_group_join …
+		 *
+		 * and the Session would then be asked to do it twice. Found by clicking the button, not by reading the code.
+		 *
+		 * @param {object|undefined} inputActions - the composer's action surface.
+		 * @param {string} text - the instruction.
+		 * @returns {boolean} whether it was written.
+		 */
+		function replaceDraft(inputActions, text) {
+			try {
+				if (inputActions === null || inputActions === undefined) return false;
+				if (typeof inputActions.setDraft === "function") {
+					inputActions.setDraft(text);
+					return true;
+				}
+				// No whole-draft setter: fall back to inserting, which at worst duplicates rather than doing nothing.
+				return fillDraft(inputActions, text);
+			} catch (error) {
+				reportUnavailable("inputActions.setDraft", error);
+				return false;
+			}
+		}
+
+		/**
 		 * Members of the group the current Session belongs to, as a right-hand panel.
 		 *
 		 * Data comes from the same snapshot the central panel reads, filtered to the group
@@ -2848,7 +2877,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 										onClick: function () {
 											// An instruction rather than a direct call: joining needs a credential lookup the page does
 											// not do, and the Session is where that lives.
-											fillDraft(inputActions, "用 a2a_group_join 重新加入「" + row.name + "」（群 id " + row.id + "，我本机已经有身份，不需要邀请链接）");
+											replaceDraft(inputActions, "用 a2a_group_join 重新加入「" + row.name + "」（群 id " + row.id + "，我本机已经有身份，不需要邀请链接）");
 										}
 									},
 									row.name + (row.knownAs === "" ? "" : "（本机身份：" + row.knownAs + "）"),
