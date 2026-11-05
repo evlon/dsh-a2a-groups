@@ -220,10 +220,16 @@ test('the version comparison is declared after the roster it reads', () => {
   assert.equal(mismatchAt > membersAt, true, 'reading `members` before it is declared blanks the pane');
 });
 
-test('the panel renders when every member reports the same version', () => {
-  // The no-mismatch path is the common one and must not throw: an empty array is the correct answer, and the
-  // warning branch is skipped entirely.
+test('every member row carries its version, including the matching ones', () => {
+  // A per-row chip rather than one summary line. The summary only appeared when somebody DIFFERED, which made
+  // "everybody agrees" and "nobody reported a version" look identical — the reader could not tell which rows had
+  // been checked. A chip on each row answers the question in one glance.
   const client = readFileSync('client.js', 'utf8');
-  assert.match(client, /if \(selfVersion === ""\) return \[\];/u, 'no known version means no comparison');
-  assert.match(client, /versionMismatch\.length === 0/u, 'and the warning is skipped rather than rendered empty');
+
+  assert.match(client, /if \(member\.clientVersion !== ""\) \{/u, 'a row without a report renders no chip');
+  assert.match(client, /"v" \+ member\.clientVersion/u);
+  // The differing case is the one that needs attention, so it is the one that gets colour.
+  assert.match(client, /color: differs \? "#d29922" : "inherit"/u);
+  // And the group-level summary is gone: once every row states the fact, a line repeating it is noise.
+  assert.equal(/versionMismatch\.length === 0/u.test(client), false, 'the summary line was replaced by per-row chips');
 });

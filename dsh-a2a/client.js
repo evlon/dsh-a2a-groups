@@ -2656,6 +2656,13 @@ window.__ModuleLoader__.load({
 			// that a cache exists before being allowed to update one.
 			// Small and quiet: the version is reference, not a status. It must be legible when looked for and
 			// invisible when not.
+			// A per-row version chip: reference information that must be legible when looked for.
+			versionChip: {
+				fontSize: "10px",
+				fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+				whiteSpace: "nowrap",
+				flex: "0 0 auto"
+			},
 			versionTag: {
 				fontSize: "11px",
 				opacity: 0.5,
@@ -3250,6 +3257,33 @@ window.__ModuleLoader__.load({
 					badges.push(h("span", { key: "me", style: membersLayout.selfTag }, "我"));
 				}
 				if (given.owner === true) badges.push(h("span", { key: "owner", style: membersLayout.roleChip }, "群主"));
+				// The build this person reported, on their own row.
+				//
+				// One small chip per row, INCLUDING the ones that match. Showing it only when different would be
+				// quieter, but then "everybody agrees" and "nobody reported" look identical, and the reader
+				// cannot tell which rows were checked at all.
+				if (member.clientVersion !== "") {
+					const differs = member.clientVersion !== selfVersion;
+					badges.push(h(
+						"span",
+						{
+							key: "ver",
+							// A different build is the one thing on this row worth noticing, so it gets colour; the
+							// matching ones recede.
+							style: Object.assign({}, membersLayout.versionChip, {
+								color: differs ? "#d29922" : "inherit",
+								opacity: differs ? 1 : 0.45
+							}),
+							title: differs
+								? "版本与你不同（你是 v" + selfVersion + "）：行为差异可能来自版本，不是群的问题"
+								: "与你相同的版本",
+						},
+						"v" + member.clientVersion
+					));
+				}
+				// The edit affordance and the read-only note. These were dropped when the version chip was
+				// inserted above them, and their absence is invisible in a screenshot — the row simply stopped
+				// offering an action it had always offered.
 				if (canEdit) badges.push(h("span", { key: "edit", style: membersLayout.editChip }, "编辑介绍"));
 				if (isSelf && !canEdit) badges.push(h("span", { key: "ro", style: membersLayout.editChip }, "只读"));
 
@@ -3451,36 +3485,6 @@ window.__ModuleLoader__.load({
 						),
 				),
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
-				// A skew is a GROUP-level fact, so it reads as one line rather than as a badge on each row.
-				// It is also the single most useful thing on this panel when something behaves inconsistently:
-				// three people on three versions will disagree about behaviour and blame the group.
-				versionMismatch.length === 0
-					? null
-					: h(
-							"p",
-							{
-								style: Object.assign({}, membersLayout.hint, { color: "#d29922", opacity: 0.95 }),
-								title: "版本不同的人看到的行为可能不一样。让所有人升级到同一版本后再对比现象。",
-							},
-							"⚠ 有 " + String(versionMismatch.length) + " 位成员的版本与你不同（"
-								+ versionMismatch.map(function (member) {
-									return member.name + " v" + member.clientVersion;
-								}).join("、")
-								+ "）。行为差异可能来自版本，不是群的问题。"
-						),
-				// Data here is a CACHE. When the last attempt to reach the host was refused, say so: a panel that
-				// draws a roster without mentioning it cannot be trusted, and "I am in this group" is the one
-				// thing a person will conclude from it.
-				Number(group.unreachableAt || 0) > 0
-					? h(
-							"p",
-							{
-								style: Object.assign({}, membersLayout.hint, { color: "#c0392b", opacity: 0.9 }),
-								title: "宿主说这个群成员凭证无效。下面的名单是本地缓存，可能已经过期。"
-							},
-							"⚠ 与宿主失联过，下面的名单是缓存。发言可能失败，可让群主重新邀请。"
-						)
-					: null,
 				// A roster can be cached and simply old. Different from unreachable: we have no evidence anything
 				// is wrong, we only know the list may have changed since it was fetched. Saying so is cheaper than
 				// being confidently out of date.
