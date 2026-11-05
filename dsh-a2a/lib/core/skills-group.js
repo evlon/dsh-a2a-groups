@@ -497,11 +497,17 @@ return {
             lastSeq: joined.group.lastSeq ?? 0,
           });
 
-          // The join is stored; now tell both sides. Best-effort — see announceJoin.
-          const announced = announceJoin(store.snapshot({ groupId, member: { personId: joined.member.personId, personKey: joined.personKey } }), {
-            personId: joined.member.personId,
-            displayName: joined.member.displayName,
-          });
+          // Announce only a GENUINE arrival.
+          //
+          // A rejoin is somebody who never left, coming back from a new working directory. Welcoming them again says
+          // "you just joined" to a person who has been in the group for months, and it woke the owner twice for one
+          // identity — reported as 「好像收到了两个群的欢迎信息」.
+          const announced = joined.rejoined === true
+            ? { notifiedOwner: false, welcomed: false }
+            : announceJoin(store.snapshot({ groupId, member: { personId: joined.member.personId, personKey: joined.personKey } }), {
+              personId: joined.member.personId,
+              displayName: joined.member.displayName,
+            });
           return {
             text: `Joined "${joined.group.name}".\n\n`
               + `groupId  : ${groupId}\n`

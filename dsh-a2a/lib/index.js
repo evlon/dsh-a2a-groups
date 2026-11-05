@@ -445,6 +445,14 @@ const PANEL_FEED_TAIL = 8;
           // no way to distinguish a live membership from one whose credential the host no longer accepts —
           // which is how a person ends up believing they are in a group they cannot actually speak in.
           unreachableAt: typeof record.unreachableAt === 'number' ? record.unreachableAt : 0,
+          // This machine holds a credential for this group, in THIS Session. The pane uses it together with the
+          // row's own `sessionId` to decide whether to offer a rejoin: a credential held by another Session means
+          // "you are still a member, you just moved", which is what the offer is for.
+          //
+          // Carried on the membership row rather than on a synthetic second row per Session — that duplication made
+          // the snapshot contain every group twice and is why the group list looked wrong.
+          canRejoinAs: true,
+          knownAs: typeof record.groupName === 'string' ? record.groupName : '',
           // The roster a Session cached earlier, via a2a_group_info / a2a_group_members.
           // Nothing is fetched at render time — this page is built before any Session
           // exists and holds no credential — so an absent roster means "not fetched yet"
@@ -508,48 +516,16 @@ const PANEL_FEED_TAIL = 8;
           lastIsSystem: false,
           });
         }
-        // Groups this machine belongs to from a Session other than the current one.
+        // NOTE: no second row per record.
         //
-        // Built from the LEDGER, not from `groups.list()`: a member instance hosts nothing, so its hosted list is
-        // empty — and that is exactly the case this feature exists for ("I changed working directory and need to
-        // rejoin"). The ledger knows every group this machine holds a credential for, whoever hosts it, and it
-        // caches the name and counts, which is enough to draw the row.
-        // One row per LEDGER RECORD, not per group.
+        // The loop above already emits one `joined: true` row PER LEDGER RECORD, carrying that record's real
+        // `sessionId`. An extra `joined: false` row per record was added here to make the rejoin offer reachable, and
+        // it made the snapshot contain the same group twice for every Session — four rows for a group held by two
+        // Sessions. The pane filters by `sessionId` and by `canRejoinAs`, both of which the first row already
+        // carries, so the extras were pure duplication.
         //
-        // `joinedIds` is keyed by group, but the question the pane asks is per SESSION: "does THIS conversation
-        // hold a credential?". A group joined from Session A is in `rows`, so skipping by group emitted nothing
-        // for Session B — and Session B is exactly who the rejoin offer is for. Rows therefore carry their
-        // holding Session and the pane decides.
-        for (const record of identities.list()) {
-          const groupId = record.groupId;
-          rows.push({
-            id: groupId,
-            groupId,
-            joined: false,
-            discovered: true,
-            canRejoinAs: true,
-            knownAs: typeof record.groupName === 'string' ? record.groupName : '',
-            knownSessionId: typeof record.sessionId === 'string' ? record.sessionId : '',
-            name: typeof record.groupName === 'string' && record.groupName !== '' ? record.groupName : groupId,
-            topic: typeof record.groupTopic === 'string' ? record.groupTopic : '',
-            role: typeof record.role === 'string' ? record.role : 'member',
-            memberCount: Number.isFinite(record.memberCount) ? record.memberCount : 0,
-            onlineCount: Number.isFinite(record.onlineCount) ? record.onlineCount : 0,
-            unreadCount: 0,
-            lastSeq: Number.isFinite(record.lastSeq) ? record.lastSeq : 0,
-            lastTime: Number.isFinite(record.lastTime) ? record.lastTime : 0,
-            // The Session that HOLDS this credential, not an empty string.
-            //
-            // An empty `sessionId` is read by the pane as "belongs to every Session", which made these rows look
-            // already-joined and silently filtered the rejoin offer out of the one pane that needed it.
-            sessionId: typeof record.sessionId === 'string' ? record.sessionId : '',
-            local: record.local === true,
-            roster: Array.isArray(record.members) ? record.members : [],
-            rosterInSession: true,
-            lastFromName: '',
-            lastIsSystem: false,
-          });
-        }
+        // The rejoin offer is therefore driven by `canRejoinAs` (set on each ledger-derived row above) plus the
+        // pane's own comparison against the current Session — not by a shadow row.
 
       } catch (error) {
         // A discover list is a convenience; failing to build it must not blank the panel.
@@ -728,6 +704,15 @@ const PANEL_FEED_TAIL = 8;
             if (name === 'ping') {
               return { ok: true, value: { pong: true, at: clock() } };
             }
+            // The current group table, recomputed on demand.
+            //
+            // `webserver/index-inject` fires once, when the page is rendered, and freezes its value into the HTML.
+            // The panel polls, but it was polling that frozen copy — so every change the panel made or observed was
+            // invisible until a full page reload. Reported as "I could not see the members while operating, only after
+            // refreshing", which is exactly what a poll over static data produces.
+            if (name === 'groups') {
+              return { ok: true, value: { groups: publishGroups(), at: clock() } };
+            }
             if (name === 'profile') {
               return await setPanelProfile(payload);
             }
@@ -813,9 +798,88 @@ const PANEL_FEED_TAIL = 8;
             timeoutMs: settings.client.timeoutMs,
           },
         )
-        .catch(() => {
-          // An unreachable host must not produce a log line every fifty seconds for every group. The next tick
-          // tries again, and presence decays on its own if the host stays down.
+        .then(async () => {
+          // A tick that worked retracts any earlier doubt.
+          if (typeof record.unreachableAt === 'number') {
+            identities.upsert({
+              sessionId: record.sessionId,
+              groupId: record.groupId,
+              personId: record.personId,
+              personKey: record.personKey,
+              reachable: true,
+            });
+            void identities.flush?.();
+          }
+          // And refresh the roster when what we hold has gone stale.
+          //
+          // `group/touch` proves the instance is alive; it does not tell us who else is. Without this the member list
+          // and every presence dot came from the last explicit `a2a_group_info`, which could be hours old — reported
+          // as "every member shows offline" while the host reported all three online. Refreshing only when already
+          // stale keeps the cost to roughly one extra call per group per staleness window, not per tick.
+          const rosterAge = Number.isFinite(record.rosterCachedAt) ? clock() - record.rosterCachedAt : Infinity;
+          if (rosterAge > ROSTER_STALE_MS) {
+            try {
+              const info = await bridge.send(
+                {
+                  baseUrl: record.baseUrl,
+                  apiKey: record.apiKey ?? settings.client.apiKey,
+                  forwardProto: settings.client.forwardProto,
+                  protocolVersion: settings.client.protocolVersion,
+                },
+                {
+                  skill: 'group/info',
+                  text: 'info',
+                  data: { groupId: record.groupId, personId: record.personId, personKey: record.personKey },
+                  timeoutMs: settings.client.timeoutMs,
+                },
+              );
+              const snapshot = info?.data;
+              if (snapshot !== undefined && snapshot !== null) {
+                identities.upsert({
+                  sessionId: record.sessionId,
+                  groupId: record.groupId,
+                  personId: record.personId,
+                  personKey: record.personKey,
+                  groupName: typeof snapshot.name === 'string' ? snapshot.name : undefined,
+                  groupTopic: typeof snapshot.topic === 'string' ? snapshot.topic : undefined,
+                  memberCount: Number.isFinite(snapshot.memberCount) ? snapshot.memberCount : undefined,
+                  onlineCount: Number.isFinite(snapshot.onlineCount) ? snapshot.onlineCount : undefined,
+                  // Same rule as everywhere else: keep the timestamp, drop the claim about now.
+                  members: Array.isArray(snapshot.members)
+                    ? snapshot.members.map((member) => ({
+                      personId: member.personId,
+                      displayName: member.displayName,
+                      role: member.role,
+                      lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+                      clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : undefined,
+                      roleAbout: member.roleAbout,
+                      tags: Array.isArray(member.tags) ? member.tags : undefined,
+                    }))
+                    : undefined,
+                  rosterCachedAt: clock(),
+                });
+                void identities.flush?.();
+              }
+            } catch {
+              // A failed refresh leaves the old roster in place and the age keeps the panel honest about it.
+            }
+          }
+        })
+        .catch((error) => {
+          // An unreachable host must not produce a log line every fifty seconds for every group. But it MUST record
+          // that the credential was refused, or the panel keeps presenting a stale roster as current — observed as
+          // "every member shows offline" while the host reported all three online: the instance's credential had been
+          // retired by a rejoin elsewhere, nothing was marked, and its cache sat at 229 minutes old with no signal.
+          const code = typeof error?.data === 'string' ? error.data : (typeof error?.code === 'string' ? error.code : '');
+          if (code !== 'not_member' && code !== 'unknown_group') return;
+          identities.upsert({
+            sessionId: record.sessionId,
+            groupId: record.groupId,
+            personId: record.personId,
+            personKey: record.personKey,
+            unreachableAt: Date.now(),
+          });
+          void identities.flush?.();
         });
     }
   };

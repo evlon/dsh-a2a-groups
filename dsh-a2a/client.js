@@ -867,19 +867,53 @@ window.__ModuleLoader__.load({
 			const [snapshot, setSnapshot] = react.useState(currentSnapshot);
 			react.useEffect(() => {
 				let signature = signatureOf(snapshot);
-				const refresh = () => {
+				let disposed = false;
+
+				/** Re-read from the injected global, which the Host may have refreshed in place. */
+				const readLocal = () => {
 					const next = currentSnapshot();
 					const nextSignature = signatureOf(next);
-					if (nextSignature === signature) return;
+					if (nextSignature === signature) return false;
 					signature = nextSignature;
 					setSnapshot(next);
+					return true;
 				};
-				const dispose = subscribeGroups(refresh);
+
+				// Pull the CURRENT table over RPC.
+				//
+				// The injected global is written once, when the page is rendered, and then never again — so polling it
+				// only ever re-read the same frozen value. The panel therefore showed nothing an operation changed
+				// until the reader reloaded the whole page, which is exactly what was reported: "I could not see the
+				// members while operating, only after refreshing".
+				//
+				// Now the poll asks the Host, writes what comes back into that global, and lets the normal render path
+				// pick it up. Falls back silently to the local read when the RPC channel is absent, so a Host without
+				// Connection keeps working exactly as before.
+				const pull = () => {
+					if (typeof panelRpcCaller !== "function") {
+						readLocal();
+						return;
+					}
+					panelRpcCaller("/a2a-panel", "groups", {}).then(function (result) {
+						if (disposed) return;
+						if (result !== null && result !== undefined && result.ok === true) {
+							const groups = result.value !== undefined && result.value !== null ? result.value.groups : undefined;
+							replaceGroups(groups);
+						}
+						readLocal();
+					}).catch(function () {
+						// A failed pull must not stop the panel: the local read still covers the common case.
+						if (!disposed) readLocal();
+					});
+				};
+
+				const dispose = subscribeGroups(readLocal);
 				let timer;
 				if (typeof window !== "undefined" && window !== null && typeof window.setInterval === "function") {
-					timer = window.setInterval(refresh, POLL_MS);
+					timer = window.setInterval(pull, POLL_MS);
 				}
 				return () => {
+					disposed = true;
 					if (typeof dispose === "function") dispose();
 					if (timer !== undefined && typeof window.clearInterval === "function") window.clearInterval(timer);
 				};
