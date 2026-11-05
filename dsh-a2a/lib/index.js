@@ -44,6 +44,7 @@ import { createRegistry } from './core/registry.js';
 import { createDeliverer } from './dsh/deliver.js';
 import { createGroupStore } from './core/groups.js';
 import { createMembershipLedger, ROSTER_STALE_MS } from './core/memberships.js';
+import { createPanelSettings } from './core/panel-settings.js';
 import { createSessions } from './dsh/sessions.js';
 import { createSkillRegistry } from './core/skills.js';
 import { buildProfile } from './dsh/profile.js';
@@ -108,6 +109,9 @@ export function apply(ctx, config) {
   // while the ledger holds what THIS INSTANCE must present (and therefore the
   // credential itself). Two different trust boundaries, two files.
   const identities = createMembershipLedger({ home, logger, clock });
+  // Per-Session overrides of the profile default. The profile holds the default; this file holds what a person changed
+  // for one conversation, plus whether that conversation still follows the default at all.
+  const panelSettings = createPanelSettings({ home, logger, clock });
   const tasks = new TaskStore({
     ttlMs: settings.server.taskTimeoutMs * 4,
     persistPath: null,
@@ -762,6 +766,48 @@ const PANEL_FEED_TAIL = 8;
               // is exactly the reported behaviour: 「操作的时候看不到，重新打开刷新以后能看到」.
               const snapshot = publishGroups();
               return { ok: true, value: { groups: snapshot.groups, at: clock() } };
+            }
+            // Human-confirmation settings for one Session.
+            //
+            // Three facts travel together because the panel needs all of them to be honest: the profile default, what
+            // this Session overrode, and which of the two is actually in force. Returning only `effective` would leave
+            // the person unable to tell whether they are looking at their own choice or the profile's.
+            if (name === 'confirm-settings') {
+              const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : '';
+              const resolved = panelSettings.effectiveFor(sessionId, settings.groups.humanConfirm);
+              return {
+                ok: true,
+                value: {
+                  sessionId,
+                  profile: { ...settings.groups.humanConfirm },
+                  inherit: resolved.inherit,
+                  override: resolved.override,
+                  effective: { ...resolved.effective },
+                },
+              };
+            }
+            if (name === 'set-confirm-settings') {
+              const sessionId = typeof payload?.sessionId === 'string' ? payload.sessionId : '';
+              if (sessionId === '') {
+                return {
+                  ok: false,
+                  error: { code: 'bad_argument', message: '需要 sessionId：人工确认是每个会话单独设置的', details: {} },
+                };
+              }
+              const resolved = panelSettings.set(
+                { sessionId, inherit: payload?.inherit === true, humanConfirm: payload?.humanConfirm },
+                settings.groups.humanConfirm,
+              );
+              return {
+                ok: true,
+                value: {
+                  sessionId,
+                  profile: { ...settings.groups.humanConfirm },
+                  inherit: resolved.inherit,
+                  override: resolved.override,
+                  effective: { ...resolved.effective },
+                },
+              };
             }
             if (name === 'profile') {
               return await setPanelProfile(payload);

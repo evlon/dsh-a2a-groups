@@ -1161,9 +1161,21 @@ test("the rows start at the top: header, group name, then the roster", () => {
 	const root = exportsObject.MembersPane({ sessionId: "sess-1", inputActions: createFakeInput() });
 	const children = root.children.filter((child) => child !== null && typeof child === "object");
 	assert.ok(children.length >= 3, "header + group name + roster");
-	// The roster is LAST, so nothing can sit above it and nothing below it can absorb slack.
-	const last = children[children.length - 1];
-	assert.equal(last.props.style.flex, "0 0 auto", "the roster is at its natural height");
+	// No section may grow.
+	//
+	// This used to assert the roster was the LAST child, which was true while it was the only thing below it. That
+	// encoded the real intent only by accident — the fault it guarded against was a growing child pushing the roster
+	// to the bottom of an empty column. Sections were added below since (invite, human confirmation), so the intent is
+	// stated directly instead of relying on position.
+	for (const child of children) {
+		const flex = child?.props?.style?.flex;
+		if (flex === undefined) continue;
+		assert.equal(
+			String(flex).startsWith("1") || String(flex).includes("1 1"),
+			false,
+			`no section may grow: flex=${String(flex)}`
+		);
+	}
 });
 
 test("所有人 is an ordinary roster row, not a banner", () => {

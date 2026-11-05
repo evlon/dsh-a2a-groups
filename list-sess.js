@@ -1,0 +1,1 @@
+(function(){var all=document.querySelectorAll('div');var out=[];for(var i=0;i<all.length;i++){var c=String(all[i].className);if(c.indexOf('sessionRow')<0)continue;out.push(String(all[i].innerText||'').split(String.fromCharCode(10))[0].trim());}return JSON.stringify(out);})()

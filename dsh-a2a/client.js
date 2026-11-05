@@ -2497,6 +2497,65 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 				paddingTop: "6px",
 				borderTop: "1px solid rgba(128, 128, 128, 0.35)"
 			},
+			// Human-confirmation settings. Same border-and-gap language as `inviteBlock`, because they are the same
+			// kind of thing: a section under the roster, not a new surface.
+			confirmBlock: {
+				display: "flex",
+				flexDirection: "column",
+				gap: "6px",
+				marginTop: "8px",
+				paddingTop: "8px",
+				borderTop: "1px solid rgba(128, 128, 128, 0.35)"
+			},
+			confirmTitle: {
+				fontSize: "12px",
+				fontWeight: 600
+			},
+			confirmRow: {
+				display: "flex",
+				alignItems: "center",
+				justifyContent: "space-between",
+				gap: "8px",
+				fontSize: "11px"
+			},
+			confirmLabel: {
+				opacity: 0.75
+			},
+			confirmSelect: {
+				fontSize: "11px",
+				padding: "2px 4px",
+				borderRadius: "4px",
+				border: "1px solid rgba(128, 128, 128, 0.45)",
+				background: "transparent",
+				color: "inherit"
+			},
+			confirmNumber: {
+				width: "64px",
+				fontSize: "11px",
+				padding: "2px 4px",
+				borderRadius: "4px",
+				border: "1px solid rgba(128, 128, 128, 0.45)",
+				background: "transparent",
+				color: "inherit"
+			},
+			// Inheriting means the profile decides. Dimmed rather than hidden, so the reader can still see what the
+			// profile value is.
+			confirmDisabled: {
+				opacity: 0.45
+			},
+			confirmWarn: {
+				fontSize: "11px",
+				lineHeight: 1.45,
+				padding: "5px 7px",
+				borderRadius: "4px",
+				background: "light-dark(#fff4e5, #3a2b17)",
+				color: "light-dark(#7a4b00, #f0c583)"
+			},
+			muted: {
+				fontSize: "11px",
+				opacity: 0.6,
+				lineHeight: 1.45
+			},
 			inviteLabel: {
 				fontSize: "11px",
 				opacity: 0.6
@@ -3211,6 +3270,176 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 			);
 		}
 
+		/**
+		 * Human-confirmation settings for this conversation.
+		 *
+		 * WHY THE INHERIT SWITCH IS FIRST AND PROMINENT
+		 *
+		 * The profile holds a default; this pane holds one conversation's exceptions. Without a visible "follow the
+		 * profile" switch, a conversation tuned once would silently stop following later changes to the default, and
+		 * six months later nobody could explain why one conversation behaves differently from all the others.
+		 *
+		 * WHY THE EFFECTIVE VALUES ARE SHOWN WHILE INHERITING
+		 *
+		 * Controls that are greyed out still need to say what is actually in force. Otherwise the reader sees dimmed
+		 * boxes and cannot tell whether confirmation is on or off right now.
+		 */
+		function ConfirmSettings(props) {
+			const sessionId = props !== null && props !== undefined ? pickString(props.sessionId) : "";
+			const [state, setState] = react.useState(null);
+			const [note, setNote] = react.useState("");
+			const [busy, setBusy] = react.useState(false);
+
+			/** Read the three facts: profile default, this Session's override, and what is in force. */
+			const reload = function () {
+				if (typeof panelRpcCaller !== "function") {
+					setNote("这个 Host 没有实时通道，无法读取设置。");
+					return Promise.resolve();
+				}
+				return panelRpcCaller("/a2a-panel", "confirm-settings", { sessionId: sessionId })
+					.then(function (result) {
+						if (result !== null && result !== undefined && result.ok === true) {
+							setState(result.value);
+						} else {
+							setNote("读取设置失败。");
+						}
+					})
+					.catch(function (error) {
+						setNote("读取设置失败：" + String(error && error.message ? error.message : error).slice(0, 80));
+					});
+			};
+
+			react.useEffect(function () { void reload(); }, [sessionId]);
+
+			/** Persist one change and adopt what the Host reports back as the truth. */
+			const save = function (patch) {
+				if (typeof panelRpcCaller !== "function") return Promise.resolve();
+				setBusy(true);
+				const current = state !== null && state !== undefined ? state : { inherit: true, effective: {} };
+				const body = {
+					sessionId: sessionId,
+					inherit: patch.inherit !== undefined ? patch.inherit === true : current.inherit !== false,
+					humanConfirm: patch.humanConfirm !== undefined ? patch.humanConfirm : current.effective,
+				};
+				return panelRpcCaller("/a2a-panel", "set-confirm-settings", body)
+					.then(function (result) {
+						if (result !== null && result !== undefined && result.ok === true) {
+							setState(result.value);
+							setNote("已保存。");
+						} else {
+							setNote("保存失败。");
+						}
+					})
+					.catch(function (error) {
+						setNote("保存失败：" + String(error && error.message ? error.message : error).slice(0, 80));
+					})
+					.then(function () { setBusy(false); });
+			};
+
+			if (state === null) {
+				return h("div", { style: membersLayout.confirmBlock }, h("div", { style: membersLayout.muted }, note === "" ? "正在读取人工确认设置…" : note));
+			}
+
+			const inherit = state.inherit !== false;
+			const effective = state.effective !== null && state.effective !== undefined ? state.effective : {};
+
+			/** One labelled row. `disabled` follows inheritance, so the controls read as one block when following. */
+			function row(label, control) {
+				return h(
+					"div",
+					{ style: membersLayout.confirmRow },
+					h("span", { style: membersLayout.confirmLabel }, label),
+					control
+				);
+			}
+
+			/** A select whose options are the closed sets the Host validates against. */
+			function select(key, options) {
+				return h(
+					"select",
+					{
+						style: Object.assign({}, membersLayout.confirmSelect, inherit ? membersLayout.confirmDisabled : {}),
+						disabled: inherit === true,
+						value: String(effective[key] === undefined ? "" : effective[key]),
+						onChange: function (event) {
+							const patch = {};
+							const next = Object.assign({}, effective);
+							next[key] = key === "timeoutMs" ? Number(event.target.value) : event.target.value;
+							patch.humanConfirm = next;
+							void save(patch);
+						}
+					},
+					options.map(function (option) { return h("option", { value: option.value, key: option.value }, option.label); })
+				);
+			}
+
+			return h(
+				"div",
+				{ style: membersLayout.confirmBlock },
+				h("div", { style: membersLayout.confirmTitle }, "人工确认"),
+				h(
+					"div",
+					{ style: membersLayout.muted },
+					"收到同事的消息时，先让你本人确认，再开始处理。"
+				),
+				row(
+					"沿用全局设置",
+					h("input", {
+						type: "checkbox",
+						checked: inherit,
+						onChange: function (event) { void save({ inherit: event.target.checked }); }
+					})
+				),
+				row("启用人工确认", h("input", {
+					type: "checkbox",
+					checked: effective.enabled === true,
+					disabled: inherit,
+					onChange: function (event) {
+						const next = Object.assign({}, effective, { enabled: event.target.checked });
+						void save({ humanConfirm: next });
+					}
+				})),
+				row("什么时候问", select("trigger", [
+					{ value: "mention", label: "被 @ 时" },
+					{ value: "always", label: "每条消息" },
+					{ value: "never", label: "从不" }
+				])),
+				row("确认方式", select("channel", [
+					{ value: "question", label: "界面提问" },
+					{ value: "im", label: "即时通讯消息（未实现）" }
+				])),
+				row("没人回答时", select("onTimeout", [
+					{ value: "deny", label: "拒绝执行" },
+					{ value: "allow", label: "仍然执行" },
+					{ value: "never", label: "一直等下去" }
+				])),
+				row("等待时长", h("input", {
+					type: "number",
+					min: 10,
+					max: 86400,
+					step: 10,
+					style: Object.assign({}, membersLayout.confirmNumber, inherit ? membersLayout.confirmDisabled : {}),
+					disabled: inherit,
+					value: String(Math.round(Number(effective.timeoutMs === undefined ? 300000 : effective.timeoutMs) / 1000)),
+					onChange: function (event) {
+						const seconds = Number(event.target.value);
+						if (!Number.isFinite(seconds) || seconds < 1) return;
+						const next = Object.assign({}, effective, { timeoutMs: Math.round(seconds * 1000) });
+						void save({ humanConfirm: next });
+					}
+				})),
+				// The warning is the point: choosing to wait forever is the one option that can leave a turn blocked while
+				// nobody is at the keyboard, and the person deserves to read that before picking it.
+				String(effective.onTimeout) === "never"
+					? h("div", { style: membersLayout.confirmWarn }, "⚠️ 选「一直等下去」后，你不在电脑前时收到需要确认的任务，那个会话会一直等待，直到你回来处理。")
+					: null,
+				String(effective.channel) === "im"
+					? h("div", { style: membersLayout.confirmWarn }, "「即时通讯消息」尚未实现。选中它时，需要确认的动作会被拒绝并说明原因，不会静默放行。")
+					: null,
+				note === "" ? null : h("div", { style: membersLayout.muted }, note)
+			);
+		}
+
 		function MembersPane(props) {
 			const snapshot = useSnapshot();
 			const inputActions = props !== null && props !== undefined ? props.inputActions : undefined;
@@ -3730,6 +3959,9 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					})
 					: null,
 				inviteRow(),
+				// Confirmation policy lives with the roster because that is where the person already is when they think
+				// about how this group should behave.
+				h(ConfirmSettings, { sessionId: sessionId }),
 				inviteOpen
 					? h(InviteDialog, {
 							candidates: invitable,
