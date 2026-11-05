@@ -192,6 +192,37 @@ function requireLocalMembership(identities, groupId, sessionId) {
 }
 
 /** A membership record for any group, hosted here or joined elsewhere, for THIS Session. */
+  /**
+   * Every distinct person identity this Session holds, with one membership per identity.
+   *
+   * A person gets a DIFFERENT personId in each group (`group/join` allocates one per membership), so a personal
+   * inbox is really "one inbox per identity". The first one is not a stand-in for the rest: an invitation addressed to
+   * the identity in group B is invisible when only group A is asked.
+   *
+   * Grouped by personId because the same identity can appear under two memberships after a rejoin, and a single
+   * message must not be counted twice.
+   *
+   * @param {object} identities - the membership ledger.
+   * @param {string} sessionId - which Session.
+   * @returns {Array<{personId: string, memberships: object[]}>} one entry per identity.
+   */
+  function identitiesOf(identities, sessionId) {
+    if (identities === undefined || identities === null || typeof identities.list !== 'function') return [];
+    const byPerson = new Map();
+    for (const membership of identities.list({ sessionId })) {
+      const personId = typeof membership.personId === 'string' ? membership.personId : '';
+      if (personId === '') continue;
+      const bucket = byPerson.get(personId);
+      if (bucket === undefined) {
+        byPerson.set(personId, { personId, memberships: [membership] });
+      } else {
+        bucket.memberships.push(membership);
+      }
+    }
+    return [...byPerson.values()];
+  }
+
+
 function requireMembership(store, identities, groupId, sessionId) {
   const record = identities.get(groupId, sessionId);
   if (record !== undefined) return record;
@@ -465,50 +496,89 @@ function requireSession(sessionId, tool) {
 
   'a2a_person_inbox': async function a2a_person_inbox(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_person_inbox');
-    // Any membership works for reaching the host: it is the credential, and the inbox is keyed by
-    // person, not by group.
-    const membership = identities.list({ sessionId })[0];
-    if (membership === undefined) {
+    const identitiesHeld = identitiesOf(identities, sessionId);
+    if (identitiesHeld.length === 0) {
       throw coded('not_member', '这个会话还没有加入任何协作群，因此没有收件箱。');
     }
-    if (membership.local === true) {
-      const messages = store.listPersonMessages({ personId: membership.personId, since: args.since });
-      return { messages };
+
+    // One inbox per identity, and every one of them counts. A local membership is answered from this process; a
+    // remote one is asked over the wire. Both are this person's mail.
+    const collected = [];
+    for (const held of identitiesHeld) {
+      const localMembership = held.memberships.find((membership) => membership.local === true);
+      if (localMembership !== undefined) {
+        for (const message of store.listPersonMessages({ personId: held.personId, since: args.since })) {
+          collected.push(message);
+        }
+        continue;
+      }
+      const remoteMembership = held.memberships[0];
+      try {
+        const result = await bridge.send(targetOf(remoteMembership, config), {
+          skill: 'person/inbox',
+          text: 'inbox',
+          data: { personId: held.personId, since: args.since },
+          timeoutMs: config.client.timeoutMs,
+        });
+        const meta = result.data ?? {};
+        if (Array.isArray(meta.messages)) collected.push(...meta.messages);
+      } catch {
+        // One unreachable host must not hide the mail held by the others; the caller sees what could be read.
+      }
     }
-    const result = await bridge.send(targetOf(membership, config), {
-      skill: 'person/inbox',
-      text: 'inbox',
-      data: { personId: membership.personId, since: args.since },
-      timeoutMs: config.client.timeoutMs,
-    });
-    const meta = result.data ?? {};
-    return { messages: Array.isArray(meta.messages) ? meta.messages : [] };
+
+    // Newest first and de-duplicated by dmId: the same identity reached through two memberships must not report the
+    // same message twice.
+    const seen = new Set();
+    const messages = [];
+    for (const message of collected.sort((left, right) => (right.at ?? 0) - (left.at ?? 0))) {
+      const id = typeof message.dmId === 'string' ? message.dmId : '';
+      if (id !== '' && seen.has(id)) continue;
+      if (id !== '') seen.add(id);
+      messages.push(message);
+    }
+    return { messages };
   },
 
   'a2a_person_ack': async function a2a_person_ack(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_person_ack');
     const dmIds = Array.isArray(args.dmIds) ? args.dmIds.filter((id) => typeof id === 'string') : [];
     if (dmIds.length === 0) throw coded('bad_argument', 'Nothing to confirm: dmIds is empty.');
-    const membership = identities.list({ sessionId })[0];
-    if (membership === undefined) {
+
+    const identitiesHeld = identitiesOf(identities, sessionId);
+    if (identitiesHeld.length === 0) {
       throw coded('not_member', '这个会话还没有加入任何协作群，因此没有收件箱。');
     }
-    if (membership.local === true) {
-      const acked = store.ackPersonMessages({ personId: membership.personId, dmIds });
-      await store.flush();
-      return acked;
+
+    // Confirm on EVERY identity, because there is no way to know which one the message was addressed to: the caller
+    // has a list of ids, not a host. Sending the ack to one side and stopping would leave the message pending
+    // elsewhere, and the sender would never learn it arrived.
+    let acked = 0;
+    const unknown = [];
+    for (const held of identitiesHeld) {
+      const localMembership = held.memberships.find((membership) => membership.local === true);
+      if (localMembership !== undefined) {
+        const result = store.ackPersonMessages({ personId: held.personId, dmIds });
+        acked += Number.isFinite(result?.acked) ? result.acked : 0;
+        if (Array.isArray(result?.unknown)) unknown.push(...result.unknown);
+        continue;
+      }
+      try {
+        const result = await bridge.send(targetOf(held.memberships[0], config), {
+          skill: 'person/ack',
+          text: 'ack',
+          data: { personId: held.personId, dmIds },
+          timeoutMs: config.client.timeoutMs,
+        });
+        const meta = result.data ?? {};
+        acked += Number.isFinite(meta.acked) ? meta.acked : 0;
+        if (Array.isArray(meta.unknown)) unknown.push(...meta.unknown);
+      } catch {
+        // A host that cannot be reached simply does not confirm; the message stays pending there, which is correct.
+      }
     }
-    const result = await bridge.send(targetOf(membership, config), {
-      skill: 'person/ack',
-      text: 'ack',
-      data: { personId: membership.personId, dmIds },
-      timeoutMs: config.client.timeoutMs,
-    });
-    const meta = result.data ?? {};
-    return {
-      acked: Number.isFinite(meta.acked) ? meta.acked : 0,
-      unknown: Array.isArray(meta.unknown) ? meta.unknown : [],
-    };
+    await store.flush();
+    return { acked, unknown: [...new Set(unknown)] };
   },
 
   'a2a_pending': async function a2a_pending(args, exec) {
@@ -516,34 +586,44 @@ function requireSession(sessionId, tool) {
     const includeGroups = args.includeGroups !== false;
 
     // Direct messages first: an invitation blocks progress, a group message does not.
+    // Direct messages first: an invitation blocks progress, a group message does not.
+    //
+    // Every identity, not the first one: a person has a different personId per group, so an invitation waiting on
+    // another host is invisible when only one membership is consulted — and an invitation is the message kind that
+    // actually stops somebody.
     const directMessages = [];
-    const memberships = identities.list({ sessionId });
-    if (memberships.length > 0) {
-      const first = memberships[0];
+    const seenIds = new Set();
+    for (const held of identitiesOf(identities, sessionId)) {
+      const localMembership = held.memberships.find((membership) => membership.local === true);
       try {
-        if (first.local === true) {
-          for (const message of store.listPersonMessages({ personId: first.personId })) {
+        if (localMembership !== undefined) {
+          for (const message of store.listPersonMessages({ personId: held.personId })) {
             // Only unconfirmed ones count as pending: a message already acked has been delivered and read.
             if (message.deliveredAt !== undefined) continue;
+            const id = typeof message.dmId === 'string' ? message.dmId : '';
+            if (id !== '' && seenIds.has(id)) continue;
+            if (id !== '') seenIds.add(id);
             directMessages.push({ dmId: message.dmId, kind: message.kind, text: message.text });
           }
-        } else {
-          const result = await bridge.send(targetOf(first, config), {
-            skill: 'person/inbox',
-            text: 'inbox',
-            data: { personId: first.personId },
-            timeoutMs: config.client.timeoutMs,
-          });
-          const list = Array.isArray(result?.data?.messages) ? result.data.messages : [];
-          for (const message of list) {
-            if (message.deliveredAt !== undefined) continue;
-            directMessages.push({ dmId: message.dmId, kind: message.kind, text: message.text });
-          }
+          continue;
+        }
+        const result = await bridge.send(targetOf(held.memberships[0], config), {
+          skill: 'person/inbox',
+          text: 'inbox',
+          data: { personId: held.personId },
+          timeoutMs: config.client.timeoutMs,
+        });
+        const list = Array.isArray(result?.data?.messages) ? result.data.messages : [];
+        for (const message of list) {
+          if (message.deliveredAt !== undefined) continue;
+          const id = typeof message.dmId === 'string' ? message.dmId : '';
+          if (id !== '' && seenIds.has(id)) continue;
+          if (id !== '') seenIds.add(id);
+          directMessages.push({ dmId: message.dmId, kind: message.kind, text: message.text });
         }
       } catch {
-        // An unreachable host must not make this probe throw: the whole point is that it is cheap and safe to
-        // call often. An empty result is honest — it says nothing about pending count, and the caller can
-        // still act on groups.
+        // An unreachable host must not make this probe throw: the whole point is that it is cheap and safe to call
+        // often. An empty contribution is honest — the caller still gets what the other hosts reported.
       }
     }
 
@@ -551,7 +631,7 @@ function requireSession(sessionId, tool) {
     // is already how the panel counts it — computed the same way here so the two agree.
     const groups = [];
     if (includeGroups === true) {
-      for (const record of memberships) {
+    for (const record of identities.list({ sessionId })) {
         if (record.local !== true) {
           // A remote group's head is only known after a read; without one there is no honest unread count, and
           // inventing zero would hide new messages. Reported as unknown rather than as zero.
