@@ -1,0 +1,1 @@
+(function(){var btns=Array.from(document.querySelectorAll('button'));var hit=btns.filter(function(b){return b.textContent.trim()==='\u5141\u8bb8';});if(hit.length===0)return JSON.stringify({found:0,buttons:btns.map(function(b){return b.textContent.trim().slice(0,8)}).filter(function(t){return t.length>0}).slice(0,12)});hit[0].click();return JSON.stringify({clicked:true});})()
