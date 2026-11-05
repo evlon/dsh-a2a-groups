@@ -27,22 +27,33 @@ ask_user_question 那次调用的结果是：工具已记录，但结果未持�
 
 ### 机制（读 DSH 源码确认）
 
+**根因在 UI 侧的第一步判断**：
+
 ```js
-// dsh-user-questions/lib/index.js
-schedule() {
-  if (this.signal.aborted || this.claims.size > 0) return;   // 有 Client 认领时不 arm Host 定时器
-  this.timer = setTimeout(() => this.close(this.timeout), ...);
-}
+// dsh-client-ui-user-questions/lib/client.js:1762
+async function answerQuestion(ctx, owner, request, next, cards) {
+  const sessionId = ctx.sessions.scopeOf(owner);
+  if (sessionId === void 0) return next();      // ← 认不出这个 turn 属于哪个会话，就不应答
+  ...
+  claim = ctx.remote.userQuestions.attachWait(sessionId, callId, claimSignal);
 ```
 
-`ask()` 通过 `ctx.waterfall('user-questions/request')` 派发。UI 组件的 answerer 挂在这个 waterfall 上。
+`scopeOf(owner)` 认不出「群消息唤醒的那个 turn 属于哪个会话」时，直接 `next()` —— 这个客户端不接这个请求。
+没有 answerer 接，`ask()` 抛 `NO_PROVIDER`，`askTimed` 随后等 Host 定时器超时，返回 `{pending:true}`。
 
-**群消息唤醒的 turn 没有 Client 认领该请求**，于是：
-- UI 不渲染卡片
-- Host 定时器正常触发（`claims.size === 0`）
-- 最终返回 `{pending: true}`
+**这解释了全部观察**：
 
-所以「超时」是正常工作的，只是「展示」不可用。
+- 弹框不出现（client 第一步就返回了）
+- 超时正常触发（`claims.size === 0`，Host 定时器 arm 了）
+- 内置的 `ask_user_question` 在同样场景下也失效（同一个 `scopeOf` 判断）
+
+补充证据：群唤醒 turn 里调用 `ask_user_question` 时，界面显示「向用户提出了问题」+「任务已停止」——
+说明**事件到达了**，但卡片没有渲染。这是 projection 层记录了意图，UI 层没有承接。
+
+另外查过一个分支：`agent === void 0` 时 `ask()` 走全局 waterfall（`this.ctx.waterfall('user-questions/request', ...)`
+而不是 `scopeTarget(agent, agent)`）。实测**同样收不到**，所以不是 scope 选择的问题，是 `scopeOf` 认不出 owner。
+
+（那个实验开关已从代码中移除——用环境变量改变安全行为的开关不该留在产品里。）
 
 ---
 
