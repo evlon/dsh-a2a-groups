@@ -102,24 +102,28 @@ test('the card is split into header, one-line question, and quoted draft', () =>
   assert.match(detail, /^> /m, 'the draft must be a Markdown quote');
 });
 
-test('the card offers three distinct choices, each stating what the colleague sees', () => {
-  // Silence is the outcome a sender cannot interpret. Every option therefore says what the COLLEAGUE will
-  // experience, and the two non-approvals promise a notice rather than nothing.
+test('each choice states the consequence ONCE, in the words that will be sent', () => {
+  // Measured on a live card: detail carried a copy of the three choices AND the option rows printed them again,
+  // in slightly different words. The reader saw each choice twice and had to check whether the lists agreed.
+  // The rows are the real control, so the consequences live there.
   const built = confirmationQuestion({ groupName: '发票与对账平台', draft: 'x', replyingTo: 3, sender: '张三' });
-  const labels = built.questions[0].options.map((o) => o.label);
-  assert.deepEqual(labels, ['允许', '稍后处理', '拒绝'], 'approve first, then the two ways of not replying');
+  const [q] = built.questions;
 
-  const detail = built.questions[0].detail;
-  assert.match(detail, /\*\*允许\*\*/);
-  assert.match(detail, /\*\*稍后处理\*\*/);
-  assert.match(detail, /\*\*拒绝\*\*/);
-  // Both non-approvals tell the sender something.
-  assert.equal((detail.match(/告诉/g) ?? []).length, 2, 'defer and refuse each notify the colleague');
+  // detail no longer repeats the choices.
+  assert.ok(q.detail.includes('**允许**') === false, 'detail must not restate the options');
+  assert.ok(q.detail.includes('稍后处理') === false, 'detail must not restate the options');
+  // What it must keep: who asked, which message, and the draft.
+  assert.match(q.detail, /张三/);
+  assert.match(q.detail, /#3/);
+  assert.match(q.detail, /^> x/m);
 
-  const [allow, defer, refuse] = built.questions[0].options;
-  assert.match(allow.description, /发到/);
-  assert.match(defer.description, /让对方知道/);
-  assert.match(refuse.description, /让对方知道/);
+  const labels = q.options.map((o) => o.label);
+  assert.deepEqual(labels, ['允许', '稍后处理', '拒绝']);
+  // Consequence in the sender's actual words, not an abstraction like 「让对方知道」.
+  const [allow, defer, refuse] = q.options;
+  assert.match(allow.description, /群里出现/);
+  assert.match(defer.description, /我晚点回复/);
+  assert.match(refuse.description, /这次不回/);
 });
 
 test('the thread number appears when the reply answers a specific message', () => {
@@ -156,8 +160,8 @@ test('an unknown group is described without inventing a name', () => {
   // Never fabricate 「协作群」 as if it were the real title: the reader would think they know where this lands.
   const built = confirmationQuestion({ groupName: '', draft: 'x', replyingTo: 1 });
   assert.equal(built.questions[0].header, '协作群');
-  // The group is named in `detail` (where there is room), not in the title.
-  assert.match(built.questions[0].detail, /群里/);
+  // With no group name the option still has to say where the reply lands, without inventing a name.
+  assert.match(built.questions[0].options[0].description, /群里/);
 });
 
 // ---------------------------------------------------------------------------

@@ -140,8 +140,6 @@ export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
     ? '_（这条回复没有正文）_'
     : clipped.split('\n').map((line) => `> ${line}`).join('\n');
 
-  const wherePhrase = where === '' ? '群里' : `「${where}」`;
-
   return {
     questions: [
       {
@@ -164,24 +162,28 @@ export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
         // decision from a reply nobody in particular asked for. The seq stays in `detail` — the reader does not choose
         // differently between #286 and #287, and a seq in the title costs a line for nothing.
         question: who === '' ? '发出这条回复？' : `回复 ${who}？`,
+        // The draft, and only the draft.
+        //
+        // This used to carry a second copy of the three choices as well — 「**允许** → 发到…」 and so on — while the seam
+        // printed the same three again as option rows directly underneath. Measured on a live card: the reader saw each
+        // choice twice, in slightly different words (「告诉张三「我晚点回复」」 above, 「让对方知道你看过了」 below), and had
+        // to work out whether the two lists were the same list. They were.
+        //
+        // The option rows are the real control, so the consequences belong THERE, once. `detail` keeps what the rows
+        // cannot show: who asked, which message, and the exact text that would be sent.
         detail: [
-          // Who and which message, first, because that is what the reader looks for.
           who === '' && thread === undefined ? '' : [who === '' ? '' : `**${who}**`, thread === undefined ? '' : `#${thread}`].filter(Boolean).join(' · '),
           quoted,
-          '---',
-          // Every option says what the COLLEAGUE will experience, not just what this Session will do. Silence is the one
-          // outcome a sender cannot interpret: 「没回」 reads as ignored, slow, or broken, and none of those is what the
-          // person actually chose.
-          `**允许** → 发到${wherePhrase}`,
-          `**稍后处理** → 先不发，告诉${who === '' ? '对方' : who}「我晚点回复」`,
-          `**拒绝** → 不发，告诉${who === '' ? '对方' : who}「这次不回」`,
         ].filter((part) => part !== '').join('\n\n'),
+        // Each description states what the COLLEAGUE will receive, in the words that will actually be sent. "Allows it"
+        // and "denies it" mean nothing to the reader unless they know what the other person ends up seeing — and an
+        // abstract 「让对方知道」 is worse than the sentence itself, because the reader cannot tell how blunt it sounds.
         options: [
-          { label: '允许', description: `现在回复，发到${wherePhrase}` },
+          { label: '允许', description: `现在回复，群里出现这段内容` },
           // Separate from 拒绝 on purpose. 「我看到了，但晚点再说」 and 「这条我不打算回」 are different answers, and in a
           // group they lead to different follow-ups. Collapsing them forces the person to pick the wrong one.
-          { label: '稍后处理', description: '先不回，但让对方知道你看过了' },
-          { label: '拒绝', description: '不回，也让对方知道' },
+          { label: '稍后处理', description: `先不发，改成告诉${who === '' ? '对方' : who}「我晚点回复」` },
+          { label: '拒绝', description: `不发，改成告诉${who === '' ? '对方' : who}「这次不回」` },
         ],
       },
     ],
