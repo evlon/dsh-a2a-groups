@@ -316,6 +316,93 @@ const PANEL_FEED_TAIL = 8;
           );
         }
       }
+      // Re-read the roster so the panel's cached ledger reflects the save immediately.
+      //
+      // A profile write used to land on the host while the local ledger kept its old roster, so the panel showed the
+      // pre-save name/headline until something else happened to refresh it. The read below closes that loop: the same
+      // `group/info` the tool already uses, written back into the ledger the panel renders from. Best-effort — a
+      // failed read-back must not turn a successful save into a reported failure, because the save DID land.
+      try {
+        if (record.local === true) {
+          const info = groups.snapshot({ groupId, member: { personId: record.personId, personKey: record.personKey } });
+          if (info !== undefined && info !== null) {
+            identities.upsert({
+              sessionId: record.sessionId,
+              groupId,
+              personId: record.personId,
+              personKey: record.personKey,
+              groupName: typeof info.name === 'string' ? info.name : undefined,
+              groupTopic: typeof info.topic === 'string' ? info.topic : undefined,
+              memberCount: Number.isFinite(info.memberCount) ? info.memberCount : undefined,
+              onlineCount: Number.isFinite(info.onlineCount) ? info.onlineCount : undefined,
+              isOwner: info.owner?.personId === record.personId,
+              members: Array.isArray(info.members)
+                ? info.members.map((member) => ({
+                    personId: member.personId,
+                    displayName: member.displayName,
+                    role: member.role,
+                    lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+                    clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
+                    roleAbout: member.roleAbout,
+                    headline: typeof member.headline === 'string' ? member.headline : '',
+                    tags: Array.isArray(member.tags) ? member.tags : undefined,
+                  }))
+                : undefined,
+              rosterCachedAt: clock(),
+              reachable: true,
+            });
+            await identities.flush();
+          }
+        } else {
+          const result = await bridge.send(
+            {
+              baseUrl: record.baseUrl,
+              apiKey: record.apiKey ?? config.client.apiKey,
+              forwardProto: config.client.forwardProto,
+              protocolVersion: config.client.protocolVersion,
+            },
+            {
+              skill: 'group/info',
+              text: 'info after save',
+              data: { groupId, personId: record.personId, personKey: record.personKey },
+              timeoutMs: config.client.timeoutMs,
+            },
+          );
+          const info = result?.data;
+          if (info !== undefined && info !== null) {
+            identities.upsert({
+              sessionId: record.sessionId,
+              groupId,
+              personId: record.personId,
+              personKey: record.personKey,
+              groupName: typeof info.name === 'string' ? info.name : undefined,
+              groupTopic: typeof info.topic === 'string' ? info.topic : undefined,
+              memberCount: Number.isFinite(info.memberCount) ? info.memberCount : undefined,
+              onlineCount: Number.isFinite(info.onlineCount) ? info.onlineCount : undefined,
+              isOwner: info.owner?.personId === record.personId,
+              members: Array.isArray(info.members)
+                ? info.members.map((member) => ({
+                    personId: member.personId,
+                    displayName: member.displayName,
+                    role: member.role,
+                    lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+                    clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
+                    roleAbout: member.roleAbout,
+                    headline: typeof member.headline === 'string' ? member.headline : '',
+                    tags: Array.isArray(member.tags) ? member.tags : undefined,
+                  }))
+                : undefined,
+              rosterCachedAt: clock(),
+              reachable: true,
+            });
+            await identities.flush();
+          }
+        }
+      } catch (error) {
+        // A read-back failure is a refresh problem, not a save problem. Log it, keep the save's success.
+        info(ctx, `a2a: post-save roster refresh failed for ${groupId} (${describe(error)})`);
+      }
+
       // `changed: false` means the value was already that — worth telling the reader, because the feed
       // no longer announces no-op saves and "已保存" for an unchanged value would be misleading.
       return { ok: true, value: { saved: true, changed: saved?.changed !== false, groupId, at: clock() } };
