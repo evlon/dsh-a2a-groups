@@ -104,6 +104,17 @@ test('the instruction omits the optional server block', () => {
   assert.ok(!text.includes('serverToken'), 'and must not mention the server token');
 });
 
+test('the instruction starts with installing the plugin, before any config', () => {
+  const text = buildJoinInstruction(VALUES);
+  // Configuring cordis.patch.yml for a package that is not installed resolves to nothing — the "cannot resolve
+  // profile bundle" failure measured on a fresh profile. The install step must come FIRST.
+  assert.ok(text.includes('dsh plugin --profile web add dsh-a2a-groups@latest'), 'the install command must be present');
+  assert.ok(
+    text.indexOf('plugin --profile web add') < text.indexOf('cordis.patch.yml'),
+    'install must precede the config step',
+  );
+});
+
 test('the instruction asks for a diff before writing', () => {
   const text = buildJoinInstruction(VALUES);
 
