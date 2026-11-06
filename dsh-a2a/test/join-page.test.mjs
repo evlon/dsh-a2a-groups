@@ -88,10 +88,20 @@ test('sweep drops expired tokens without touching live ones', () => {
 test('the instruction carries every value the assistant needs', () => {
   const text = buildJoinInstruction(VALUES);
 
-  for (const value of Object.values(VALUES)) {
+  // Only the values the assistant actually WRITES belong in the instruction. publicUrl and serverToken were for the
+  // optional `server:` block, which is no longer part of the core instruction (see the "进阶" section on the page) —
+  // so asserting them here would re-claim the bug this change removes.
+  for (const value of [VALUES.groupName, VALUES.groupId, VALUES.gatewayBase, VALUES.agentName, VALUES.apiKey]) {
     assert.ok(text.includes(value), `the instruction must name ${value}`);
   }
   assert.ok(!/\{groupName\}|\{apiKey\}|\{agentName\}/u.test(text), 'no placeholder may survive');
+});
+
+test('the instruction omits the optional server block', () => {
+  const text = buildJoinInstruction(VALUES);
+  // Joining a group must not ask a newcomer to expose themselves as an A2A server; that is an optional advanced step.
+  assert.ok(!/server:\s*\n\s*enabled: true/.test(text), 'the core instruction must not carry a server block');
+  assert.ok(!text.includes('serverToken'), 'and must not mention the server token');
 });
 
 test('the instruction asks for a diff before writing', () => {
