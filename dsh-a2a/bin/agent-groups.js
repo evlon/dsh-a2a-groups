@@ -421,11 +421,6 @@ async function main() {
         gatewayBase: config.groups.gatewayBase ?? '',
         agentName: config.groups.agentName ?? '',
         apiKey: config.client.apiKey ?? '',
-        // The member chooses these, not the host: the page cannot know the colleague port or token. A
-        // placeholder is used rather than omitting the key, because a missing key in a YAML block is a silent
-        // hole while an obvious placeholder is a question the assistant will ask.
-        publicUrl: 'http://<your-machine>:3091/a2a',
-        serverToken: '<pick-a-long-random-string>',
       };
     },
   });
