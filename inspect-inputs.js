@@ -1,1 +1,0 @@
-(function(){var inputs=document.querySelectorAll('input[type=checkbox]');var out=[];for(var i=0;i<inputs.length;i++){out.push({i:i,checked:inputs[i].checked,disabled:inputs[i].disabled,   parentText:(inputs[i].parentElement?inputs[i].parentElement.innerText.slice(0,20):'')});}return JSON.stringify(out);})()

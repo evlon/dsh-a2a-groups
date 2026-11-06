@@ -1,1 +1,0 @@
-(function(){var bs=document.querySelectorAll('button');for(var i=0;i<bs.length;i++){var a=bs[i].getAttribute('aria-label')||'';if(a.indexOf('\u6253\u5f00\u53f3\u4fa7\u8fb9\u680f')>-1){bs[i].click();return 'opened-sidebar';}}return 'no-sidebar-btn';})()

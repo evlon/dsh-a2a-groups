@@ -1,1 +1,0 @@
-(function(){var btn=document.querySelector('button.Mbwy4a_option');if(!btn)return 'no-option';btn.click();return 'allow-clicked';})()

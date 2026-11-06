@@ -26,3 +26,22 @@ dsh-session-bus/
 # pattern in case one is ever copied out.
 *-REPORT.md
 .npmrc-publish
+
+# ---------------------------------------------------------------------------
+# One-off probe scripts written while driving the UI through opencli.
+#
+# 72 of these had accumulated in the repository root and were all COMMITTED: chk.js,
+# probe2.js, click-allow.js, measure.js and so on. They were scratch files that answered
+# one question each, and they made the tree look like it contained 70 source files that
+# nobody could account for.
+#
+# Any such script now belongs under .shots/ (ignored) or %TEMP%. The root of this
+# repository holds docs and the two package directories, nothing else.
+#
+# The `dsh-a2a/` package keeps its own real sources, so this pattern is anchored to the
+# root with a leading slash and only matches a single path segment.
+/*.js
+/*.mjs
+
+# Decompressed session logs pulled out for forensics.
+sess-unzip/

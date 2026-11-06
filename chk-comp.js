@@ -1,1 +1,0 @@
-(function(){var d=document.querySelector('div[contenteditable=true]');if(!d)return 'no-composer';return 'composer-ok';})()

@@ -1,1 +1,0 @@
-(function(){var bs=document.querySelectorAll('button');for(var i=0;i<bs.length;i++){var t=(bs[i].textContent||'').trim();if(t==='\u534f\u4f5c\u7fa4'){bs[i].click();return 'clicked';}}return 'not-found';})()

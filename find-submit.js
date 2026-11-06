@@ -1,1 +1,0 @@
-(function(){var b=Array.from(document.querySelectorAll('button')).filter(function(x){var t=x.textContent.trim();return t==='\u63d0\u4ea4'||t==='\u8df3\u8fc7';});return JSON.stringify(b.map(function(x){return x.textContent.trim()}));})()

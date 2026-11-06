@@ -1,1 +1,0 @@
-(function(){var b=Array.from(document.querySelectorAll('button')).filter(function(x){return x.textContent.trim()==='\u63d0\u4ea4';});if(b.length===0)return 'none';b[0].setAttribute('id','a2a-submit');return 'marked:'+b[0].className.slice(0,30);})()

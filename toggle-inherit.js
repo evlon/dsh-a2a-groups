@@ -1,1 +1,0 @@
-(function(){var inputs=document.querySelectorAll('input[type=checkbox]');if(inputs.length<2)return JSON.stringify({found:inputs.length});var before=inputs[0].checked;inputs[0].click();return JSON.stringify({found:inputs.length,before:before});})()

@@ -1,1 +1,0 @@
-(function(){var inputs=document.querySelectorAll('input[type=checkbox]');inputs[1].setAttribute('id','a2a-enable-confirm');return 'marked';})()

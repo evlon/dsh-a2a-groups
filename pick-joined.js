@@ -1,1 +1,0 @@
-(function(){var all=document.querySelectorAll('div');for(var i=0;i<all.length;i++){var c=String(all[i].className);if(c.indexOf('sessionRow')<0)continue;var n=String(all[i].innerText||'').split(String.fromCharCode(10))[0].trim();if(n.indexOf('a2a_probe_exec')>-1){all[i].click();return 'picked:'+n;}}return 'not-found';})()

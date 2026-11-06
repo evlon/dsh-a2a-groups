@@ -1,1 +1,0 @@
-(function(){var all=document.querySelectorAll('div');for(var i=0;i<all.length;i++){var c=String(all[i].className);if(c.indexOf('sessionRow')<0)continue;all[i].click();return 'picked';}return 'not-found';})()

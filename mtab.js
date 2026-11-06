@@ -1,1 +1,0 @@
-(function(){var t=Array.from(document.querySelectorAll('[role=tab]')).filter(function(x){return x.textContent.indexOf('\u7fa4\u6210\u5458')>-1;});if(t.length===0)return 'no-tab';t[0].click();return 'clicked';})()

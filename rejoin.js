@@ -1,1 +1,0 @@
-(function(){var bs=Array.from(document.querySelectorAll('button'));var t=bs.filter(function(b){return b.textContent.indexOf('\u53d1\u7968\u4e0e\u5bf9\u8d26\u5e73\u53f0')>-1;});if(t.length===0)return 'no-button';t[0].click();return 'clicked';})()

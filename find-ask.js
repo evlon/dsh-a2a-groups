@@ -1,1 +1,0 @@
-(function(){var all=document.querySelectorAll('*');var hits=[];for(var i=0;i<all.length;i++){var cls=String(all[i].className||'');if(cls.indexOf('question')>-1||cls.indexOf('ask')>-1||cls.indexOf('pending')>-1){  hits.push({cls:cls.slice(0,50),txt:(all[i].innerText||'').slice(0,40)});}}return JSON.stringify({total:all.length,hits:hits.slice(0,6)});})()

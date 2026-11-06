@@ -1,1 +1,0 @@
-(function(){var all=document.querySelectorAll('div');for(var i=0;i<all.length;i++){var c=String(all[i].className);if(c.indexOf('sessionRow')<0)continue;var n=String(all[i].innerText||'').split(String.fromCharCode(10))[0].trim();if(n==='\u95ee\u5019'){all[i].click();return 'picked';}}return 'not-found';})()

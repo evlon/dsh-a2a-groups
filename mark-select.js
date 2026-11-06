@@ -1,1 +1,0 @@
-(function(){var s=document.querySelectorAll('select');if(s.length<3)return 'not-enough';s[0].setAttribute('id','a2a-trigger-select');return 'marked '+s.length;})()

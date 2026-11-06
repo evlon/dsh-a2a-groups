@@ -1,1 +1,0 @@
-(function(){var bs=Array.from(document.querySelectorAll('button'));var t=bs.filter(function(b){return b.textContent.trim()==='\u534f\u4f5c\u7fa4';});if(t.length>0){t[t.length-1].click();return 'clicked-group-btn';}return 'not-found';})()

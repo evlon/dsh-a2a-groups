@@ -1,1 +1,0 @@
-(function(){var cbs=document.querySelectorAll('input[type=checkbox]');if(cbs.length<2)return 'few';cbs[1].setAttribute('id','a2a-cb-enable');return JSON.stringify({count:cbs.length,enabledChecked:cbs[1].checked});})()

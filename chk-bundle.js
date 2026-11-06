@@ -1,1 +1,0 @@
-(function(){var names=performance.getEntriesByType('resource').map(function(e){return e.name;});var q=names.filter(function(n){return n.indexOf('user-question')>-1;});var all=names.filter(function(n){return n.indexOf('/plugins')>-1;});return JSON.stringify({userQuestionBundles:q.length,pluginsLoaded:all.length,sample:all[0]?all[0].slice(0,300):'none'});})()

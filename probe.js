@@ -1,1 +1,0 @@
-(function(){var bs=Array.from(document.querySelectorAll('button'));var mine=bs.filter(function(b){return b.textContent.indexOf('发票与对账')>-1;});var ta=document.querySelector('textarea, [contenteditable=true]');return JSON.stringify({count:mine.length,labels:mine.map(function(b){return b.textContent.trim();}),draft:ta?(ta.value||ta.textContent||'').slice(0,150):'no-input'});})()

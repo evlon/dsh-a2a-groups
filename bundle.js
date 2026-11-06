@@ -1,1 +1,0 @@
-(function(){var e=performance.getEntriesByType('resource').map(function(x){return x.name}).filter(function(n){return n.indexOf('a2a-groups')>-1;});return JSON.stringify({res:e.slice(0,3),n:e.length});})()
