@@ -258,7 +258,10 @@ export const TOOL_SPECS = Object.freeze([
             type: 'text',
             text: list.length === 0
               ? 'Nothing waiting.'
-              : list.map((entry) => `- [${entry.kind}] ${entry.text}`).join('\n'),
+              : list.map((entry) => `- [${entry.kind}] ${entry.text}`
+                  // The dmId is what `a2a_person_ack` needs. A list that omits it cannot be acknowledged, which is
+                  // how an invitation stays "undelivered" forever even though the reader saw it.
+                  + (typeof entry.dmId === 'string' && entry.dmId !== '' ? `\n  (dmId: ${entry.dmId})` : '')).join('\n'),
           }];
         },
       },
@@ -637,7 +640,11 @@ export const TOOL_SPECS = Object.freeze([
           const seen = Number.isFinite(member.lastSeenAt)
             ? (now - member.lastSeenAt <= ONLINE_MS ? '在线' : '不在线')
             : '状态未知';
-          return `  - ${member.displayName}${role}${self}${about}${tags} · ${seen}`;
+          // The personId is what `a2a_person_send` / `a2a_group_kick` need; a roster that shows only names leaves the
+          // caller unable to act on any row. It is not a secret — it is the same id the roster already carries — so
+          // showing it turns the roster from a display list into an addressable one.
+          const id = typeof member.personId === 'string' && member.personId !== '' ? ` [${member.personId}]` : '';
+          return `  - ${member.displayName}${role}${self}${about}${tags} · ${seen}${id}`;
         });
         return [{
           type: 'text',
@@ -719,7 +726,11 @@ export const TOOL_SPECS = Object.freeze([
         return [{
           type: 'text',
           text: `${value.ok === true ? '配置可用' : '配置有问题'}\n${lines.join('\n')}${who}`
-            + `\n推送通道：${value.push === true ? '有（群消息会自己到达）' : '无（需要主动 a2a_inbox_check 拉取）'}`,
+            + `\n推送通道：${value.push === true ? '有（群消息会自己到达）' : '无（需要主动 a2a_inbox_check 拉取）'}`
+            + (value.push === true
+              ? ''
+              : '\n建议：检测到你处于无推送环境，可启用长轮询监听模式——用 a2a_group_wait 循环（timeoutMs≤30000），'
+                + '有消息立即报告用户、超时静默续轮，即可准实时收消息并保持在线。'),
         }];
       },
     },
@@ -728,14 +739,15 @@ export const TOOL_SPECS = Object.freeze([
   {
     name: 'a2a_group_wait',
     description:
-      'Wait up to timeoutMs for NEW messages in one group, then report whether any arrived. This is long-polling: one call that holds until a message lands (answered immediately) or the window expires (answered hasNew=false). Use it when told to keep watching a group in the background — it is the closest thing to a push channel this server has. Keep timeoutMs at or below 55 seconds; the host clamps it. Pass sinceSeq (the last seq you saw) so only genuinely new messages count. Timeout is NOT an error: hasNew=false means "nothing yet", so loop it rather than reporting a failure.',
+      'Wait up to timeoutMs for NEW messages in one group, then report whether any arrived. This is long-polling: one call that holds until a message lands (answered immediately) or the window expires (answered hasNew=false). Use it when told to keep watching a group in the background — it is the closest thing to a push channel this server has. '
+      + 'RECOMMENDED: a client with background-task capability should loop this tool to stay "always on" — pass timeoutMs of at most 30000 (a client tool timeout is usually ~30s), report new messages to the user immediately, and on hasNew=false just continue the loop silently; do not treat a timeout as a failure. Keep timeoutMs at or below 55 seconds; the host clamps it. Pass sinceSeq (the last seq you saw) so only genuinely new messages count. Timeout is NOT an error: hasNew=false means "nothing yet", so loop it rather than reporting a failure.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         groupId: { type: 'string', description: 'Group id.' },
-        sinceSeq: { type: 'integer', description: 'Only messages with seq above this count. Defaults to 0.' },
-        timeoutMs: { type: 'integer', description: 'How long to wait, in milliseconds. Defaults to 30000; the host clamps to at most 55000.' },
+        sinceSeq: { type: 'integer', description: 'Only messages with seq above this count. Defaults to your already-seen lastSeq when omitted.' },
+        timeoutMs: { type: 'integer', description: 'How long to wait, in milliseconds. Defaults to 30000; the host clamps to at most 55000. For a background watch loop use at most 30000.' },
       },
       required: ['groupId'],
     },

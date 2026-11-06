@@ -395,15 +395,29 @@ test('a2a_group_approvals lists pending applications for the owner', async () =>
   }
 });
 
-test('a2a_group_approvals refuses a group hosted elsewhere', async () => {
-  const env = harness();
+test('a2a_group_approvals on a remote group goes through the host', async () => {
+  // The queue lives on the HOST that owns the group, not here. `requireLocalMembership` used to demand the group be
+  // hosted on THIS instance, so an owner of a gateway-hosted group always got `not_hosted_here` and could never approve
+  // anyone — while the host's own `group/requests` skill sat right there. It must branch like every other group tool.
+  const bridge = stubBridge({ answer: { data: { count: 1, requests: [{ requestId: 'r-1', displayName: '王五', reason: '对账', status: 'pending', expiresAt: '2026-11-06T00:00:00.000Z' }] } } });
+  const env = harness({ bridge });
   try {
-    // Only the owning host holds the queue, so this must be a clear refusal rather than an empty list that reads as
-    // "nobody applied".
-    await assert.rejects(
-      () => env.runtime.call('a2a_group_approvals', { groupId: env.remoteGroupId }, { sessionId: env.sessionId }),
-      (error) => error.code === 'not_hosted_here',
-    );
+    const listed = await env.runtime.call('a2a_group_approvals', { groupId: env.remoteGroupId }, { sessionId: env.sessionId });
+    assert.equal(listed.count, 1);
+    assert.equal(listed.requests[0].requestId, 'r-1');
+    assert.ok(bridge.calls.some((call) => call.input.skill === 'group/requests'), 'the remote queue must be asked over the wire');
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a2a_group_decide on a remote group goes through the host', async () => {
+  const bridge = stubBridge({ answer: { data: { requestId: 'r-1', status: 'approved', displayName: '王五' } } });
+  const env = harness({ bridge });
+  try {
+    const decided = await env.runtime.call('a2a_group_decide', { groupId: env.remoteGroupId, requestId: 'r-1', approve: true }, { sessionId: env.sessionId });
+    assert.equal(decided.status, 'approved');
+    assert.ok(bridge.calls.some((call) => call.input.skill === 'group/decide'));
   } finally {
     env.cleanup();
   }
@@ -592,6 +606,28 @@ test('a2a_group_wait refuses a group this instance is not in', async () => {
     await assert.rejects(
       () => env.runtime.call('a2a_group_wait', { groupId: 'g-nope', timeoutMs: 30000 }, { sessionId: env.sessionId }),
       (error) => error.code === 'unknown_group',
+    );
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a2a_group_wait rejects a non-positive timeout instead of silently clamping it', async () => {
+  const env = harness();
+  try {
+    // 0 / -1 are caller mistakes. Silently clamping them to 1s hides the mistake and wastes a turn on a wait the
+    // caller never asked for.
+    for (const bad of [0, -1]) {
+      await assert.rejects(
+        () => env.runtime.call('a2a_group_wait', { groupId: env.groupId, timeoutMs: bad }, { sessionId: env.sessionId }),
+        (error) => error.code === 'bad_argument',
+        `timeoutMs=${bad} must be a hard error`,
+      );
+    }
+    // A string is equally invalid.
+    await assert.rejects(
+      () => env.runtime.call('a2a_group_wait', { groupId: env.groupId, timeoutMs: 'soon' }, { sessionId: env.sessionId }),
+      (error) => error.code === 'bad_argument',
     );
   } finally {
     env.cleanup();

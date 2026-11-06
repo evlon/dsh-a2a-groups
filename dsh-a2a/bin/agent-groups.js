@@ -356,6 +356,13 @@ async function main() {
       get: () => undefined,
       list: () => [],
       has: () => false,
+      // `group/leave` calls `identities.remove(groupId)` after `store.leave` succeeds. On a host there is no ledger
+      // row to remove — the group IS the authority — so this is a no-op. It MUST exist, though: the skill body is
+      // shared with the member build, and a missing method turns the first leave into a TypeError (`remove is not a
+      // function`) that reads to the caller as "could not reach the host", while the store has already removed the
+      // member — so the retry "succeeds" only because the member is gone. That is the "first call fails, second
+      // works" report in its exact shape.
+      remove: () => 0,
       flush: () => {},
     },
     config,

@@ -209,6 +209,34 @@ test('a successful call returns rendered text plus the structured value', async 
   assert.equal(typeof response.result.content[0].text, 'string');
 });
 
+test('a2a_group_summary renders the personId so a caller can address each member', () => {
+  // The roster data always carried `personId`, but the render dropped it. A model (especially an MCP client that only
+  // reads the rendered text) therefore could not pass it to a2a_person_send / a2a_group_kick, making those "positive"
+  // paths unusable in practice. The id is not a secret — it is the same id the roster carries.
+  const spec = allSpecs().find((entry) => entry.name === 'a2a_group_summary');
+  const parts = spec.output.render({ groupId: 'g-1' }, {
+    name: '群',
+    topic: '',
+    memberCount: 1,
+    onlineCount: 0,
+    isOwner: false,
+    members: [{ personId: 'm-abc', displayName: '张三', role: 'member', isSelf: false, lastSeenAt: Date.now() }],
+  });
+  const text = parts.map((part) => part.text).join('\n');
+  assert.match(text, /m-abc/u, 'the render must show the personId');
+});
+
+test('a2a_person_inbox renders the dmId so a2a_person_ack can be called', () => {
+  // The structured value carried dmId, but the render dropped it. Without the id in the text, the reader cannot call
+  // a2a_person_ack, so an invitation stays "undelivered" forever even though the reader saw it.
+  const spec = allSpecs().find((entry) => entry.name === 'a2a_person_inbox');
+  const parts = spec.output.render({}, {
+    messages: [{ kind: 'group-invite', text: '邀请你加入', dmId: 'dm-123' }],
+  });
+  const text = parts.map((part) => part.text).join('\n');
+  assert.match(text, /dm-123/u, 'the render must show the dmId');
+});
+
 test('resources and prompts answer empty rather than method-not-found', async () => {
   const handler = handlerWith();
   const resources = await call(handler, 'resources/list');

@@ -769,6 +769,39 @@ test('leave() transfers ownership when the owner leaves, so the group stays mana
   assert.equal(env.store.revokeInvite({ groupId: owner.groupId, ownerKey: joined.personKey, token: next.token }), true);
 });
 
+test('the first joiner of an owner-less group becomes the owner, so it never stays stranded', () => {
+  const env = harness();
+  const owner = seed(env);
+  // Mint the invite BEFORE the owner leaves, then leave: the group has no owner and no members.
+  const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
+  env.store.leave({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey } });
+
+  // A fresh person joins with the invite the (former) owner minted.
+  const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '接盘者' });
+
+  // The first joiner of an owner-less group must be owner, not a stranded `member` who cannot rename/archive/kick.
+  assert.equal(joined.member.role, 'owner');
+  const snapshot = env.store.snapshot({ groupId: owner.groupId });
+  assert.equal(snapshot.owner.personId, joined.member.personId);
+  assert.equal(snapshot.owner.displayName, '接盘者');
+});
+
+test('a person who is already a member cannot apply to join again', () => {
+  const env = harness();
+  const owner = seed(env);
+  const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
+  const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '张工' });
+
+  // An already-member applying would leave a dangling request nobody can view (the owner's queue is the only read
+  // path, and the applicant has nothing to claim). Refusing is the honest answer.
+  assert.throws(
+    () => env.store.requestJoin({ groupId: owner.groupId, displayName: '张工', reason: '又申请一次' }),
+    (error) => error.code === 'already_member',
+  );
+  // The member is untouched, and no dangling request was created.
+  assert.equal(env.store.snapshot({ groupId: owner.groupId }).memberCount, 2);
+});
+
 // ---------------------------------------------------------------------------
 // revokeInvite()
 // ---------------------------------------------------------------------------

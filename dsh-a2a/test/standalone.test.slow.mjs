@@ -15,6 +15,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 import { createServer as createHttpServer } from 'node:http';
+import { readFileSync } from 'node:fs';
 
 import { createHttpRegistrar, parseFlags } from '../bin/agent-groups.js';
 
@@ -153,3 +154,16 @@ test('parseFlags: rejects a positional argument instead of ignoring it', () => {
   // which is a far worse failure than a usage error.
   assert.throws(() => parseFlags(['3095']), /unexpected argument/);
 });
+
+test('the host identities stub has a remove() so group/leave does not throw', () => {
+  // The skill body is SHARED with the member build, and `group/leave` calls `identities.remove(groupId)` after
+  // `store.leave` succeeds. The host's stub must therefore expose a no-op `remove`, or the first leave throws a
+  // TypeError that reads to the caller as "could not reach the host" — while the store has already removed the
+  // member, which is why the retry "works". This is the "first call fails, second works" report in its exact shape.
+  const source = readFileSync(new URL('../bin/agent-groups.js', import.meta.url), 'utf8');
+  // The stub block must name all six methods the shared skill bodies may call, `remove` included.
+  for (const method of ['upsert', 'get', 'list', 'has', 'remove', 'flush']) {
+    assert.match(source, new RegExp(`\\b${method}:\\s*\\(\\)`), `the host identities stub must expose ${method}()`);
+  }
+});
+

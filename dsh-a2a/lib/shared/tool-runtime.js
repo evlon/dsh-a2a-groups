@@ -1302,9 +1302,25 @@ function requireSession(sessionId, tool) {
   'a2a_group_wait': async function a2a_group_wait(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_wait');
     const groupId = requireText(args.groupId, 'groupId');
-    const sinceSeq = Number.isFinite(args.sinceSeq) ? args.sinceSeq : 0;
-    const waitMs = Number.isFinite(args.timeoutMs) ? Math.max(1000, Math.min(args.timeoutMs, 55_000)) : 30_000;
     const membership = requireMembership(store, identities, groupId, sessionId);
+    // Omitted `sinceSeq` must mean "from what I have already seen", NOT 0. The old default of 0 replayed the whole
+    // group history on every first wait, which is the opposite of "wait for NEW messages". The ledger's `lastSeq`
+    // is exactly the cursor this member has already consumed, so it is the honest "nothing new yet" start.
+    const sinceSeq = Number.isFinite(args.sinceSeq)
+      ? args.sinceSeq
+      : (Number.isFinite(membership.lastSeq) ? membership.lastSeq : 0);
+    // A timeout must be explicit and sane, not silently coerced. 0 / -1 / a non-number are caller mistakes and must
+    // be reported as such; silently clamping them to 1s hides the mistake and wastes a turn on a wait the caller
+    // never asked for. Omitted means the default. Anything above the host ceiling is clamped DOWN to the ceiling —
+    // that is a documented, deliberate ceiling, not a mistake.
+    let waitMs;
+    if (args.timeoutMs === undefined || args.timeoutMs === null) {
+      waitMs = 30_000;
+    } else if (!Number.isFinite(args.timeoutMs) || args.timeoutMs < 1000) {
+      throw coded('bad_argument', `timeoutMs must be at least 1000 ms (got ${String(args.timeoutMs)})`);
+    } else {
+      waitMs = Math.min(args.timeoutMs, 55_000);
+    }
     if (membership.local === true) {
       // A group this instance hosts has no wire to cross, so the same wait runs in-process against the
       // store's own watcher registry. Shape the entries the same way the remote branch does.
@@ -1629,7 +1645,30 @@ function requireSession(sessionId, tool) {
   'a2a_group_approvals': async function a2a_group_approvals(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_approvals');
-    const membership = requireLocalMembership(identities, groupId, sessionId);
+    // A group hosted on the gateway (remote) owns its queue on the HOST, not here. `requireLocalMembership` used to
+    // demand the group be hosted on THIS instance, so an owner of a remote group always got `not_hosted_here` and
+    // could never approve anyone — while the host's own `group/requests` skill was sitting right there. The queue
+    // lives wherever the group lives, so branch the same way every other group tool does.
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    if (membership.local !== true) {
+      const result = await bridge.send(targetOf(membership, config), {
+        skill: 'group/requests',
+        text: `requests for ${groupId}`,
+        data: { groupId, personId: membership.personId, personKey: membership.personKey, status: args.status ?? 'pending' },
+        timeoutMs: config.client.timeoutMs,
+      });
+      const meta = result.data ?? {};
+      return {
+        count: Number.isFinite(meta.count) ? meta.count : (Array.isArray(meta.requests) ? meta.requests.length : 0),
+        requests: (meta.requests ?? []).map((entry) => ({
+          requestId: entry.requestId,
+          displayName: entry.displayName,
+          reason: entry.reason,
+          status: entry.status,
+          expiresAt: entry.expiresAt ?? '',
+        })),
+      };
+    }
     const requests = store.listRequests({
       groupId,
       member: { personId: membership.personId, personKey: membership.personKey },
@@ -1649,11 +1688,32 @@ function requireSession(sessionId, tool) {
   'a2a_group_decide': async function a2a_group_decide(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_decide');
-    const membership = requireLocalMembership(identities, groupId, sessionId);
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const requestId = requireText(args.requestId, 'requestId');
+    if (membership.local !== true) {
+      const result = await bridge.send(targetOf(membership, config), {
+        skill: 'group/decide',
+        text: `decide ${requestId}`,
+        data: {
+          groupId,
+          personId: membership.personId,
+          personKey: membership.personKey,
+          requestId,
+          approve: args.approve !== false,
+        },
+        timeoutMs: config.client.timeoutMs,
+      });
+      const meta = result.data ?? {};
+      return {
+        requestId: meta.requestId ?? requestId,
+        status: meta.status ?? '',
+        displayName: meta.displayName ?? '',
+      };
+    }
     const decided = store.decideRequest({
       groupId,
       member: { personId: membership.personId, personKey: membership.personKey },
-      requestId: requireText(args.requestId, 'requestId'),
+      requestId,
       approve: args.approve !== false,
     });
     await store.flush();

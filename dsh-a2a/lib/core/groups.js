@@ -295,6 +295,9 @@ export const GROUP_ERROR_CODES = Object.freeze([
   'request_pending',
   'request_not_found',
   'request_rejected',
+  // A person already in the group applies to join it: not an error in the queue's terms, but a dangling request
+  // nobody can act on, so it is refused with its own code.
+  'already_member',
 ]);
 
 /**
@@ -837,12 +840,18 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     }
 
     const personKey = `mk_${randomToken(32)}`;
+    // A group whose owner left while alone ends up owner-less (see `leave`). The first person to join afterwards is
+    // not "a member", they are the person taking over the group — and without a promotion every admin tool
+    // (rename/archive/kick) answers `not_owner` forever. Promoting the first joiner into an empty owner-less group is
+    // what makes the group recoverable instead of permanently stranded.
+    const ownerless = group.ownerPersonId === undefined || group.ownerPersonId === ''
+      || !group.members.some((entry) => entry.personId === group.ownerPersonId);
     const member = {
       // The caller may present an id it already holds from another group; reusing it is what
       // makes this person the same person here.
       personId: allocatePersonId(input.personId),
       displayName,
-      role: 'member',
+      role: ownerless ? 'owner' : 'member',
       keyHash: sha256Hex(personKey),
       joinedAt: at,
       lastSeenAt: at,
@@ -854,6 +863,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       tags: normalizeTags(input.tags),
       profileUpdatedAt: at,
     };
+    if (ownerless) group.ownerPersonId = member.personId;
     group.members.push(member);
     // Join is the only chance to learn a member's address, so it is kept on their profile as
     // well as the membership row.
@@ -1860,6 +1870,15 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       throw new GroupError('bad_argument', '申请入群需要填写你的名字（displayName）。');
     }
     const reason = optionalText(input.reason, MAX_REQUEST_REASON_CHARS, '申请理由') ?? '';
+
+    // A person who is ALREADY a member has nothing to apply for. The queue cannot see this (it is keyed by
+    // displayName, and the member is in `members`), so an already-member who applies would leave a dangling request
+    // that no one can view (the owner sees it but the applicant is not eligible to claim it) and that the applicant
+    // cannot withdraw. Refusing loudly is the only honest answer.
+    const alreadyMember = group.members.some((entry) => entry.displayName === displayName);
+    if (alreadyMember) {
+      throw new GroupError('already_member', `你已经是「${group.name}」的成员，无需申请加入。`);
+    }
 
     const at = now();
     // Expire the queue before looking at its size: a burst of stale requests must

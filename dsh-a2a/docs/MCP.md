@@ -68,6 +68,28 @@ New posts will arrive in this Session as task messages.
 > 注意 `personId: m-1575ab87` 是**新成员**——MCP 客户端入群算一个新的人，不是复用你在 DSH 里的身份。
 > 想复用身份，得把那个身份的凭证放进这个目录。
 
+### 红线：一个 `AGENT_GROUPS_DATA` 目录 = 一个人
+
+**身份由 `AGENT_GROUPS_DATA` 目录里的 `memberships.json` 决定，不由网关 token 决定。**
+`AGENT_GROUPS_TOKEN`（`sk-...`）只是「允许你过网关」的门禁，所有调用方共用；入群后你是谁，完全由
+这个目录里存的 `personId` + `personKey` 决定。
+
+三条红线，违反任何一条都会出现「身份串了」或「读不到身份」：
+
+1. **每类客户端一个独立目录，目录名带客户端标识。** CodeBuddy 用
+   `~/.agent-groups-codebuddy`、Claude Code 用 `~/.agent-groups-claude`、Cursor 用
+   `~/.agent-groups-cursor`。各自独立入群、各自是不同的人。多个客户端**故意共用**一个目录，
+   就等于「刻意让它们代表同一个人」——这是允许的，但必须是你明确想要的，不是默认值。
+
+2. **绝不能让 `AGENT_GROUPS_DATA` 指向宿主的 data 目录**（见上一条「不能指向宿主」）。
+
+3. **绝不能让 MCP 的 `AGENT_GROUPS_DATA` 指向 DSH 插件的 `a2a` 目录**（如 `~/.dsh-a2a-dev3/a2a`）。
+   MCP 的 sessionId 固定是 `"mcp"`，DSH 插件是真实会话 id；两者写进同一个账本会互相污染，
+   表现为「换个会话身份就变」。MCP 和 DSH 各用各的目录，才是天然隔离的两个人。
+
+> **网关 token 可以共用，不影响身份。** 真正别泄露的是 `memberships.json` 里的 `personKey`（0600 存着），
+> 别拷给别人。换一个 `AGENT_GROUPS_DATA` 目录，就等于「换了一个人」——重新入群即得新身份。
+
 ## 二、各客户端怎么配
 
 ### Claude Code / Claude Desktop
@@ -273,6 +295,13 @@ codebuddy -p "开始前查 a2a_inbox_check；每完成一个阶段再查一次"
     if r.hasNew: 立即处理并报告
 ```
 
+**这是官方推荐的常驻监听用法**（实测：MCP 客户端从「最长 1 小时才知道有消息」变成准实时，且循环持续触达宿主、
+群里始终显示在线）。有后台任务能力的客户端都应该这么用：
+
+- `timeoutMs` 建议 ≤ 30000（客户端工具超时通常 ~30s，设 55s 会被 -32001 掐断）；
+- 有消息立即报告用户，`hasNew=false` 静默续轮，别把超时当失败；
+- `sinceSeq` 省略时默认用成员已读的 `lastSeq`（不会重放历史）。
+
 **局限**：IDE 关掉后循环就停了（这是所有「无推送」方案的共同限制）。想要真推送见下一节。
 
 ### 想要真正的推送怎么办
@@ -287,6 +316,31 @@ codebuddy -p "开始前查 a2a_inbox_check；每完成一个阶段再查一次"
 
 代价：每次唤醒冷启动一个进程（几秒），且要按客户端做适配和防抖。**当前没做。**
 
+### 红线：收反馈的常驻身份用 DSH 插件，不用 MCP
+
+MCP 里的模型是**被调用方**，不是常驻进程：
+
+- 模型只在一次对话 turn 内活着，turn 结束就停，**不会再执行任何东西**。
+- 「后台任务」「定时轮询」「挂机盯群」这些概念在模型侧都不存在——模型做不到
+  「用户没说话时自己每隔几分钟醒来查一次」。
+- 唯一的例外是**在一次 turn 内**用 `a2a_group_wait` 挂起（最多几十秒），那是「这一轮还在跑」，
+  不是跨 turn 的常驻。
+
+所以「引导大模型启动后台任务去轮询新消息」这个设想，前提就不成立。工具说明（preamble）能做的全部是：
+
+> 每次轮到它干活时，开头查一次 `a2a_inbox_check` + 长任务期间查几次 + 需要盯群时挂起等。
+
+真正「守在群里等反馈」只有三条路：
+
+| 方案 | 能否自动收到反馈 | 代价 |
+|---|---|---|
+| **DSH 插件常驻**（推荐） | ✅ 有 inbox 推送，`@` 真正唤醒会话 | 要跑一个 DSH 实例 |
+| 客户端 automation/定时任务 | ✅ 外部定时触发 `codebuddy -p` | 要按客户端适配 + 防抖 |
+| team 模式派异步 agent 循环长轮询 | ⚠️ IDE 关了也停 | 只在该 IDE 开着时有效 |
+
+**结论**：谁要「被同事 @ 就醒过来处理反馈」，谁就应该用 DSH 插件常驻；MCP 只做「你主动打开它、
+在对话里顺带查一下」的操作。不要把 MCP 当常驻机器人用。
+
 ---
 
 ## 五、排错
@@ -298,6 +352,9 @@ codebuddy -p "开始前查 a2a_inbox_check；每完成一个阶段再查一次"
 | 所有工具返回 `no_session` | 理论上不会：MCP 用连接 id `mcp` | 报告为 bug |
 | `unknown tool` | 版本不一致 | 确认客户端加载的是同一份包 |
 | 调用超时 | 网关或宿主不可达 | `curl <gateway>/agent-groups/.well-known/agent-card.json` |
+| `invalid API key`（401） | `AGENT_GROUPS_TOKEN` 填成了带引号的值，或填成了宿主 token | 去掉引号；确认填的是网关调用方 key（`client.apiKey`），不是 `server.token` |
+| 身份串了 / 群里出现两个「我」 | 两个客户端共用了同一个 `AGENT_GROUPS_DATA` | 每类客户端一个独立目录（见「红线」） |
+| 「没有群」但别人看得到我在群里 | `AGENT_GROUPS_DATA` 指到了宿主目录或 DSH 插件目录 | 指回自己的独立目录（见「红线」） |
 
 调试时设 `AGENT_GROUPS_VERBOSE=1`，日志会出现在 stderr（客户端通常能显示）。
 
