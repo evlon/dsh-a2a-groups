@@ -69,10 +69,6 @@ const INSTRUCTION_BODY = `
          apiKey: {apiKey}
          gatewayBase: {gatewayBase}
          forwardProto: http
-       server:
-         enabled: true
-         publicUrl: {publicUrl}
-         token: {serverToken}
        tools: true
        promptSection: true
 
@@ -317,6 +313,15 @@ ${input.permanent === true
 </table>
 
 <p class="meta">简单说：<strong>要参与连续协作装 DSH 插件；只想在别的工具里顺手看看群、发句话，用 MCP。</strong></p>
+
+<h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">进阶：把你自己开放给同事调用（可选）</h3>
+<p class="meta">上面的配置只做「接入协作、收发群消息」。如果你还想让同事<strong>点对点直接调用你的 DSH</strong>
+（而不是只在群里说话），再在 <code>cordis.patch.yml</code> 的 a2a 段里补一个 <code>server</code> 块：</p>
+<pre>       server:
+         enabled: true
+         publicUrl: http://&lt;你的机器地址&gt;:3091/a2a
+         token: &lt;一个长随机串&gt;</pre>
+<p class="meta">这是可选的：不配它也能正常加入群、和同事在群里协作。只有需要「别人直接调你」时才要。</p>
 
 <h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">怎么配</h3>
 <p>在客户端的 MCP 配置文件里加一段（CodeBuddy 是 <code>.codebuddy/mcp.json</code>，
