@@ -35,14 +35,11 @@ import {
   FEED_TAIL_LIMIT,
   GroupError,
   MAX_PAYLOAD_BYTES,
-  SCRYPT_N,
   ONLINE_WINDOW_MS,
   constantTimeEquals,
   createGroupStore,
-  hashPassword,
   redact,
   sha256Hex,
-  verifyPassword,
   writeFileAtomic,
 } from '../lib/core/groups.js';
 
@@ -138,42 +135,6 @@ function readState(env) {
 }
 
 // ---------------------------------------------------------------------------
-// Password hashing
-// ---------------------------------------------------------------------------
-
-test('hashPassword produces the contract format at the contract cost', () => {
-  const stored = hashPassword('correct-horse-battery');
-  const parts = stored.split('$');
-  assert.equal(parts.length, 4);
-  assert.equal(parts[0], 'scrypt');
-  assert.equal(Number(parts[1]), 2 ** 14, 'N is pinned at 16384 by CONTRACT §2.6');
-  assert.equal(Number(parts[1]), SCRYPT_N);
-  assert.equal(parts[2].length, 32, '16 random salt bytes, hex encoded');
-  assert.equal(parts[3].length, 64, '32 derived bytes, hex encoded');
-  assert.equal(stored.includes('correct-horse-battery'), false);
-});
-
-test('hashPassword salts every hash, so the same password does not look the same', () => {
-  const first = hashPassword('same-password');
-  const second = hashPassword('same-password');
-  assert.notEqual(first, second);
-  assert.equal(verifyPassword('same-password', first).ok, true);
-  assert.equal(verifyPassword('same-password', second).ok, true);
-});
-
-test('verifyPassword reports mismatch, malformed input and a stale cost', () => {
-  assert.deepEqual(verifyPassword('right', hashPassword('right')).ok, true);
-  assert.equal(verifyPassword('wrong', hashPassword('right')).ok, false);
-  assert.equal(verifyPassword('right', 'not-a-hash').reason, 'malformed');
-  assert.equal(verifyPassword('right', 'scrypt$x$00ff$00ff').reason, 'malformed');
-  assert.equal(verifyPassword('', hashPassword('right')).reason, 'empty');
-
-  const cheap = hashPassword('right', { N: 1024 });
-  const verified = verifyPassword('right', cheap);
-  assert.equal(verified.ok, true);
-  assert.equal(verified.needsRehash, true, 'a weaker stored cost must be flagged, not silently accepted');
-});
-
 // ---------------------------------------------------------------------------
 // create()
 // ---------------------------------------------------------------------------

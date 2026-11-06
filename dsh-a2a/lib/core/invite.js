@@ -54,9 +54,6 @@ export const MAX_LINK_CHARS = 2048;
  */
 const LINK_IN_TEXT = /agent-a2a:\/\/group\?[^\s"'<>`，。、；：（）【】「」！？]+/gu;
 
-/** Unambiguous alphabet: no O/0, no I/l/1 — these get retyped from paper and IM. */
-const PASSWORD_ALPHABET = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-
 /** An invite-link problem a human can act on. `code` is stable for the RPC layer. */
 export class InviteLinkError extends Error {
   /**
@@ -308,33 +305,6 @@ export function buildPrompt(input) {
  */
 export function randomToken(bytes = 24) {
   return randomBytes(bytes).toString('base64url');
-}
-
-/**
- * A generated group password a human has to retype.
- *
- * Rejection sampling, not `% alphabet.length`: modulo bias on a 57-character
- * alphabet is small but real, and "we generate weak passwords on purpose" is not
- * a sentence to have to write in a review. The alphabet drops visually
- * confusable glyphs (O/0, I/l/1) because this string travels by screen-share
- * and phone.
- *
- * @param {number} [length] characters to generate
- * @returns {string} the password
- */
-export function randomPassword(length = 12) {
-  const requested = Number(length);
-  const size = Number.isFinite(requested) && requested > 0 ? Math.max(4, Math.trunc(requested)) : 12;
-  const limit = 256 - (256 % PASSWORD_ALPHABET.length);
-  const out = [];
-  while (out.length < size) {
-    for (const byte of randomBytes(size * 2)) {
-      if (byte >= limit) continue; // biased tail of the byte range, discard
-      out.push(PASSWORD_ALPHABET[byte % PASSWORD_ALPHABET.length]);
-      if (out.length === size) break;
-    }
-  }
-  return out.join('');
 }
 
 /** Find the first invite-looking substring in a string, or fail readably. */

@@ -19,7 +19,6 @@ import {
   buildLink,
   buildPrompt,
   parseLink,
-  randomPassword,
   randomToken,
 } from '../lib/core/invite.js';
 
@@ -327,22 +326,6 @@ test('randomToken is URL-safe, unguessable and never repeats', () => {
     seen.add(token);
   }
   assert.equal(seen.size, 200);
-});
-
-test('randomPassword avoids confusable glyphs and honours the length', () => {
-  const password = randomPassword(24);
-  assert.equal(password.length, 24);
-  assert.match(password, /^[A-Za-z0-9]+$/u);
-  for (const glyph of ['O', '0', 'I', 'l', '1']) {
-    assert.equal(password.includes(glyph), false, `generated password must not contain ${glyph}`);
-  }
-});
-
-test('randomPassword clamps a nonsense length instead of returning a short password', () => {
-  assert.equal(randomPassword(0).length, 12);
-  assert.equal(randomPassword(-5).length, 12);
-  assert.equal(randomPassword('abc').length, 12);
-  assert.equal(randomPassword(2).length, 4, 'a 4-character floor even if asked for less');
 });
 
 // ---------------------------------------------------------------------------

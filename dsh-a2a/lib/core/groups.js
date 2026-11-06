@@ -33,11 +33,10 @@
  * can arrive by more than one path (reconnect overlap, retry after timeout).
  *
  * **Why comparisons are constant-time and hashes are fixed-width.** Every secret
- * is compared as a fixed-width sha256 hex digest (member keys) or as the scrypt
- * output buffer (passwords), so `timingSafeEqual` never sees mismatched lengths
- * and the comparison leaks neither content nor length. A wrong member key and a
- * nonexistent member both fail through the same path with the same error, so the
- * endpoint cannot be used to enumerate members.
+ * is compared as a fixed-width sha256 hex digest (member keys), so `timingSafeEqual`
+ * never sees mismatched lengths and the comparison leaks neither content nor length.
+ * A wrong member key and a nonexistent member both fail through the same path with
+ * the same error, so the endpoint cannot be used to enumerate members.
  *
  * Boundary: pure state. No network, no DSH, no timers (only an injected clock).
  * The A2A layer decides who may call which method; this module decides what the
@@ -98,18 +97,15 @@
 /**
  * The whole group record — the unit that `groups.json` persists.
  *
- * `passwordHash` is scrypt, `tokenHash`/`keyHash` are sha256; no plaintext secret
- * is ever a field here. `nextSeq` is the feed’s allocator, kept on the group so
- * sequence numbers survive a restart.
+ * `tokenHash`/`keyHash` are sha256; no plaintext secret is ever a field here. `nextSeq` is the
+ * feed’s allocator, kept on the group so sequence numbers survive a restart.
  *
  * @typedef {object} GroupRecord
  * @property {string} groupId
  * @property {string} name
  * @property {string} topic
  * @property {number} createdAt - epoch ms.
- * @property {string} joinPolicy - `invite` or `password`.
  * @property {string} ownerMemberId - which member row is the owner.
- * @property {string} passwordHash - `scrypt$N$salt$hash`.
  * @property {object} settings - per-group overrides of the store defaults.
  * @property {Array<{tokenHash: string, label?: string, createdAt: number, expiresAt: number, maxUses: number, uses: number, revoked: boolean}>} invites
  * @property {GroupMemberRecord[]} members
@@ -119,7 +115,7 @@
  * @property {boolean} [archived]
  */
 
-import { createHash, randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import {
   chmodSync,
   closeSync,
@@ -133,37 +129,7 @@ import {
 } from 'node:fs';
 import { join as joinPath } from 'node:path';
 
-import { buildLink, buildPrompt, randomPassword, randomToken } from './invite.js';
-
-/**
- * scrypt cost parameter. 2^14 = 16384, the value the contract pins.
- *
- * The tradeoff: scrypt's cost is N*r*128 bytes and N*r*p work. At N=2^14, r=8,
- * p=1 a single hash costs ~16 MiB and ~50 ms here, which is cheap enough to run
- * on the request path of a `join` (once per member) and expensive enough that an
- * attacker holding a stolen `groups.json` cannot brute-force a human-chosen
- * group password at scale. Raising N scales both sides; 2^14 is the point where
- * a login-shaped operation stays under a tenth of a second on the slowest
- * machine we support. The parameter is stored *in* the hash string so a future
- * bump stays verifiable: old hashes keep their old N, and `verifyPassword`
- * reports `needsRehash` instead of silently accepting a weaker hash forever.
- */
-export const SCRYPT_N = 1 << 14;
-
-/** scrypt block size. Fixed at the value Node's own defaults use. */
-export const SCRYPT_R = 8;
-
-/** scrypt parallelization. 1: parallelism would only help an attacker with many cores. */
-export const SCRYPT_P = 1;
-
-/** Salt length in bytes. 16 bytes = 128 bits, per the contract. */
-export const SCRYPT_SALT_BYTES = 16;
-
-/** Derived-key length in bytes (256 bits). */
-export const SCRYPT_KEY_BYTES = 32;
-
-/** scrypt's memory ceiling for the hash call; generous so a bigger N still runs. */
-const SCRYPT_MAXMEM = 256 * 1024 * 1024;
+import { buildLink, buildPrompt, randomToken } from './invite.js';
 
 /**
  * Digest of a string no credential is generated from, used as the "no such
@@ -274,7 +240,6 @@ export const GROUP_ERROR_CODES = Object.freeze([
   'bad_argument',
   'unknown_group',
   'not_member',
-  'bad_password',
   'invite_invalid',
   'invite_expired',
   'invite_exhausted',
@@ -349,86 +314,14 @@ export function constantTimeEquals(left, right) {
 /**
  * sha256 of a secret, as lowercase hex.
  *
- * Tokens and member keys are hashed rather than scrypt-hashed on purpose: they
- * are generated with 192-256 bits of entropy, so there is nothing to brute-force
- * and the host needs the lookup to be fast (every request authenticates). A
- * password is the opposite case — human-chosen, low entropy — which is why it
- * alone gets scrypt.
+ * Tokens and member keys are generated with 192-256 bits of entropy, so there is nothing to
+ * brute-force and the host needs the lookup to be fast (every request authenticates).
  *
  * @param {string} value
  * @returns {string} 64 hex characters
  */
 export function sha256Hex(value) {
   return createHash('sha256').update(String(value), 'utf8').digest('hex');
-}
-
-/**
- * Hash a group password into the stored form `scrypt$N$saltHex$hashHex`.
- *
- * The parameter is embedded so the format is self-describing: an operator can
- * read `groups.json`, see the cost, and know what it was hashed with without a
- * version lookup. A random salt per hash means two groups with the same password
- * produce different records — no cross-group rainbow table, and no "this person
- * reused their password" signal in the file.
- *
- * @param {string} password plaintext (never logged, never stored)
- * @param {object} [options]
- * @param {number} [options.N] cost parameter, default {@link SCRYPT_N}
- * @param {Buffer} [options.salt] explicit salt, for tests only
- * @returns {string} the stored hash string
- */
-export function hashPassword(password, options = {}) {
-  if (typeof password !== 'string' || password === '') {
-    throw new GroupError('bad_argument', '群密码不能为空。');
-  }
-  const N = Number.isInteger(options.N) && options.N > 1 ? options.N : SCRYPT_N;
-  const salt = options.salt instanceof Buffer ? options.salt : randomBytes(SCRYPT_SALT_BYTES);
-  const derived = scryptSync(password, salt, SCRYPT_KEY_BYTES, {
-    N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-    maxmem: SCRYPT_MAXMEM,
-  });
-  return `scrypt$${N}$${salt.toString('hex')}$${derived.toString('hex')}`;
-}
-
-/**
- * Check a password against a stored hash, without throwing on malformed input.
- *
- * Returns an object instead of a boolean so the caller can distinguish "wrong
- * password" (a normal user error) from "this record is not a hash we can read"
- * (an operator problem) without parsing an exception. Both are failures; only
- * the log line differs.
- *
- * @param {string} password
- * @param {string} stored `scrypt$N$salt$hash`
- * @returns {{ok: boolean, reason?: string, needsRehash?: boolean}}
- */
-export function verifyPassword(password, stored) {
-  if (typeof password !== 'string' || password === '') return { ok: false, reason: 'empty' };
-  const parts = typeof stored === 'string' ? stored.split('$') : [];
-  if (parts.length !== 4 || parts[0] !== 'scrypt') return { ok: false, reason: 'malformed' };
-  const N = Number(parts[1]);
-  if (!Number.isInteger(N) || N < 2 || N > 1 << 24) return { ok: false, reason: 'malformed' };
-  const salt = Buffer.from(parts[2], 'hex');
-  const expected = Buffer.from(parts[3], 'hex');
-  if (salt.length < 8 || expected.length < 16) return { ok: false, reason: 'malformed' };
-
-  let derived;
-  try {
-    derived = scryptSync(password, salt, expected.length, {
-      N,
-      r: SCRYPT_R,
-      p: SCRYPT_P,
-      maxmem: SCRYPT_MAXMEM,
-    });
-  } catch {
-    // A cost the machine cannot pay is a configuration failure, not a valid login.
-    return { ok: false, reason: 'error' };
-  }
-  // Buffers are the same length by construction, so this is a pure content compare.
-  const ok = timingSafeEqual(derived, expected);
-  return ok ? { ok: true, needsRehash: N < SCRYPT_N } : { ok: false, reason: 'mismatch' };
 }
 
 /**
@@ -568,8 +461,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       topic,
       createdAt,
       ownerPersonId,
-      // No `passwordHash`: see the doc comment on `create`. Admission is an invite
-      // token or an approved request, both of which are revocable per person.
+      // Admission is an invite token or an approved request, both of which are revocable per
+      // person. There is no password field on the record at all.
       settings: mergeSettings(input.settings),
       invites: [],
       // Applications to join, answered by the owner. Kept on the group record so a
@@ -738,15 +631,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   /**
    * Redeem an invite.
    *
-   * Order of checks is deliberate. The cheap, non-secret checks (does the group
-   * exist, is this token a known hash, is it expired/revoked/spent) run before
-   * scrypt, so that a flood of bogus tokens cannot make the host burn 50 ms of
-   * CPU per attempt. The information this reveals — "this token was once real" —
-   * is known to the invitee already and is not a group secret.
-   *
-   * The use counter increments only after *every* check passes, including the
-   * password: a typo must not consume one of five uses, or a forwarded link
-   * becomes unusable through no fault of the owner.
+   * The cheap, non-secret checks (does the group exist, is this token a known hash, is it
+   * expired/revoked/spent) run first, so a flood of bogus tokens cannot make the host do
+   * work per attempt. The information this reveals — "this token was once real" — is known
+   * to the invitee already and is not a group secret.
    *
    * @param {object} input
    * @param {string} [input.groupId]
@@ -2814,7 +2702,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     return Math.max(lastFeedEntry, lastMemberSeen, group.createdAt);
   }
 
-  /** Public view of a group. Never includes `passwordHash` or `tokenHash`. */
+  /** Public view of a group. Never includes `tokenHash`. */
   function publicGroup(group) {
     return {
       groupId: group.groupId,

@@ -27,7 +27,6 @@
  * @module dsh-a2a/skills-group
  */
 
-import { randomFillSync } from 'node:crypto';
 import { buildJoinUrl } from './public-origin.js';
 
 // A skill call arrives over A2A and therefore carries no Session: the caller is a
@@ -1387,16 +1386,6 @@ function coded(code, message) {
 /** One line about an error, without a stack. */
 function describe(error) {
   return error instanceof Error ? error.message : String(error);
-}
-
-/** A generated password: unambiguous alphabet, so it survives being read aloud. */
-export function randomPassword(length = 12) {
-  const alphabet = 'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  const bytes = new Uint8Array(length);
-  randomFillSync(bytes);
-  let out = '';
-  for (const byte of bytes) out += alphabet[byte % alphabet.length];
-  return out;
 }
 
 /** A finite number, or the fallback. */
