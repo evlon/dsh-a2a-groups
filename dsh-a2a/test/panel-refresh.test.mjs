@@ -63,7 +63,7 @@ test('the change signature notices a roster change', () => {
 
 test('the panel can replace the injected table', () => {
   // The page renders from a global injected once. A refresh changes the ledger, not that global.
-  assert.match(CLIENT, /function replaceGroups\(groups\)/u);
+  assert.match(CLIENT, /function replaceGroups\(groups, directoryError\)/u);
   const body = CLIENT.slice(CLIENT.indexOf('function replaceGroups('));
   assert.match(body, /CHANGE_EVENT/u, 'subscribers must be woken, or the poll is the only path to a re-render');
 });
@@ -119,9 +119,14 @@ test('the groups endpoint returns an ARRAY, not the whole snapshot', () => {
   const index = readFileSync('lib/index.js', 'utf8');
   const at = index.indexOf("if (name === 'groups') {");
   assert.ok(at > -1, 'the endpoint must exist');
-  const body = index.slice(at, index.indexOf('}', index.indexOf('return { ok: true', at)));
+  // Slice to the next top-level `if (name ===` — the return block lies between them, and slicing on the first `}` is
+  // fragile now that the endpoint awaits a directory refresh and nests `value: { ... }`.
+  const next = index.indexOf("if (name ===", at + 1);
+  const body = index.slice(at, next > -1 ? next : at + 2000);
   // It must reach INTO the snapshot.
   assert.match(body, /groups: snapshot\.groups/u, 'the endpoint must return the array, not the snapshot');
   // And must not hand the snapshot itself over under that key.
   assert.doesNotMatch(body, /groups: publishGroups\(\)/u, 'that shape is the bug');
+  // `directoryError` rides along with the array, so the panel can tell an empty directory from a failed fetch.
+  assert.match(body, /directoryError: snapshot\.directoryError/u, 'the endpoint must say WHY 「可加入」 is empty');
 });

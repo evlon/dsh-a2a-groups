@@ -402,6 +402,69 @@ const PANEL_FEED_TAIL = 8;
     }
   };
 
+  /**
+   * The host's public group directory, as last fetched.
+   *
+   * WHY A CACHE AND NOT A DIRECT CALL
+   *
+   * `publishGroups()` is SYNCHRONOUS: it also runs while rendering the page HTML, where awaiting is impossible. Asking the
+   * host inside it would mean either blocking the render on a network round trip or dropping the feature.
+   *
+   * So the fetch is separate (`refreshDirectory`) and this holds its last answer. A stale list is acceptable — the panel
+   * already shows group data that is a poll behind — while a blank panel is not.
+   */
+  let directoryCache = { at: 0, groups: [], error: '' };
+
+  /**
+   * Fetch the host's public directory and remember it.
+   *
+   * The list is what the host OFFERS, which is a different question from what this machine has JOINED. Without it the
+   * panel could only ever show groups the person is already in, and 「宿主上还有 5 个群可以加入」 was invisible in the
+   * UI even though `a2a_group_directory` answered it correctly on the tool surface. Measured: a panel showing 1 group
+   * while the host listed 6.
+   *
+   * Failures are recorded rather than thrown: a directory is a convenience, and an unreachable host must not break the
+   * panel that is otherwise fully usable from the ledger.
+   *
+   * @returns {Promise<void>} resolves when the attempt finishes, successfully or not.
+   */
+  const refreshDirectory = async () => {
+    const record = identities.list()[0];
+    const target = record !== undefined
+      ? { baseUrl: record.baseUrl, personKey: record.personKey }
+      : (settings.groups.gatewayBase !== '' && settings.groups.agentName !== ''
+        ? { baseUrl: `${settings.groups.gatewayBase.replace(/\/+$/, '')}/${settings.groups.agentName}` }
+        : undefined);
+    if (target === undefined) {
+      directoryCache = { at: clock(), groups: [], error: '还没有配置网关或宿主名，无法浏览群目录。' };
+      return;
+    }
+    try {
+      const result = await bridge.send(target, {
+        skill: 'group/directory',
+        text: 'list groups',
+        data: { limit: 50 },
+        timeoutMs: settings.client.timeoutMs,
+      });
+      const listed = Array.isArray(result?.data?.groups) ? result.data.groups : [];
+      directoryCache = {
+        at: clock(),
+        // Only what the panel needs to render a row it can act on.
+        groups: listed.map((group) => ({
+          groupId: group.groupId,
+          name: group.name ?? group.groupId,
+          topic: group.topic ?? '',
+          memberCount: Number.isFinite(group.memberCount) ? group.memberCount : 0,
+          onlineCount: Number.isFinite(group.onlineCount) ? group.onlineCount : 0,
+          lastTime: Number.isFinite(group.lastActivityAt) ? group.lastActivityAt : 0,
+        })),
+        error: '',
+      };
+    } catch (error) {
+      directoryCache = { at: clock(), groups: directoryCache.groups, error: describe(error) };
+    }
+  };
+
   const publishGroups = () => {
     try {
       const rows = [];
@@ -456,7 +519,17 @@ const PANEL_FEED_TAIL = 8;
           discovered: false,
           name: summary?.name ?? record.groupName ?? record.groupId,
           topic: summary?.topic ?? '',
-          role: summary?.owner?.personId === record.personId ? 'owner' : record.role ?? 'member',
+          // Three sources, most authoritative first.
+          //
+          // `summary.owner` only exists for a group THIS instance hosts. Then the cached roster — the host's own answer
+          // from the last info call. Only then the ledger's flat `role`, which is written at join time and was measured
+          // stuck at `member` after the person was promoted: the panel filed a group under 「我参与」 while the host said
+          // `isOwner: true`, and 「我管理」 showed 「还没有你管理的协作群」.
+          role: summary?.owner?.personId === record.personId
+            ? 'owner'
+            : (Array.isArray(record.members) && record.members.some((member) => member.personId === record.personId && member.role === 'owner')
+              ? 'owner'
+              : (record.role ?? 'member')),
           // A remote group has no local snapshot, so the counts come from what the
           // member-side tool cached after calling group/info. Zero would read as
           // \"this group is empty\" rather than \"not fetched yet\", which is the difference
@@ -551,8 +624,7 @@ const PANEL_FEED_TAIL = 8;
             knownSessionId: knownByGroup.get(summary.groupId)?.sessionId ?? '',
             canRejoinAs: knownByGroup.has(summary.groupId),
             name: summary.name,
-            topic: summary.topic ?? '',
-            role: 'member',
+            topic: summary.topic ?? '',            role: 'member',
             memberCount: summary.memberCount ?? 0,
             onlineCount: summary.onlineCount ?? 0,
             unreadCount: 0,
@@ -576,6 +648,39 @@ const PANEL_FEED_TAIL = 8;
         // The rejoin offer is therefore driven by `canRejoinAs` (set on each ledger-derived row above) plus the
         // pane's own comparison against the current Session — not by a shadow row.
 
+        // Groups the HOST offers that this machine has not joined.
+        //
+        // `groups.list()` above only knows what THIS instance hosts — zero for every member instance, because the
+        // groups live on a separate host. A member therefore saw only the groups it had already joined, and the six
+        // public groups sitting on the host were invisible in the UI while `a2a_group_directory` answered them
+        // correctly. These rows come from the cached directory instead, which is filled by `refreshDirectory()`.
+        for (const entry of directoryCache.groups) {
+          if (joinedIds.has(entry.groupId)) continue;
+          if (rows.some((row) => row.groupId === entry.groupId)) continue;
+          rows.push({
+            id: entry.groupId,
+            groupId: entry.groupId,
+            joined: false,
+            discovered: true,
+            knownAs: '',
+            knownSessionId: '',
+            canRejoinAs: false,
+            name: entry.name,
+            topic: entry.topic,
+            role: 'member',
+            memberCount: entry.memberCount,
+            onlineCount: entry.onlineCount,
+            unreadCount: 0,
+            lastSeq: 0,
+            lastTime: entry.lastTime,
+            sessionId: '',
+            local: false,
+            rosterInSession: false,
+            lastFromName: '',
+            lastIsSystem: false,
+          });
+        }
+
       } catch (error) {
         // A discover list is a convenience; failing to build it must not blank the panel.
         info(ctx, `a2a: could not list discoverable groups (${describe(error)})`);
@@ -586,6 +691,11 @@ const PANEL_FEED_TAIL = 8;
         selfVersion: pluginVersion(),
         updatedAt: clock(),
         groups: rows,
+        // Why the 「可加入」 list is empty, when it is. An empty list means either 「nothing more exists」 or 「we could not
+        // ask the host」, and only one of those is good news — saying which avoids presenting a network failure as a
+        // fact about the world.
+        directoryError: directoryCache.error,
+        directoryAt: directoryCache.at,
         // Colleague cards travel with the group list because the panel renders both from one
         // snapshot: a second channel would mean a second way for the two to disagree.
         // The aggregator is a pure function in core/: rosters in, cards out. Keeping it here
@@ -767,8 +877,20 @@ const PANEL_FEED_TAIL = 8;
               // `Array.isArray` was false, `replaceGroups` refused it, and EVERY POLL SILENTLY WROTE NOTHING — while
               // still reporting `ok: true`. The page therefore kept the snapshot injected at load time forever, which
               // is exactly the reported behaviour: 「操作的时候看不到，重新打开刷新以后能看到」.
+              //
+              // The directory is refreshed here, on the poll, rather than on every render: the page's initial HTML is
+              // synchronous and cannot await a network call, while the poll is already async and has a natural cadence.
+              await refreshDirectory();
               const snapshot = publishGroups();
-              return { ok: true, value: { groups: snapshot.groups, at: clock() } };
+              return {
+                ok: true,
+                value: {
+                  groups: snapshot.groups,
+                  directoryError: snapshot.directoryError,
+                  directoryAt: snapshot.directoryAt,
+                  at: clock(),
+                },
+              };
             }
             // Human-confirmation settings for one Session.
             //

@@ -1265,6 +1265,13 @@ function requireSession(sessionId, tool) {
           }))
         : undefined,
       rosterCachedAt: Array.isArray(meta.members) ? Date.now() : undefined,
+      // Keep the ledger's own `role` in step with what the host just said.
+      //
+      // Measured bug: `role` was written once at join time and never refreshed. A person who was made owner later kept
+      // `role: "member"` in the ledger forever — while `members[]` correctly said `owner`. The panel reads
+      // `record.role`, so it filed the group under 「我参与」 and the 「我管理」 tab said 「还没有你管理的协作群」 even though
+      // the host reported `isOwner: true`. Two fields in one record disagreeing, and the UI trusted the stale one.
+      role: meta.isOwner === true ? 'owner' : (typeof meta.role === 'string' && meta.role !== '' ? meta.role : 'member'),
     });
     await identities.flush();
     return {
@@ -1490,7 +1497,13 @@ function requireSession(sessionId, tool) {
       rows.push({
         groupId: record.groupId,
         name: summary?.name ?? record.groupName ?? record.groupId,
-        role: summary?.owner?.personId === record.personId ? 'owner' : record.role,
+        // The roster is the host's own answer and outranks the flat `role`, which is written once at join time. Measured:
+        // a person promoted to owner kept `role: "member"` in the ledger forever while `members[]` said `owner`.
+        role: summary?.owner?.personId === record.personId
+          ? 'owner'
+          : (Array.isArray(record.members) && record.members.some((member) => member.personId === record.personId && member.role === 'owner')
+            ? 'owner'
+            : record.role),
         // WHO I AM in this group, not just what I may do.
         //
         // `role` alone answered 「member」 and left the caller unable to name itself: it could not answer 「我是谁」, and

@@ -1099,7 +1099,13 @@ test("the tab bar draws a glyph per tab and keeps every label", () => {
 		&& element.props.title === "全部");
 	assert.equal(tabs.length, 1, "the 全部 tab must be a titled button");
 
-	for (const label of ["全部", "我创建", "我参与", "同事名片"]) {
+	// 「我管理」, not 「我创建」.
+	//
+	// The filter behind this tab is `role === "owner"` — it answers 「我是群主」, not 「这个群是我建的」. Those differ the
+	// moment an existing group gains a new owner, which is exactly the state measured: the host reported
+	// `isOwner: true` while the tab labelled 我创建 read 0, because the label promised a different question than the
+	// code asked.
+	for (const label of ["全部", "我管理", "我参与", "同事名片"]) {
 		const tab = findAll(tree).filter((element) => element.type === "button" && element.props.title === label)[0];
 		assert.ok(tab !== undefined, `tab ${label} must keep its accessible title`);
 		assert.ok(tab.children.some((child) => child !== null && typeof child === "object" && child.type === "svg"),

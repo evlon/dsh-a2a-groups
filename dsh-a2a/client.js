@@ -92,8 +92,18 @@ window.__ModuleLoader__.load({
 		 */
 		const PANEL_TABS = [
 			{ id: "all", label: "全部", icon: "list" },
-			{ id: "mine", label: "我创建", icon: "plus" },
+			// 「我管理」, not 「我创建」: the filter is `role === "owner"`, which answers 「我是群主」 rather than 「这个群是我建
+			// 的」. The two differ as soon as an existing group gains a new owner, and the old label made that state look like
+			// a bug — the host said `isOwner: true` while the tab read 0.
+			//
+			// The `plus` glyph is kept from the previous label: it is in the fallback set, and `settings` is not (measured
+			// by the tab-bar test, which requires every tab to carry a rendered icon).
+			{ id: "mine", label: "我管理", icon: "plus" },
 			{ id: "joined", label: "我参与", icon: "users" },
+			// Groups the host OFFERS that this machine has not joined. Without it the panel could only ever show what you
+			// are already in, and 「宿主上还有 5 个群可以加入」 was invisible even though `a2a_group_directory` answered it
+			// — measured: a panel showing 1 group while the host listed 6.
+			{ id: "discover", label: "可加入", icon: "search" },
 			{ id: "cards", label: "同事名片", icon: "user" }
 		];
 
@@ -571,15 +581,24 @@ window.__ModuleLoader__.load({
 		 * @param {Array} groups - the `groups` array a refresh returned.
 		 * @returns {void}
 		 */
-		function replaceGroups(groups) {
+		/**
+		 * Write a fresh group list into the host global.
+		 *
+		 * `directoryError` rides along when known, so the panel can say WHY the 「可加入」 tab is empty — a network failure
+		 * and an empty directory are different facts that both render as an empty list, and only one of them is good news.
+		 * Omitted by callers that only have the array, which keeps the local read path unchanged.
+		 */
+		function replaceGroups(groups, directoryError) {
 			if (!Array.isArray(groups)) return;
 			const host = hostObject();
 			if (host === undefined) return;
 			try {
 				const existing = host[GLOBAL_KEY];
+				const patch = { groups: groups };
+				if (typeof directoryError === "string") patch.directoryError = directoryError;
 				const next = existing !== null && typeof existing === "object" && !Array.isArray(existing)
-					? Object.assign({}, existing, { groups: groups })
-					: { groups: groups };
+					? Object.assign({}, existing, patch)
+					: patch;
 				host[GLOBAL_KEY] = next;
 			} catch (error) {
 				// A frozen global would make this throw; the poll will pick the change up on the next load instead.
@@ -916,6 +935,9 @@ window.__ModuleLoader__.load({
 						if (disposed) return;
 						if (result !== null && result !== undefined && result.ok === true) {
 							const groups = result.value !== undefined && result.value !== null ? result.value.groups : undefined;
+							const directoryError = result.value !== undefined && result.value !== null && typeof result.value.directoryError === "string"
+								? result.value.directoryError
+								: "";
 							// `replaceGroups` refuses anything that is not an array, and that refusal is what made this
 							// whole fix do nothing for an hour: the endpoint reported success while handing back the
 							// wrong object, so every poll wrote nothing and the page kept its load-time snapshot. Warn
@@ -923,7 +945,7 @@ window.__ModuleLoader__.load({
 							if (!Array.isArray(groups)) {
 								warn("panel poll returned no group array", result.value);
 							}
-							replaceGroups(groups);
+							replaceGroups(groups, directoryError);
 						}
 						readLocal();
 					}).catch(function () {
@@ -1060,7 +1082,7 @@ window.__ModuleLoader__.load({
 		 * | export                          | drawn as | used for                              |
 		 * |---------------------------------|----------|---------------------------------------|
 		 * | IconFlatListOutlineRegular      | list     | tab 「全部」                           |
-		 * | IconPlusOutlineRegular          | plus     | tab 「我创建」                         |
+		 * | IconPlusOutlineRegular          | plus     | tab 「我管理」                         |
 		 * | IconUsersOutlineRegular         | 2 people | tab 「我参与」/ members header / count |
 		 * | IconUserOutlineRegular          | 1 person | tab 「同事名片」                       |
 		 * | IconChevronDownOutlineRegular   | ⌄        | expanded group card                   |
@@ -1608,7 +1630,7 @@ window.__ModuleLoader__.load({
 		/**
 		 * The panel's horizontal tab bar.
 		 *
-		 * Counts are shown on each tab because "我创建 (0)" is information: it says the
+		 * Counts are shown on each tab because "我管理 (0)" is information: it says the
 		 * question is answerable, and the answer is none. A tab that vanished when empty
 		 * would leave a person wondering whether the feature existed.
 		 */
@@ -4091,6 +4113,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 				all: snapshot.groups.length,
 				mine: sections.mine.length,
 				joined: sections.joined.length,
+				discover: sections.discover.length,
 				cards: snapshot.cards.length
 			};
 
@@ -4100,9 +4123,11 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					? sections.mine
 					: tab === "joined"
 						? sections.joined
-						: tab === "cards"
-							? []
-							: snapshot.groups;
+						: tab === "discover"
+							? sections.discover
+							: tab === "cards"
+								? []
+								: snapshot.groups;
 
 			/** Every tag present across the roster, so the filter offers real choices only. */
 			const allTags = [];
@@ -4122,10 +4147,16 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						"p",
 						{ style: S.emptyBody },
 						tab === "mine"
-							? "还没有创建过协作群。在会话里说「建个群叫 xxx」即可。"
+							? "还没有你管理的协作群。在会话里说「建个群叫 xxx」你就是群主。"
 							: tab === "joined"
-								? "这个会话还没有加入协作群。在「全部」里找一个申请加入，或向同事要邀请链接。"
-								: "还没有任何协作群。"
+								? "这个会话还没有加入协作群。在「可加入」里找一个申请，或向同事要邀请链接。"
+								: tab === "discover"
+									// Distinguish 「the host has nothing more」 from 「we could not ask the host」. Both produce an
+									// empty list, and only one of them is good news.
+									? (snapshot.directoryError === ""
+										? "宿主上没有更多可以加入的群了。"
+										: `没能取到宿主的群目录：${snapshot.directoryError}`)
+									: "还没有任何协作群。"
 					)
 				: h(
 						"div",
