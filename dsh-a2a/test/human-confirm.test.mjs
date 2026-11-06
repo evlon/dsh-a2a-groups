@@ -82,27 +82,75 @@ test('the timeout policy travels with the verdict', () => {
 // The question a person reads
 // ---------------------------------------------------------------------------
 
-test('the question names the sender, the group, and what saying yes does', () => {
-  const built = confirmationQuestion({ groupName: '发票与对账平台', sender: '张三', text: '请帮我核对一下对账口径' });
-  const text = built.questions[0].question;
-  assert.match(text, /张三/);
-  assert.match(text, /发票与对账平台/);
-  assert.match(text, /核对一下对账口径/);
-  // Both options must exist and say what they do, or the human cannot choose knowingly.
-  const labels = built.questions[0].options.map((option) => option.label);
-  assert.deepEqual(labels, ['允许', '拒绝']);
+test('the card is split into header, one-line question, and quoted draft', () => {
+  // The seam renders header as a small eyebrow, question as the 16px TITLE, detail as Markdown below. Putting everything
+  // into `question` made a long item a headline wrapped into a narrow column — reported as 「不如 user question 总结得好」.
+  const built = confirmationQuestion({ groupName: '发票与对账平台', draft: '好的，我马上核对对账口径', replyingTo: 282 });
+
+  // The group goes in the eyebrow: a place, not a sentence.
+  assert.equal(built.questions[0].header, '发票与对账平台');
+
+  // The title is ONE line and asks the decision. No newlines: a title with line breaks is a wall again.
+  const title = built.questions[0].question;
+  assert.ok(title.includes('\n') === false, 'the title must stay one line');
+  assert.ok(title.length <= 40, `title should be short, got ${title.length} chars`);
+  assert.ok(title.length <= 14, `title must survive a narrow card, got ${title.length}`);
+
+  // What the person approves is the DRAFT that would go out, quoted.
+  const detail = built.questions[0].detail;
+  assert.match(detail, /马上核对对账口径/);
+  assert.match(detail, /^> /m, 'the draft must be a Markdown quote');
 });
 
-test('a very long message is shortened rather than dumped into the question', () => {
-  const built = confirmationQuestion({ groupName: 'G', sender: 'S', text: 'x'.repeat(5000) });
-  const text = built.questions[0].question;
-  assert.ok(text.length < 900, `question should stay readable, got ${text.length} chars`);
-  assert.match(text, /…/);
+test('the detail says what each choice does to the group', () => {
+  // 「允许」/「拒绝」 mean nothing unless the reader knows whether colleagues will see something.
+  const built = confirmationQuestion({ groupName: '发票与对账平台', draft: 'x', replyingTo: 3 });
+  const detail = built.questions[0].detail;
+  assert.match(detail, /允许/);
+  assert.match(detail, /同事能看到/);
+  assert.match(detail, /不会出现任何内容/);
+  const [allow, deny] = built.questions[0].options;
+  assert.equal(allow.label, '允许');
+  assert.match(allow.description, /发到/);
+  assert.match(deny.description, /看不到/);
 });
 
-test('an empty message still produces a usable question', () => {
-  const built = confirmationQuestion({ groupName: 'G', sender: 'S', text: '' });
-  assert.match(built.questions[0].question, /没有正文/);
+test('the thread number appears when the reply answers a specific message', () => {
+  const withThread = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 282 });
+  assert.match(withThread.questions[0].question, /#282/);
+  // And is simply absent when it is not a reply to anything in particular.
+  const without = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: undefined });
+  assert.ok(without.questions[0].question.includes('#') === false);
+});
+
+test('a very long draft is cut with a VISIBLE marker', () => {
+  // Silently truncating would let the reader approve something they were never shown.
+  const built = confirmationQuestion({ groupName: 'G', draft: 'x'.repeat(5000), replyingTo: 1 });
+  const detail = built.questions[0].detail;
+  assert.ok(detail.length < 1600, `detail should stay readable, got ${detail.length} chars`);
+  assert.match(detail, /还有 \d+ 字未显示/, 'the cut must announce itself');
+});
+
+test('an empty draft still produces a usable card', () => {
+  const built = confirmationQuestion({ groupName: 'G', draft: '', replyingTo: 1 });
+  assert.match(built.questions[0].detail, /没有正文/);
+  assert.ok(built.questions[0].question.length > 0);
+});
+
+test('a multi-line draft stays quoted line by line', () => {
+  // Markdown needs the marker on every line, or the quote breaks after the first one.
+  const built = confirmationQuestion({ groupName: 'G', draft: '第一行\n第二行', replyingTo: 1 });
+  const detail = built.questions[0].detail;
+  assert.match(detail, /^> 第一行$/m);
+  assert.match(detail, /^> 第二行$/m);
+});
+
+test('an unknown group is described without inventing a name', () => {
+  // Never fabricate 「协作群」 as if it were the real title: the reader would think they know where this lands.
+  const built = confirmationQuestion({ groupName: '', draft: 'x', replyingTo: 1 });
+  assert.equal(built.questions[0].header, '协作群');
+  // The group is named in `detail` (where there is room), not in the title.
+  assert.match(built.questions[0].detail, /群里/);
 });
 
 // ---------------------------------------------------------------------------

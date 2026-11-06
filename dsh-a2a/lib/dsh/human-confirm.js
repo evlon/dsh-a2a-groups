@@ -103,27 +103,62 @@ export function confirmationPolicy({ settings, post, grade }) {
 /**
  * The question text a human reads.
  *
- * It names the sender, quotes the message, and states what saying yes will do — a question that only says "confirm?"
- * leaves the human guessing what they are approving.
+ * WHAT THE PERSON IS ACTUALLY APPROVING
  *
- * @param {object} input - `{ groupName, sender, text }`.
+ * Not 「someone sent you a message」 — the reply this Session has already drafted and wants to send. That draft is the
+ * thing that will become visible to colleagues, so it belongs in front of them, verbatim.
+ *
+ * THREE FIELDS, NOT ONE
+ *
+ * The seam renders `header` as a small eyebrow line, `question` as the 16px TITLE, and `detail` as Markdown under it.
+ * An earlier version put everything into `question` alone, so a long draft became a 16px headline wrapped into a narrow
+ * column. Reported as 「不如 user question 总结得好」.
+ *
+ *   header    which group     a place, not a sentence
+ *   question  the decision    one line: send this reply or not
+ *   detail    the draft       quoted verbatim, plus what each choice does
+ *
+ * Option descriptions state the CONSEQUENCE rather than restating the label: 「允许」 and 「拒绝」 mean nothing unless the
+ * reader knows whether their colleagues will see something.
+ *
+ * @param {object} input - `{ groupName, draft, replyingTo }`.
  * @returns {object} a user-questions request payload (without the agent).
  */
-export function confirmationQuestion({ groupName, sender, text }) {
-  const who = typeof sender === 'string' && sender !== '' ? sender : '一位同事';
-  const where = typeof groupName === 'string' && groupName !== '' ? `「${groupName}」` : '协作群';
-  const body = typeof text === 'string' ? text.trim() : '';
-  const quoted = body.length > 600 ? `${body.slice(0, 600)}…` : body;
+export function confirmationQuestion({ groupName, draft, replyingTo }) {
+  const where = typeof groupName === 'string' && groupName.trim() !== '' ? groupName.trim() : '';
+  const body = typeof draft === 'string' ? draft.trim() : '';
+  const thread = typeof replyingTo === 'number' ? replyingTo : undefined;
+
+  // Quote the draft so it reads as material rather than as the question itself. A long one is cut with a VISIBLE
+  // marker: silently truncating would let the reader approve something they were never shown.
+  const LIMIT = 900;
+  const clipped = body.length > LIMIT
+    ? `${body.slice(0, LIMIT)}\n\n…（还有 ${body.length - LIMIT} 字未显示）`
+    : body;
+  const quoted = clipped === ''
+    ? '_（这条回复没有正文）_'
+    : clipped.split('\n').map((line) => `> ${line}`).join('\n');
+
+  const wherePhrase = where === '' ? '群里' : `「${where}」`;
+  const threadPhrase = thread === undefined ? '' : `#${thread}`;
+
   return {
     questions: [
       {
         // `id` is REQUIRED by the seam and is echoed back in the answer. Omitting it made `ask()` reject the request
         // outright, which surfaced as 「没有许可（error）」 and no dialog at all — measured on a live run.
         id: 'a2a-human-confirm',
-        question: `${who} 在${where}发来：\n\n${quoted === '' ? '(没有正文)' : quoted}\n\n是否让这个会话开始处理？`,
+        header: where === '' ? '协作群' : where,
+        // SHORT, and it does not repeat the group name.
+        //
+        // Measured on a live run: the card renders in a narrow column, so 「要往「发票与对账平台」回复 #287，允许吗？」
+        // wrapped into EIGHT lines of three characters each and pushed the options out of view entirely. The group is
+        // already in the header above, so naming it again costs the most expensive space in the card and buys nothing.
+        question: threadPhrase === '' ? '发送这条回复？' : `回复 ${threadPhrase}？`,
+        detail: `${quoted}\n\n---\n\n**允许** → 发到${wherePhrase}，同事能看到\n\n**拒绝** → 不发，${wherePhrase}不会出现任何内容`,
         options: [
-          { label: '允许', description: '这个会话会立即开始处理这条任务' },
-          { label: '拒绝', description: '不处理，发送方会看到被拒绝' },
+          { label: '允许', description: `发到${wherePhrase}` },
+          { label: '拒绝', description: '不发，同事看不到' },
         ],
       },
     ],

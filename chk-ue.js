@@ -1,0 +1,1 @@
+(function(){var d=document.querySelector('div[contenteditable=true]');var t=d?(d.innerText||'').trim():'';return JSON.stringify({composerLen:t.length,preview:t.slice(0,30),options:document.querySelectorAll('button.Mbwy4a_option').length,cards:document.body.innerText.indexOf('允许吗')>-1});})()

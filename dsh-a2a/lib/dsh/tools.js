@@ -106,13 +106,24 @@ export function registerTools(ctx, deps) {
       };
     }
 
+    // The card shows what the person is actually being asked to approve.
+    //
+    // `a2a_group_post`'s arguments are `{ groupId, message, mentions, replyTo }` — there is no `from` and no `groupName`,
+    // so an earlier version passed empty strings for both and the card fell back to 「一位同事」 / 「协作群」 / 「(没有正文)」
+    // no matter what had really been said. Reported as 「不如 user question 总结得好」.
+    //
+    // Two things are worth showing, and they are different: the draft that would go out (`message`), and which group it
+    // would land in (`groupId`, resolved to a name when the ledger knows it).
+    const groupRow = typeof args?.groupId === 'string'
+      ? deps.identities?.list?.().find((row) => row.groupId === args.groupId && row.groupName !== undefined)
+      : undefined;
     const decision = decideFromAnswer(await askHuman({
       seam: questionSeam,
       agent: exec?.agent,
       question: confirmationQuestion({
-        groupName: args?.groupName ?? '',
-        sender: args?.from ?? '',
-        text: args?.message ?? '',
+        groupName: groupRow?.groupName ?? '',
+        draft: typeof args?.message === 'string' ? args.message : '',
+        replyingTo: typeof args?.replyTo === 'number' ? args.replyTo : undefined,
       }),
       onTimeout: verdict.onTimeout,
       timeoutMs: verdict.timeoutMs,

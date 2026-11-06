@@ -142,8 +142,10 @@ test('replying to a colleague is gated, and a denial reaches the model as an err
     },
   );
   assert.equal(asked.length, 1, 'the human must actually have been asked');
-  // The question has to identify WHICH message, or the person cannot decide.
-  assert.match(asked[0].questions[0].question, /收到/);
+  // The card has to identify WHICH message, or the person cannot decide. The content lives in `detail` now — putting it
+  // in the title turned a long message into a 16px headline wrapped into a narrow column.
+  assert.match(asked[0].questions[0].detail, /收到/, 'the original message must appear in detail');
+  assert.ok(asked[0].questions[0].header !== undefined, 'the group name must be shown');
 });
 
 test('an approval lets the call through', async () => {
