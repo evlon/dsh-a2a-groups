@@ -10,17 +10,49 @@
 
 ## [0.1.23] — 2026-11-06
 
-> 新功能：**长轮询 `a2a_group_wait`**。MCP 客户端没有推送通道，「定时查」可以换成「挂起等」。
+> 新功能 + 一轮黑盒测试修复 + ownerless 收口 + 死代码清理。
 
 ### 新功能
 
-- **新工具 `a2a_group_wait`**（DSH 与 MCP 共用同一份 spec）：阻塞最多 `timeoutMs`，有新消息立刻返回（`hasNew:true` + 增量），窗口内无消息则返回 `hasNew:false`（非错误）。
+- **长轮询 `a2a_group_wait`**（DSH 与 MCP 共用同一份 spec）：阻塞最多 `timeoutMs`，有新消息立刻返回（`hasNew:true` + 增量），窗口内无消息则返回 `hasNew:false`（非错误）。这是 MCP 客户端「无推送」下的官方常驻监听用法：后台循环调它，有消息即报、超时静默续轮。
 - **宿主新增 `group/wait` skill**：复用现成的 `store.subscribe` watcher registry——`post`/`appendSystem` 每次本就 `notify()`，长轮询直接挂在这个通知上，无新造状态。订阅后立即补读一次，堵住「先读后订阅」之间的丢消息窗口。
-- **MCP 引导语更新**：告诉模型「后台盯群用 `a2a_group_wait` 循环，`hasNew=false` 不是错误」。
+- **`/setup` 常驻入口**（dev2 协作）：`http://<宿主>/setup` 是固定的、可收藏的「只接入协作」配置页，直接 200 不重定向、不铸一次性 token。
+- **保存名片后立即刷新**：面板写昵称/个人介绍成功后，立刻 `group/info` 读回写进本地 ledger，UI 不再需要整页刷新才看到变化；轮询同时返回 cards。
+- **`a2a_self_check` 引导**：检测到无推送环境时，提示用 `a2a_group_wait` 循环实现准实时收消息。
+
+### 修复（同事黑盒测试反馈，12 条）
+
+按严重度逐条核实，9 条已修、1 条设计权衡、2 条关闭：
+
+- **approvals/decide 对网关托管群报 `not_hosted_here`** → 改走宿主 `group/requests`/`group/decide` 技能，群主可经 MCP 审批入群。
+- **leave 首次必 retry、二次才成功** → 根因是 standalone 宿主 identities stub 缺 `remove` 方法，`group/leave` 共享体抛 TypeError（store 已删成员，重试才因 not_member 走成功）。补 no-op remove。
+- **personId 全程不暴露** → `a2a_group_summary` 成员行补 personId，`person_send`/`group_kick` 正路径可用。
+- **唯一群主 leave 后无主** → join 检测 ownerless 提拔首个加入者为群主（见下「ownerless 收口」）。
+- **已是成员仍可 request** → `requestJoin` 加 `already_member` 拒绝 + 新错误码。
+- **person_inbox 不返回 dmId** → render 补 dmId，`person_ack` 可正常调用。
+- **wait 省略 sinceSeq 重放历史** → 默认用成员已读 lastSeq。
+- **timeoutMs 非法值静默钳到 1s** → 显式非法值抛 `bad_argument`。
+- **名片/昵称显示长串 session id** → join 兜底从 session id 改为短默认「成员」；`set_card` 完整支持 displayName 写入并同步 person 表；同事名片从「本地陈旧 person 表」改为「聚合各群 roster」。
+
+### 设计权衡（保留）
+
+- unlisted 群 `request` 报「找不到这个群」是**有意的安全措辞**（不承认 unlisted 群存在），不改。
+
+### ownerless 收口（同事拍板方案 A）
+
+- 最后一人 leave **拒绝**（`last_member` 错误码），提示「先转让群主或归档」，从源头堵掉无主群。
+- 保留 join 时 ownerless 提拔兜底（救存量脏数据：悬空 owner 指针 + role 降级）。
+
+### 重构
+
+- **删死代码**：`hashPassword`/`verifyPassword`/`SCRYPT_*`/`bad_password`/`randomPassword`（「无群密码」重构后遗留，运行时零引用）。
+- **清理过时命名**：probe 脚本默认 agent `dsh-group`/`dsh-groups` → `agent-group-host`；resources.yaml 删单群通配符、key_hash 补真实值使 smoke 开箱即用。
+- **验证证据目录规范化**：test-report → verification/（报告进 git），截图归 .shots/（gitignore）。
+- **根目录清理**：删一次性探针脚本与过时 PLAN.md。
 
 ### 关键约束
 
-- `timeoutMs` 被宿主夹在 1–55 秒（保在 MCP 客户端工具调用超时之内）。
+- `timeoutMs` 被宿主夹在 1–55 秒（保在 MCP 客户端工具调用超时之内）；**常驻监听建议 ≤30s**（客户端工具超时约 30s，设 55s 会被 -32001 掐断）。
 - `bridge.send` 的 HTTP 超时取 `waitMs + 5000`，否则 HTTP 层会先于宿主的诚实「无消息」返回。
 - 端到端实测（经网关真实往返）：8 秒窗口 1 秒后 post → **1.3 秒返回**；3 秒窗口无 post → **3.0 秒返回 `hasNew:false`**。
 
