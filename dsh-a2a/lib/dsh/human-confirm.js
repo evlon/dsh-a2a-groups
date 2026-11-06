@@ -168,12 +168,19 @@ export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
           who === '' && thread === undefined ? '' : [who === '' ? '' : `**${who}**`, thread === undefined ? '' : `#${thread}`].filter(Boolean).join(' · '),
           quoted,
           '---',
-          `**允许** → 发到${wherePhrase}，同事能看到`,
-          `**拒绝** → 不发，${wherePhrase}不会出现任何内容`,
+          // Every option says what the COLLEAGUE will experience, not just what this Session will do. Silence is the one
+          // outcome a sender cannot interpret: 「没回」 reads as ignored, slow, or broken, and none of those is what the
+          // person actually chose.
+          `**允许** → 发到${wherePhrase}`,
+          `**稍后处理** → 先不发，告诉${who === '' ? '对方' : who}「我晚点回复」`,
+          `**拒绝** → 不发，告诉${who === '' ? '对方' : who}「这次不回」`,
         ].filter((part) => part !== '').join('\n\n'),
         options: [
-          { label: '允许', description: `发到${wherePhrase}` },
-          { label: '拒绝', description: '不发，同事看不到' },
+          { label: '允许', description: `现在回复，发到${wherePhrase}` },
+          // Separate from 拒绝 on purpose. 「我看到了，但晚点再说」 and 「这条我不打算回」 are different answers, and in a
+          // group they lead to different follow-ups. Collapsing them forces the person to pick the wrong one.
+          { label: '稍后处理', description: '先不回，但让对方知道你看过了' },
+          { label: '拒绝', description: '不回，也让对方知道' },
         ],
       },
     ],
@@ -297,33 +304,77 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
   return { outcome: 'answered', answer: result };
 }
 
+/**
+ * What to post to the group when the person declines or defers.
+ *
+ * WHY THE SESSION TELLS THE SENDER AT ALL
+ *
+ * Silence is the one outcome a colleague cannot interpret. 「没回」 reads as ignored, as slow, or as broken, and none of
+ * those is what the person chose. A one-line notice turns an ambiguous absence into a stated position — the difference
+ * between a colleague who waits and one who escalates or gives up.
+ *
+ * The wording is about the PERSON, not the agent: 「王五」, never 「系统拒绝」. The post appears under the Session's own
+ * name in the group, and a colleague reading it should understand a human decision rather than a policy.
+ *
+ * Both messages are also careful NOT to close the door: 「稍后处理」 says explicitly that it is not a refusal, because
+ * the two are different promises and a sender who reads defer as reject stops waiting.
+ *
+ * @param {object} input - `{ kind, draft, sender }`.
+ * @returns {string|null} the text to post, or null when nothing should be sent.
+ */
+export function noticeFor({ kind, draft, sender }) {
+  const who = typeof sender === 'string' && sender.trim() !== '' ? `@${sender.trim()} ` : '';
+  const trimmed = typeof draft === 'string' ? draft.trim() : '';
+  const about = trimmed === ''
+    ? '关于你刚才那条消息'
+    : `关于你那条消息（我原本准备这样回：「${trimmed.length > 60 ? `${trimmed.slice(0, 60)}…` : trimmed}」）`;
+  if (kind === 'defer') {
+    return `${who}${about}，我这会儿不方便处理，晚点再看。这不是拒绝，只是会慢一些。`;
+  }
+  if (kind === 'refuse') {
+    return `${who}${about}，这次我不打算回复。如果需要我处理，请直接说明要我做什么。`;
+  }
+  return null;
+}
+
 export function decideFromAnswer(result) {
   const outcome = result?.outcome;
   if (outcome === 'timed-out-allow') return { proceed: true, reason: 'timeout-allow' };
-  if (outcome === 'timed-out-deny') return { proceed: false, reason: 'timeout-deny' };
+  if (outcome === 'timed-out-deny') return { proceed: false, reason: 'timeout-deny', notify: 'defer' };
   if (outcome !== 'answered') {
     // `unavailable`, `error`, and an unanswered `never` all mean the human did not say yes. Treating any of them as
     // approval would make the check meaningless exactly when it matters.
-    return { proceed: false, reason: outcome ?? 'unknown' };
+    return { proceed: false, reason: outcome ?? 'unknown', notify: 'none' };
   }
   const raw = result?.answer;
   // Accept the documented shape, plus the two shapes a caller may reasonably hand in (a bare array, or one item).
   const list = Array.isArray(raw?.answers)
     ? raw.answers
     : (Array.isArray(raw) ? raw : (raw === undefined || raw === null ? [] : [raw]));
+  // Every label the human picked, so three options can be told apart.
+  const chosen = [];
   for (const item of list) {
     const selected = Array.isArray(item?.selected)
       ? item.selected
       : (Array.isArray(item?.labels) ? item.labels : []);
-    for (const label of selected) {
-      const text = String(label ?? '');
-      if (text.indexOf('允许') > -1 || text.toLowerCase() === 'allow') {
-        return { proceed: true, reason: 'approved' };
-      }
-    }
-    // A free-text answer counts too, when it is an approval.
+    for (const label of selected) chosen.push(String(label ?? ''));
+    // A free-text answer counts as itself, and is matched below by the same rules.
     const custom = String(item?.custom ?? '');
-    if (custom.indexOf('允许') > -1) return { proceed: true, reason: 'approved' };
+    if (custom !== '') chosen.push(custom);
   }
-  return { proceed: false, reason: 'denied' };
+  const said = chosen.join(' ');
+  // ORDER MATTERS. 「稍后处理」 contains neither 允许 nor 拒绝, but a custom answer like 「稍后再说」 must not be read as a
+  // rejection just because it also fails to match 拒绝. Defer is checked before the deny fallback for that reason.
+  if (said.indexOf('稍后') > -1 || said.indexOf('延迟') > -1 || said.indexOf('晚点') > -1) {
+    return { proceed: false, reason: 'deferred', notify: 'defer' };
+  }
+  if (said.indexOf('允许') > -1 || said.toLowerCase().indexOf('allow') > -1) {
+    return { proceed: true, reason: 'approved' };
+  }
+  if (said.indexOf('拒绝') > -1 || said.toLowerCase().indexOf('deny') > -1) {
+    return { proceed: false, reason: 'denied', notify: 'refuse' };
+  }
+  // An answer that matched nothing is still a "no": the person closed the card without approving. Reported as its own
+  // reason so the sender is not told a definite refusal that never happened.
+  return { proceed: false, reason: 'denied', notify: 'refuse' };
 }

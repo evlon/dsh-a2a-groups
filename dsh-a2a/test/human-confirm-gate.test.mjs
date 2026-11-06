@@ -28,6 +28,8 @@ import { normalizeConfig } from '../lib/core/config.js';
 function harness({ humanConfirm, seam, panelSettings } = {}) {
   const tools = new Map();
   const calls = [];
+  const posted = [];
+  const notices = [];
   const injections = [];
   const ctx = {
     tools: {
@@ -49,34 +51,41 @@ function harness({ humanConfirm, seam, panelSettings } = {}) {
     registry: { list: () => [] },
     bridge: { send: async () => ({ data: {} }) },
     store: {
+      // Record every post so a test can assert that a refusal TOLD the colleague instead of going silent.
+      post: (input) => { posted.push(input); return { seq: 900 + posted.length, mentions: [], replyTo: input.replyTo }; },
+      flush: async () => undefined,
       has: () => false,
       list: () => [],
       snapshot: () => undefined,
       flush: async () => undefined,
     },
     identities: {
+      // One LOCAL group, so a post resolves through `store.post` instead of reaching for a bridge. The notice a refusal
+      // sends is a real post, and a fake that cannot resolve membership would silently swallow it — which is exactly
+      // what happened: the test passed the refusal but the colleague was never told.
       list: () => [{
         sessionId: 'session-x',
         groupId: 'g-1',
         personId: 'm-1',
         personKey: 'mk_test',
-        local: false,
-        baseUrl: 'http://127.0.0.1:1/a2a',
+        local: true,
         groupName: 'G',
       }],
-      get: () => undefined,
+      get: (groupId) => (groupId === 'g-1'
+        ? { sessionId: 'session-x', groupId: 'g-1', personId: 'm-1', personKey: 'mk_test', local: true, groupName: 'G' }
+        : undefined),
       upsert: () => {},
       flush: async () => undefined,
       remoteMemberships: () => [],
     },
     server: { attach: () => {} },
     sessions: {},
-    logger: { info: () => {}, warn: () => {}, debug: () => {} },
+    logger: { info: () => {}, warn: (m) => { notices.push(String(m)); }, debug: () => {} },
     inbox: undefined,
   };
   if (panelSettings !== undefined) runtimeDeps.panelSettings = panelSettings;
   const registered = registerTools(ctx, runtimeDeps);
-  return { tools, calls, registered, injections };
+  return { tools, calls, registered, injections, posted, notices };
 }
 
 /** The execution object DSH hands a tool. */
@@ -128,7 +137,7 @@ test('replying to a colleague is gated, and a denial reaches the model as an err
       return { answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] };
     },
   };
-  const { tools } = harness({
+  const { tools, posted, notices } = harness({
     humanConfirm: { enabled: true, trigger: 'mention', onTimeout: 'never' },
     seam,
   });
@@ -137,7 +146,8 @@ test('replying to a colleague is gated, and a denial reaches the model as an err
     (error) => {
       // An ERROR, not a quiet result: otherwise the model reports success for something never approved.
       assert.equal(error.code, 'human_confirm_refused');
-      assert.match(error.message, /需要你本人确认/);
+      // The message must also tell the model not to keep trying: a refusal that invites a retry produces a loop.
+      assert.match(error.message, /不要再重试/);
       return true;
     },
   );
@@ -146,6 +156,12 @@ test('replying to a colleague is gated, and a denial reaches the model as an err
   // in the title turned a long message into a 16px headline wrapped into a narrow column.
   assert.match(asked[0].questions[0].detail, /收到/, 'the original message must appear in detail');
   assert.ok(asked[0].questions[0].header !== undefined, 'the group name must be shown');
+  // THE COLLEAGUE IS TOLD.
+  //
+  // Silence is the one answer a sender cannot interpret — it reads as ignored, slow, or broken, and none of those is
+  // what was chosen. A refusal must post a notice before failing.
+  assert.equal(posted.length, 1, `a refusal must tell the colleague something; logger said: ${notices.join(' | ')}`);
+  assert.match(posted[0].text, /不打算回复/);
 });
 
 test('an approval lets the call through', async () => {
@@ -236,4 +252,36 @@ test('a failed sender lookup still produces an answerable card', async () => {
   assert.equal(asked.length, 1, 'the question must still be asked when the name cannot be read');
   assert.equal(asked[0].questions[0].id, 'a2a-human-confirm');
   if (error !== undefined) assert.notEqual(error.code, 'human_confirm_refused');
+});
+
+test('稍后处理 also tells the colleague, and says it is NOT a refusal', async () => {
+  // The two non-approvals are different promises. A sender who reads defer as reject stops waiting, so the notice has
+  // to say explicitly that this is a delay rather than a no.
+  const seam = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['稍后处理'] }] }) };
+  const { tools, posted } = harness({ humanConfirm: { enabled: true, trigger: 'mention', onTimeout: 'never' }, seam });
+  await assert.rejects(
+    () => tools.get('a2a_group_post').execute({ groupId: 'g-1', message: '收到', replyTo: 7 }, exec()),
+    (error) => {
+      assert.equal(error.code, 'human_confirm_refused');
+      assert.match(error.message, /稍后处理/);
+      return true;
+    },
+  );
+  assert.equal(posted.length, 1, 'defer must also notify');
+  assert.match(posted[0].text, /晚点/);
+  assert.match(posted[0].text, /不是拒绝/, 'the notice must not read like a rejection');
+});
+
+test('允许 posts nothing extra and does not refuse', async () => {
+  // The approval path must stay quiet: an extra notice on approval would be noise in the group.
+  const seam = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['允许'] }] }) };
+  const { tools, posted } = harness({ humanConfirm: { enabled: true, trigger: 'mention', onTimeout: 'never' }, seam });
+  let error;
+  try {
+    await tools.get('a2a_group_post').execute({ groupId: 'g-1', message: '收到', replyTo: 7 }, exec());
+  } catch (caught) {
+    error = caught;
+  }
+  if (error !== undefined) assert.notEqual(error.code, 'human_confirm_refused');
+  assert.equal(posted.length, 1, 'only the real reply is posted, no extra notice');
 });

@@ -102,17 +102,24 @@ test('the card is split into header, one-line question, and quoted draft', () =>
   assert.match(detail, /^> /m, 'the draft must be a Markdown quote');
 });
 
-test('the detail says what each choice does to the group', () => {
-  // 「允许」/「拒绝」 mean nothing unless the reader knows whether colleagues will see something.
-  const built = confirmationQuestion({ groupName: '发票与对账平台', draft: 'x', replyingTo: 3 });
+test('the card offers three distinct choices, each stating what the colleague sees', () => {
+  // Silence is the outcome a sender cannot interpret. Every option therefore says what the COLLEAGUE will
+  // experience, and the two non-approvals promise a notice rather than nothing.
+  const built = confirmationQuestion({ groupName: '发票与对账平台', draft: 'x', replyingTo: 3, sender: '张三' });
+  const labels = built.questions[0].options.map((o) => o.label);
+  assert.deepEqual(labels, ['允许', '稍后处理', '拒绝'], 'approve first, then the two ways of not replying');
+
   const detail = built.questions[0].detail;
-  assert.match(detail, /允许/);
-  assert.match(detail, /同事能看到/);
-  assert.match(detail, /不会出现任何内容/);
-  const [allow, deny] = built.questions[0].options;
-  assert.equal(allow.label, '允许');
+  assert.match(detail, /\*\*允许\*\*/);
+  assert.match(detail, /\*\*稍后处理\*\*/);
+  assert.match(detail, /\*\*拒绝\*\*/);
+  // Both non-approvals tell the sender something.
+  assert.equal((detail.match(/告诉/g) ?? []).length, 2, 'defer and refuse each notify the colleague');
+
+  const [allow, defer, refuse] = built.questions[0].options;
   assert.match(allow.description, /发到/);
-  assert.match(deny.description, /看不到/);
+  assert.match(defer.description, /让对方知道/);
+  assert.match(refuse.description, /让对方知道/);
 });
 
 test('the thread number appears when the reply answers a specific message', () => {
@@ -177,10 +184,20 @@ test('an answered question reports approval when the human chose 允许', async 
   assert.deepEqual(decideFromAnswer(result), { proceed: true, reason: 'approved' });
 });
 
-test('an answered question reports denial when the human chose 拒绝', async () => {
-  const seam = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] }) };
-  const result = await askHuman({ seam, agent: {}, question: {}, onTimeout: 'never' });
-  assert.deepEqual(decideFromAnswer(result), { proceed: false, reason: 'denied' });
+test('拒绝 and 稍后处理 are DIFFERENT answers', async () => {
+  // 「我看到了，但晚点再说」 and 「这条我不打算回」 are different promises. Collapsing them forces the person to pick
+  // the wrong one, and tells the colleague the wrong thing.
+  const refuse = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['拒绝'] }] }) };
+  const defer = { ask: async () => ({ answers: [{ id: 'a2a-human-confirm', selected: ['稍后处理'] }] }) };
+  const refused = decideFromAnswer(await askHuman({ seam: refuse, agent: {}, question: {}, onTimeout: 'never' }));
+  const deferred = decideFromAnswer(await askHuman({ seam: defer, agent: {}, question: {}, onTimeout: 'never' }));
+  // Neither proceeds, but they are distinguishable and both notify.
+  assert.equal(refused.proceed, false);
+  assert.equal(deferred.proceed, false);
+  assert.equal(refused.reason, 'denied');
+  assert.equal(deferred.reason, 'deferred');
+  assert.equal(refused.notify, 'refuse');
+  assert.equal(deferred.notify, 'defer');
 });
 
 test('a timed-out question honours the deny policy', async () => {

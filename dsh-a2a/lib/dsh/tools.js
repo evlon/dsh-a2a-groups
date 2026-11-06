@@ -23,6 +23,7 @@ import {
   confirmationPolicy,
   confirmationQuestion,
   decideFromAnswer,
+  noticeFor,
 } from './human-confirm.js';
 
 /**
@@ -190,10 +191,35 @@ export function registerTools(ctx, deps) {
       timeoutMs: verdict.timeoutMs,
     }));
     if (decision.proceed === true) return null;
+
+    // TELL THE COLLEAGUE, THEN REFUSE.
+    //
+    // The person chose 「稍后处理」 or 「拒绝」. Either way a colleague is left waiting on a message that will never
+    // arrive, and silence is the one answer they cannot interpret — it reads as ignored, slow, or broken, and none of
+    // those is what was chosen. So a one-line notice goes to the group first, and only then does the tool fail.
+    //
+    // This notify post is NOT gated. It runs inside the gate that was just answered, and asking again would loop.
+    // It is best-effort: if it fails, the refusal still stands — the person's decision is not undone by a network error.
+    if (decision.notify === 'defer' || decision.notify === 'refuse') {
+      try {
+        await runtime.call('a2a_group_post', {
+          groupId: args.groupId,
+          message: noticeFor({
+            kind: decision.notify,
+            draft: typeof args?.message === 'string' ? args.message : '',
+            sender: repliedSender,
+          }),
+        }, callerOf(exec));
+      } catch (error) {
+        deps.logger?.warn?.(`human-confirm notice not delivered: ${String(error?.message ?? error)}`);
+      }
+    }
     return {
       refused: true,
       reason: decision.reason,
-      message: `这条动作需要你本人确认后才能执行，但没有得到许可（${decision.reason}）。`,
+      message: decision.notify === 'defer'
+        ? '用户选择了稍后处理，并且已经把这件事告诉了对方。不要再重试或改用别的方式发送。'
+        : '用户拒绝了这次回复，并且已经告诉了对方。不要再重试。',
     };
   }
 
