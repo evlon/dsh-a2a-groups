@@ -287,11 +287,14 @@ test('the Host deadline honours the allow policy too', async () => {
 
 test('the title names the sender when it is known, because that is the 「谁」', () => {
   const built = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 287, sender: '张三' });
-  // The name is in detail, where the full card width is available.
+  // 「谁」 belongs in the title: replying to 张三 is a different decision from a reply nobody asked for. This only became
+  // possible after the card switched from askTimed to ask() — the countdown controls used to squeeze the title to 43px.
+  assert.equal(built.questions[0].question, '回复 张三？');
+  // Short enough to stay on one line even in the narrow card.
+  assert.ok(built.questions[0].question.length <= 10, `got ${built.questions[0].question}`);
+  // The name is repeated in detail, where the reader looks when deciding about the notice wording.
   assert.match(built.questions[0].detail, /张三/);
-  // Still one short line: the whole point of the rewrite.
-  assert.ok(built.questions[0].question.length <= 7, `the title must fit one line, got ${built.questions[0].question}`);
-  // The seq still has to be somewhere: it moved to detail, where there is room.
+  // The seq still has to be somewhere: it stays in detail, where there is room.
   assert.match(built.questions[0].detail, /#287/);
 });
 

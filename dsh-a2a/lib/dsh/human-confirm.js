@@ -114,9 +114,9 @@ export function confirmationPolicy({ settings, post, grade }) {
  * An earlier version put everything into `question` alone, so a long draft became a 16px headline wrapped into a narrow
  * column. Reported as 「不如 user question 总结得好」.
  *
- *   header    which group     a place, not a sentence
- *   question  the decision    one line: send this reply or not
- *   detail    the draft       quoted verbatim, plus what each choice does
+ *   header    which group       a place, not a sentence
+ *   question  who + what        「回复 张三？」 — one line, names the person
+ *   detail    the draft         quoted verbatim, the seq, and what each choice does
  *
  * Option descriptions state the CONSEQUENCE rather than restating the label: 「允许」 and 「拒绝」 mean nothing unless the
  * reader knows whether their colleagues will see something.
@@ -141,7 +141,6 @@ export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
     : clipped.split('\n').map((line) => `> ${line}`).join('\n');
 
   const wherePhrase = where === '' ? '群里' : `「${where}」`;
-  const threadPhrase = thread === undefined ? '' : `#${thread}`;
 
   return {
     questions: [
@@ -150,19 +149,21 @@ export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
         // outright, which surfaced as 「没有许可（error）」 and no dialog at all — measured on a live run.
         id: 'a2a-human-confirm',
         header: where === '' ? '协作群' : where,
-        // VERY SHORT — measured against the real layout, not guessed.
+        // THE TITLE ANSWERS 「谁要这个会话做什么」, in one line.
         //
-        // The card is 340px wide but the title block gets only 43px, because the header's right-hand controls
-        // (「172秒后继续工作」 「慢慢回答」 「×」) claim the rest. 43px is about THREE Chinese characters per line.
+        // Getting here took three measurements, and the earlier numbers are why this comment exists:
         //
-        // Measured title widths, in order:
-        //   「要往「发票与对账平台」回复 #287，允许吗？」  → 8 lines
-        //   「回复 张三 · #287？」                        → 3 lines
-        //   「回复 张三？」                              → 3 lines (still!)
+        //   with askTimed, the header's countdown (「172秒后继续工作」) and 「慢慢回答」 claimed 241px of a 340px card,
+        //   leaving the title 43px — about three characters. Every title wrapped: 「回复 张三 · #287？」 into three lines,
+        //   「回复 张三？」 into three lines too.
         //
-        // So the title cannot carry any name at all. It carries only the ACTION — the one word that decides what the
-        // buttons mean — and every piece of identifying context moves to `detail`, where the full 340px is available.
-        question: '发出这条回复？',
+        //   with ask() those two controls are gone, the title block measures 112px in the narrow card and much more in a
+        //   wide one, and 「发出这条回复？」 sits on one line with room left over (verified in s33-three-options.png).
+        //
+        // So the name fits now. It is worth the space because 「谁」 changes the answer: replying to 张三 is a different
+        // decision from a reply nobody in particular asked for. The seq stays in `detail` — the reader does not choose
+        // differently between #286 and #287, and a seq in the title costs a line for nothing.
+        question: who === '' ? '发出这条回复？' : `回复 ${who}？`,
         detail: [
           // Who and which message, first, because that is what the reader looks for.
           who === '' && thread === undefined ? '' : [who === '' ? '' : `**${who}**`, thread === undefined ? '' : `#${thread}`].filter(Boolean).join(' · '),
