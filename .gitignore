@@ -45,3 +45,10 @@ dsh-session-bus/
 
 # Decompressed session logs pulled out for forensics.
 sess-unzip/
+
+# Local MCP client configuration.
+#
+# These files carry this machine's absolute paths and a gateway token. What belongs in the
+# repository is the TEMPLATE (docs/MCP.md and .codebuddy/mcp.example.json), never a copy
+# that happens to work on one machine.
+.codebuddy/mcp.json

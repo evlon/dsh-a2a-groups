@@ -24,10 +24,49 @@ DSH ──原生工具───────────────────�
 | `AGENT_GROUPS_GATEWAY` | 网关基址 | `http://gw:3000/a2a` |
 | `AGENT_GROUPS_AGENT` | 宿主在网关里的名字 | `agent-groups` |
 | `AGENT_GROUPS_TOKEN` | 访问宿主的令牌 | `a3f8c2...` |
-| `AGENT_GROUPS_DATA` | 可选，本机存凭证的目录 | `~/.agent-groups` |
+| `AGENT_GROUPS_DATA` | 可选，**这个客户端自己的**凭证目录 | `~/.agent-groups-codebuddy` |
 | `AGENT_GROUPS_VERBOSE` | 可选，`1` 开调试日志（走 stderr） | |
 
 > **stdout 是 MCP 通道**，所有诊断信息只走 stderr。这是协议要求，不是风格选择。
+
+### `AGENT_GROUPS_DATA` 不能指向宿主的数据目录
+
+这一条最容易搞错，实测过一次：
+
+```
+AGENT_GROUPS_DATA = 宿主的 ag-final-test 目录
+→ a2a_groups 返回 "No groups yet"
+→ a2a_group_info 返回 unknown_group
+```
+
+原因：MCP 的连接固定用 `sessionId = "mcp"`（`lib/mcp-server.js` 的 `CONNECTION_SESSION_ID`），
+而账本按 sessionId 分区。宿主那份 `memberships.json` 里存的是 DSH 会话的真实 id，
+跟 `"mcp"` 对不上，所以一条都读不到。
+
+**它必须是一个独立目录，由 MCP 自己写入。** 空目录起步也没关系——先加入群就有了：
+
+```json
+// 第一次调用，从邀请链接加入
+{ "name": "a2a_group_join", "arguments": { "link": "agent-a2a://group?v=1&...", "displayName": "CodeBuddy" } }
+```
+
+实测返回：
+
+```
+Joined "发票与对账平台" (g-816ebab5) over A2A.
+personId: m-1575ab87
+20 recent message(s) were fetched.
+New posts will arrive in this Session as task messages.
+```
+
+随后 `a2a_groups` 就能读到：
+
+```
+- 发票与对账平台 (g-816ebab5) — member, 4 member(s), last seq 294
+```
+
+> 注意 `personId: m-1575ab87` 是**新成员**——MCP 客户端入群算一个新的人，不是复用你在 DSH 里的身份。
+> 想复用身份，得把那个身份的凭证放进这个目录。
 
 ## 二、各客户端怎么配
 
@@ -40,7 +79,7 @@ DSH ──原生工具───────────────────�
   "mcpServers": {
     "agent-groups": {
       "command": "npx",
-      "args": ["-y", "dsh-a2a", "agent-groups-mcp"],
+      "args": ["-y", "dsh-a2a-groups", "agent-groups-mcp"],
       "env": {
         "AGENT_GROUPS_GATEWAY": "http://gw:3000/a2a",
         "AGENT_GROUPS_AGENT": "agent-groups",
@@ -60,7 +99,7 @@ DSH ──原生工具───────────────────�
   "mcpServers": {
     "agent-groups": {
       "command": "npx",
-      "args": ["-y", "dsh-a2a", "agent-groups-mcp"],
+      "args": ["-y", "dsh-a2a-groups", "agent-groups-mcp"],
       "env": {
         "AGENT_GROUPS_GATEWAY": "http://gw:3000/a2a",
         "AGENT_GROUPS_AGENT": "agent-groups",

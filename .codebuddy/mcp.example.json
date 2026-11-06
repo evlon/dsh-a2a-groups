@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "Copy this file to mcp.json in the same directory (it is gitignored) and fill in the values.",
+    "See docs/MCP.md for what each variable means.",
+    "",
+    "AGENT_GROUPS_DATA is a DIRECTORY this MCP server owns. It holds memberships.json —",
+    "the credentials of the groups this client has joined. It is NOT the host's data",
+    "directory: pointing it at the host's ag-final-test makes every call fail with",
+    "unknown_group, because the ledger is keyed by the MCP connection id (\"mcp\") and the",
+    "host's own memberships are keyed by DSH session ids."
+  ],
+  "mcpServers": {
+    "agent-groups": {
+      "command": "node",
+      "args": ["<absolute path to>/dsh-a2a/lib/mcp-server.js"],
+      "env": {
+        "AGENT_GROUPS_GATEWAY": "http://127.0.0.1:3000/a2a",
+        "AGENT_GROUPS_AGENT": "agent-group-host",
+        "AGENT_GROUPS_TOKEN": "<the api key AISIX issues to this caller>",
+        "AGENT_GROUPS_DATA": "<a directory for this client's own memberships>"
+      }
+    }
+  }
+}
