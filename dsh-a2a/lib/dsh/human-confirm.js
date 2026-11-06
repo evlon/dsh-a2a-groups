@@ -200,9 +200,6 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
   // written — which left two possibilities indistinguishable (never entered here, or entered and hung). This line
   // separates them.
   writeAnswerTrace({ step: 'enter', onTimeout, timeoutMs, hasSeam: seam !== undefined && seam !== null });
-  // Either method is enough to ask. `askTimed` alone is a complete seam — it is the one that returns a `pending` result
-  // when the window closes — so requiring `ask` specifically would reject a Host that only implements the better one.
-  // Measured by test: an earlier version returned `unavailable` for a seam that had askTimed only.
   const hasAsk = typeof seam?.ask === 'function';
   const hasAskTimed = typeof seam?.askTimed === 'function';
   if (hasAsk !== true && hasAskTimed !== true) {
@@ -212,131 +209,94 @@ export async function askHuman({ seam, agent, question, onTimeout = 'deny', time
     return { outcome: 'unavailable', error: 'no agent on the tool call, so the question has no owner' };
   }
 
-  try {
-    // `onTimeout: 'never'` waits indefinitely. That is what the setting says, and the caller was warned about it.
-    if (onTimeout === 'never') {
-      if (typeof seam.ask !== 'function') {
-        return {
-          outcome: 'unavailable',
-          error: 'this Host offers only askTimed, which requires a bound, so onTimeout "never" cannot be honoured',
-        };
-      }
-      const answer = await seam.ask({ ...question, agent });
+  // THE DEADLINE LIVES IN THE HOST.
+  //
+  // The seam's own countdown is a CLIENT-side thing (「the Client rejects with ASK_TIMED_OUT when its countdown ends」).
+  // When no client is attached — the normal case for a turn a group message woke while nobody is watching — nothing
+  // ever rejects. Measured: a request configured for 300 seconds was still pending after 5 minutes, so the setting was
+  // decorative and the turn could hang indefinitely. Enforcing it here means a missing UI cannot skip it.
+  const bounded = onTimeout !== 'never';
+
+  // ask() WITH OUR OWN SIGNAL, NOT askTimed.
+  //
+  // askTimed sets `wait.timed`, which makes the client render a countdown (「172秒后继续工作」) and a 「慢慢回答」 button
+  // in the card header. Those controls claim 241px of a 340px card, leaving the TITLE 43px — about three characters.
+  // Measured: the title wrapped into four lines (88px tall) no matter how short the text was.
+  //
+  // With ask() the header keeps only its close button (52px), the title gets 112px, and it renders on ONE line (22px).
+  // The trade is that the reader is no longer shown how long they have; a card nobody can read is worse than a card
+  // without a countdown.
+  //
+  // A caller-supplied signal IS valid here. The ASK_ABORTED failure recorded earlier came from passing one to askTimed,
+  // which reads an external signal as "the caller already gave up".
+  if (hasAsk === true) {
+    writeAnswerTrace({ step: 'before-ask', timeoutMs, onTimeout, bounded });
+    const controller = bounded === true ? new AbortController() : undefined;
+    const timer = bounded === true ? setTimeout(() => controller.abort(), timeoutMs) : undefined;
+    try {
+      const request = controller === undefined
+        ? { ...question, agent }
+        : { ...question, agent, signal: controller.signal };
+      const answer = await seam.ask(request);
+      writeAnswerTrace({ step: 'ask-answered', timeoutMs });
       return { outcome: 'answered', answer };
-    }
-    // A bounded wait uses askTimed, whose contract already maps a client-side countdown to a `pending` result.
-    //
-    // DO NOT pass an abort signal here. askTimed owns the bound: it takes `timeoutMs` and returns `{ pending: true }`
-    // when the window closes. Supplying our own AbortController made every call fail immediately with `ASK_ABORTED`
-    // (measured: code ASK_ABORTED, 「ask_user_question was aborted before the user answered」, from Proxy.askTimed) —
-    // the signal was being read as "the caller has already given up", so no dialog ever appeared.
-    // A bounded wait: askTimed for the dialog, plus OUR OWN deadline.
-    //
-    // The seam's countdown lives in the CLIENT (「the Client rejects with ASK_TIMED_OUT when its countdown ends」). When
-    // no client is attached to that Session — the normal case for a turn a group message woke while nobody is watching
-    // — nothing ever rejects, and `askTimed` waits forever. Measured: a request configured for 300 seconds was still
-    // pending after 5 minutes, which means `onTimeout` was decorative and the turn would hang indefinitely.
-    //
-    // So the deadline is enforced here, in the Host, where it cannot be skipped by a missing UI.
-    if (typeof seam.askTimed === 'function') {
-      writeAnswerTrace({ step: 'before-askTimed', timeoutMs });
-      const pending = seam.askTimed(
-        { ...question, agent },
-        // The call id keys the client card. Any stable string works; the seam only needs it to match the answer back.
-        `a2a-confirm-${Date.now()}`,
-        timeoutMs,
-      );
-      writeAnswerTrace({ step: 'after-askTimed-call', timeoutMs, isPromise: typeof pending?.then === 'function' });
-      // Whichever settles first decides: the human, or the deadline.
-      let timer;
-      const deadline = new Promise((resolve) => {
-        timer = setTimeout(() => resolve({ __deadline: true }), timeoutMs);
-      });
-      let result;
-      try {
-        result = await Promise.race([pending, deadline]);
-      } finally {
-        clearTimeout(timer);
-      }
-      if (result !== null && typeof result === 'object' && result.__deadline === true) {
-        // The question is left pending on the seam's side; it is harmless there and the human may still see it later.
+    } catch (error) {
+      if (controller !== undefined && controller.signal.aborted === true) {
         writeAnswerTrace({ pending: 'deadline', onTimeout, timeoutMs });
         return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
       }
+      // NOT a timeout: the seam refused the request. Losing the code here is what once made a failure read as
+      // 「没有许可（error）」 with nothing to act on.
       writeAnswerTrace({
-        pending: result !== null && typeof result === 'object' ? result.pending === true : null,
-        keys: result !== null && typeof result === 'object' ? Object.keys(result) : null,
-        result: JSON.stringify(result ?? null).slice(0, 600),
+        step: 'ask-failed',
+        message: String(error?.message ?? error),
+        code: error?.code ?? null,
+        name: error?.name ?? null,
+        stack: typeof error?.stack === 'string' ? error.stack.split('\n').slice(0, 4).join(' | ') : null,
         onTimeout,
         timeoutMs,
       });
-      if (result !== null && typeof result === 'object' && result.pending === true) {
-        return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
-      }
-      return { outcome: 'answered', answer: result };
-    }
-    // No askTimed, or an unbounded wait was requested on a seam that only offers askTimed.
-    if (typeof seam.ask !== 'function') {
-      // `never` means an unbounded wait, and askTimed always needs a bound. Rather than invent one — which would
-      // silently turn "wait forever" into "wait an hour" — this is reported as a configuration the Host cannot honour.
-      return {
-        outcome: 'unavailable',
-        error: 'this Host offers only askTimed, which needs a bound, so onTimeout "never" cannot be honoured',
-      };
-    }
-    // Bound it ourselves, and treat the abort as the timeout rather than as an error.
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const answer = await seam.ask({ ...question, agent, signal: controller.signal });
-      return { outcome: 'answered', answer };
-    } catch (error) {
-      const message = String(error?.message ?? error);
-      if (controller.signal.aborted) {
-        return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
-      }
-      return { outcome: 'error', error: message };
+      return { outcome: 'error', error: String(error?.message ?? error), code: error?.code ?? null };
     } finally {
-      clearTimeout(timer);
+      if (timer !== undefined) clearTimeout(timer);
     }
-  } catch (error) {
-    // Record the real reason, not just its message.
-    //
-    // A bare `String(error.message)` produced 「没有许可（error）」 with nothing to act on: the seam's rejection carries a
-    // documented code (BAD_ANSWER / CALLER_NOT_LIVE / DELEGATED_CALLER / ASK_ABORTED) and that code is the whole
-    // diagnosis. Written to a file because the Host's stderr is not where a plugin error ends up.
-    const detail = {
-      at: new Date().toISOString(),
-      message: String(error?.message ?? error),
-      code: error?.code ?? null,
-      name: error?.name ?? null,
-      stack: typeof error?.stack === 'string' ? error.stack.split('\n').slice(0, 4).join(' | ') : null,
-      questionShape: JSON.stringify(question ?? {}).slice(0, 300),
-      hasAgent: agent !== undefined && agent !== null,
-      onTimeout,
-      timeoutMs,
-    };
-    try {
-      const { writeFileSync } = await import('node:fs');
-      const { tmpdir } = await import('node:os');
-      const { join } = await import('node:path');
-      writeFileSync(join(tmpdir(), 'a2a-human-confirm-error.json'), JSON.stringify(detail, null, 2), 'utf8');
-    } catch {
-      // Diagnostics must never be the reason a refusal fails to happen.
-    }
-    return { outcome: 'error', error: detail.message, code: detail.code };
   }
+
+  // askTimed is the FALLBACK, for a Host that offers only it. It renders the narrower card, which is still better than
+  // no confirmation at all.
+  if (onTimeout === 'never') {
+    return {
+      outcome: 'unavailable',
+      error: 'this Host offers only askTimed, which requires a bound, so onTimeout "never" cannot be honoured',
+    };
+  }
+  writeAnswerTrace({ step: 'before-askTimed', timeoutMs });
+  const pending = seam.askTimed(
+    { ...question, agent },
+    `a2a-confirm-${Date.now()}`,
+    timeoutMs,
+  );
+  let timer;
+  const expiry = new Promise((resolve) => {
+    timer = setTimeout(() => resolve({ __deadline: true }), timeoutMs);
+  });
+  let result;
+  try {
+    result = await Promise.race([pending, expiry]);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (result !== null && typeof result === 'object' && result.__deadline === true) {
+    writeAnswerTrace({ pending: 'deadline', seam: 'askTimed', onTimeout, timeoutMs });
+    return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
+  }
+  writeAnswerTrace({ pending: 'returned', seam: 'askTimed', result: JSON.stringify(result ?? null).slice(0, 400) });
+  if (result !== null && typeof result === 'object' && result.pending === true) {
+    return { outcome: onTimeout === 'allow' ? 'timed-out-allow' : 'timed-out-deny' };
+  }
+  return { outcome: 'answered', answer: result };
 }
 
-/**
- * Turn an ask outcome into the decision the caller acts on.
- *
- * The seam's answer shape is `{ answers: [{ id, selected: string[], custom? }] }` — NOT a flat label. Reading
- * `item.label` (as an earlier version did) always found nothing, which would have treated every approval as a denial.
- *
- * @param {object} result - what `askHuman` returned.
- * @returns {{ proceed: boolean, reason: string }} decision.
- */
 export function decideFromAnswer(result) {
   const outcome = result?.outcome;
   if (outcome === 'timed-out-allow') return { proceed: true, reason: 'timeout-allow' };
