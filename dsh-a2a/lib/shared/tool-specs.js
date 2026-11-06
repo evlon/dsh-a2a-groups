@@ -317,21 +317,35 @@ export const TOOL_SPECS = Object.freeze([
           total: { type: 'number' },
           directMessages: { type: 'array', items: { type: 'object' } },
           groups: { type: 'array', items: { type: 'object' } },
+          // How many groups this Session actually belongs to. Without it 「0 unread」 cannot be told apart from
+          // 「0 groups」, and those mean opposite things to a first-time reader.
+          joinedGroups: { type: 'number' },
           summary: { type: 'string' },
         },
       },
       render: (args, value) => [{
         type: 'text',
-        text: value.total === 0
-          ? 'Nothing waiting.'
-          : (value.directMessages.length > 0
-              ? `${value.directMessages.length} direct message(s):\n`
-                + value.directMessages.map((entry) => `  - [${entry.kind}] ${entry.text}`).join('\n')
-              : '')
-            + (value.groups.length > 0
-              ? `\n${value.groups.length} group(s) with unread messages:\n`
-                + value.groups.map((entry) => `  - ${entry.name}: ${entry.unread} new`).join('\n')
-              : ''),
+        // 「Nothing waiting」 and 「you have joined nothing」 look identical and mean opposite things: the first says the
+        // system is fine and quiet, the second says you are not in the room yet. Measured on a fresh MCP data
+        // directory — every group tool answered `unknown_group` while this answered a calm 「Nothing waiting」, and a
+        // new user had no way to tell they had simply not joined anything.
+        text: value.joinedGroups === 0 && value.total === 0
+          ? 'No groups joined yet — this is an EMPTY account, not a quiet one.\n\n'
+            + 'Join first, in one of three ways:\n'
+            + '  1. a2a_group_join with an invite link from a colleague — fastest, no approval needed\n'
+            + '  2. a2a_group_directory to browse, then a2a_group_request (a group owner must approve)\n'
+            + '  3. a2a_group_create to start your own\n'
+            + 'If a colleague offered a link, ask the user for it.'
+          : (value.total === 0
+            ? 'Nothing waiting.'
+            : (value.directMessages.length > 0
+                ? `${value.directMessages.length} direct message(s):\n`
+                  + value.directMessages.map((entry) => `  - [${entry.kind}] ${entry.text}`).join('\n')
+                : '')
+              + (value.groups.length > 0
+                ? `\n${value.groups.length} group(s) with unread messages:\n`
+                  + value.groups.map((entry) => `  - ${entry.name}: ${entry.unread} new`).join('\n')
+                : '')),
       }],
     },
     runtime: 'a2a_pending',

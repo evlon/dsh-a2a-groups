@@ -57,6 +57,27 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
   const runtime = createToolRuntime(deps);
 
   /**
+   * Tools this host offers to an MCP client.
+   *
+   * Every spec is shared with the DSH plugin, so the two hosts present one contract — except where an MCP client
+   * genuinely cannot do the thing:
+   *
+   *   a2a_serve         exposes this instance as an A2A server. An MCP server has no DSH Session to bind, and the tool
+   *                     dereferenced `sessions` unconditionally — measured: `Cannot read properties of undefined
+   *                     (reading 'offerBinding')`. A tool that always throws is worse than an absent one, because a
+   *                     model reads the stack-shaped failure as "try again" and loops.
+   *
+   *   a2a_group_inbox   subscribes to group pushes. MCP has no push channel: a notification would land in the client
+   *                     program, and no mainstream MCP client turns one into a turn. It used to answer 「没有订阅」,
+   *                     which is a LIE in the worst direction — the reader believes delivery is armed. Reading is done
+   *                     with a2a_group_read, and the preamble says so.
+   *
+   * Removing them changes the list a client sees, which is why the preamble names the substitute explicitly instead of
+   * leaving the reader to infer one.
+   */
+  const HIDDEN_ON_MCP = Object.freeze(['a2a_serve', 'a2a_group_inbox']);
+
+  /**
    * The tool list MCP clients see.
    *
    * `inputSchema` is the same JSON Schema the DSH plugin registers, which is the whole
@@ -64,11 +85,13 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
    * identical contract in the other.
    */
   function listTools() {
-    return allSpecs().map((spec) => ({
-      name: spec.name,
-      description: spec.description,
-      inputSchema: spec.parameters,
-    }));
+    return allSpecs()
+      .filter((spec) => HIDDEN_ON_MCP.includes(spec.name) === false)
+      .map((spec) => ({
+        name: spec.name,
+        description: spec.description,
+        inputSchema: spec.parameters,
+      }));
   }
 
   /**
@@ -85,6 +108,21 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
       return {
         isError: true,
         content: [{ type: 'text', text: `unknown tool: ${name}` }],
+      };
+    }
+    // A hidden tool can still be named by a client that cached the list before an upgrade. Answer with the substitute
+    // instead of letting it reach code that assumes a DSH host.
+    if (HIDDEN_ON_MCP.includes(name) === true) {
+      return {
+        isError: true,
+        content: [{
+          type: 'text',
+          text: name === 'a2a_serve'
+            ? '这个工具在 MCP 客户端里不可用：MCP 服务端没有可以对外绑定的 DSH 会话，无法把自己暴露成 A2A 服务。'
+              + '要对外提供服务，请在 DSH 里装插件，或者直接运行 agent-groups 宿主。'
+            : '这个工具在 MCP 客户端里不可用：MCP 没有推送通道，同事的新消息不会自动到达。'
+              + '请用 a2a_group_read 主动拉取（带 sinceSeq 可以只取增量）。',
+        }],
       };
     }
     const args = params?.arguments;
@@ -137,19 +175,39 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
               serverInfo: { name: 'agent-groups', version },
               // This preamble is the only place a model learns that it has to ASK. MCP notifications cannot reach
               // it — they land in the client program, and no mainstream client turns one into a turn — so without
-              // this sentence a colleague's message sits unread forever and the model has no reason to suspect it
+              // this paragraph a colleague's message sits unread forever and the model has no reason to suspect it
               // exists.
+              //
+              // It also has to say HOW TO START. Measured on a fresh data directory: every group tool answers
+              // `unknown_group`, and `a2a_pending` answers 「Nothing waiting.」 — which reads as "all quiet" while the
+              // truth is "you have joined nothing". A new user cannot tell those apart, and the model cannot either.
               instructions:
                 'Collaboration groups for this machine. THIS SERVER CANNOT REACH YOU: it cannot notify you when '
                 + 'a colleague posts or invites you, so checking is your job.\n\n'
-                + 'Call a2a_pending at the START of a turn, and again every few minutes during long work. It '
-                + 'returns unread group messages plus one-to-one invitations in one call. If it reports nothing, '
-                + 'say so briefly and carry on — do not silently skip it.\n\n'
-                + 'An invitation blocks progress: join with a2a_group_join (the message carries a ready link) or '
-                + 'decline it, then a2a_person_ack so the sender learns it arrived.\n\n'
-                + 'Find groups with a2a_group_directory; join without an invite via a2a_group_request then '
-                + 'a2a_group_claim once approved. Speak with a2a_group_post — add \`mentions\` to summon specific '
-                + 'people, omit it for ordinary progress that only raises an unread count.',
+
+                + '=== START HERE (first run, or when a2a_groups is empty) ===\n'
+                + 'Read a2a_groups first. If it lists nothing, you have not joined any group yet, and THREE routes exist:\n'
+                + '  1. A colleague gave you an invite link (looks like `agent-a2a://group?v=1&...`).\n'
+                + '     Paste it into a2a_group_join. This is the fastest route and needs nobody\'s approval.\n'
+                + '  2. Browse with a2a_group_directory, then a2a_group_request. A human owner must approve, so tell the\n'
+                + '     user plainly: "已申请加入 X，等群主批准后我再认领" and keep the requestId + claimKey. Come back with\n'
+                + '     a2a_group_claim when they say it is approved. If claim reports request_pending, it simply has not\n'
+                + '     been approved yet — say so and stop; do not retry in a loop.\n'
+                + '  3. Create your own with a2a_group_create.\n'
+                + 'If none of these fit, ASK THE USER for an invite link. Do not sit there trying tools.\n\n'
+
+                + '=== KEEPING UP DURING WORK ===\n'
+                + 'Call a2a_pending at the START of a turn, and again every few minutes during long work. It returns unread\n'
+                + 'group messages plus one-to-one invitations in one call. If it reports nothing, say so briefly and carry\n'
+                + 'on — do not silently skip it.\n\n'
+                + 'There is no push channel here: a2a_group_inbox does not exist and would be a lie. To catch up on a\n'
+                + 'specific group, use a2a_group_read with sinceSeq (the last seq you saw) so you fetch only what is new.\n\n'
+
+                + '=== ACTING ===\n'
+                + 'An invitation blocks progress: join with a2a_group_join (the message carries a ready link) or decline\n'
+                + 'it, then a2a_person_ack so the sender learns it arrived.\n\n'
+                + 'Speak with a2a_group_post — add `mentions` to summon specific people, omit it for ordinary progress that\n'
+                + 'only raises an unread count. You can belong to several groups at once; pass groupId to say which.',
             },
           };
         case 'notifications/initialized':

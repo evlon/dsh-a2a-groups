@@ -691,13 +691,25 @@ function requireSession(sessionId, tool) {
       }
     }
 
+    // 「Nothing waiting」 and 「you have joined nothing」 are different facts that read the same, and the second is why a
+    // first-time user stalls: every other group tool answers `unknown_group`, this one answers a calm 「Nothing
+    // waiting」, and the model concludes the system is fine and just quiet. Measured on a fresh data directory — that is
+    // exactly what happened. Count what is actually joined so the answer can say which of the two it is.
+    const joined = identities.list({ sessionId }) ?? [];
+    const joinedNothing = joined.length === 0 && directMessages.length === 0 && groups.length === 0;
+
     return {
       total: directMessages.length + groups.reduce((sum, entry) => sum + entry.unread, 0),
       directMessages,
       groups,
-      summary: directMessages.length === 0 && groups.length === 0
-        ? 'Nothing waiting.'
-        : `${directMessages.length} direct message(s), ${groups.length} group(s) with unread.`,
+      joinedGroups: joined.length,
+      summary: joinedNothing
+        ? 'No groups joined yet, so nothing can be waiting. This is an EMPTY account, not a quiet group. '
+          + 'Join first: paste an invite link into a2a_group_join, browse with a2a_group_directory then '
+          + 'a2a_group_request, or create your own with a2a_group_create. If the user has a link, ask them for it.'
+        : (directMessages.length === 0 && groups.length === 0
+          ? 'Nothing waiting.'
+          : `${directMessages.length} direct message(s), ${groups.length} group(s) with unread.`),
     };
   },
 

@@ -82,24 +82,60 @@ test('ping answers an empty result', async () => {
   assert.deepEqual(response.result, {});
 });
 
-test('tools/list exposes exactly the DSH tool set, with identical schemas', async () => {
+test('tools/list exposes the shared spec set, minus the two an MCP host cannot honour', async () => {
+  // This used to assert `tools.length === specs.length` — the two hosts offering an identical list. That equality was
+  // the REASON the specs were split out, and it is still the rule; it just is not true for two tools, because an MCP
+  // server has no DSH Session and no push channel:
+  //
+  //   a2a_serve        dereferenced `sessions` unconditionally and threw a TypeError (measured)
+  //   a2a_group_inbox  answered 「没有订阅」, which is a lie that reads as "delivery is armed"
+  //
+  // A tool that always fails is worse than an absent one. What matters is that the exclusion is DELIBERATE and SMALL —
+  // so the assertion names them, rather than loosening to "roughly the same".
   const handler = handlerWith();
   const response = await call(handler, 'tools/list');
   const tools = response.result.tools;
 
-  const specs = allSpecs();
-  assert.equal(tools.length, specs.length, 'the two hosts must offer the same number of tools');
+  const hidden = ['a2a_serve', 'a2a_group_inbox'];
+  const expected = allSpecs().filter((spec) => hidden.includes(spec.name) === false);
+
+  assert.equal(tools.length, expected.length, 'every shared tool except the two named above');
   assert.deepEqual(
     tools.map((tool) => tool.name),
-    specs.map((spec) => spec.name),
+    expected.map((spec) => spec.name),
     'and in the same order',
   );
 
+  // The exclusion list must stay exactly these two: silently dropping a third would take a capability away without
+  // anyone noticing.
+  for (const name of hidden) {
+    assert.equal(tools.some((tool) => tool.name === name), false, `${name} must not be advertised`);
+    assert.ok(allSpecs().some((spec) => spec.name === name), `${name} must still exist in the shared specs`);
+  }
+
   for (const tool of tools) {
-    const spec = specs.find((entry) => entry.name === tool.name);
+    const spec = expected.find((entry) => entry.name === tool.name);
     assert.equal(tool.description, spec.description, `${tool.name}: description drifted`);
     assert.deepEqual(tool.inputSchema, spec.parameters, `${tool.name}: schema drifted`);
   }
+});
+
+test('calling a hidden tool answers with the substitute instead of crashing', async () => {
+  // A client that cached the tool list before an upgrade can still name one of them. Reaching the implementation would
+  // throw (a2a_serve) or lie (a2a_group_inbox), so the handler intercepts by name.
+  const handler = handlerWith();
+
+  const serve = await call(handler, 'tools/call', { name: 'a2a_serve', arguments: {} });
+  assert.equal(serve.result.isError, true);
+  const serveText = serve.result.content.map((part) => part.text).join('');
+  assert.match(serveText, /MCP 客户端里不可用/);
+  assert.match(serveText, /DSH/, 'the reader must be told where the capability does live');
+
+  const inbox = await call(handler, 'tools/call', { name: 'a2a_group_inbox', arguments: {} });
+  assert.equal(inbox.result.isError, true);
+  const inboxText = inbox.result.content.map((part) => part.text).join('');
+  // The substitute has to be NAMED, or the reader is left without a next step.
+  assert.match(inboxText, /a2a_group_read/);
 });
 
 test('tools/list carries no renderer or runtime key', async () => {

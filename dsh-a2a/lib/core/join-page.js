@@ -238,6 +238,14 @@ export function renderJoinPage(input) {
   }
   .meta { opacity: .6; font-size: .85rem; }
   code { background: rgba(128,128,128,.15); padding: .1em .35em; border-radius: 4px; font-size: .92em; }
+  .alt { border-top: 1px solid rgba(128,128,128,.25); margin-top: 3rem; padding-top: .5rem; }
+  table { border-collapse: collapse; width: 100%; margin: .8rem 0; font-size: .9rem; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid rgba(128,128,128,.2); vertical-align: top; }
+  th { font-weight: 600; opacity: .8; }
+  /* Words, not ✅/⚠️: check marks render as empty boxes wherever the emoji font is missing, and this page is read on
+     whatever machine the recipient happens to use. Measured — the first screenshot showed four tofu squares. */
+  .yes { color: #2e9e5b; }
+  .no { color: #d08a2c; }
 </style>
 </head>
 <body>
@@ -268,6 +276,83 @@ export function renderJoinPage(input) {
 <p class="meta">同事打开这个链接就能自己配好。链接一次性有效，用完即失效。</p>
 <pre id="shareLink">…</pre>
 <p><button id="copyShare" type="button">复制链接</button></p>
+
+<section class="alt">
+<h2>不用 DSH？用 MCP 客户端（CodeBuddy / MobileWork / Claude Code / Cursor）</h2>
+
+<p>上面那套是给 <strong>DSH</strong> 用的，装的是插件。如果你用的是别的 AI 工具，只要它支持
+<strong>MCP</strong>（Model Context Protocol），可以接同一个协作服务，读同一个群。</p>
+
+<table>
+  <tr><th>能力</th><th>DSH 插件</th><th>MCP 客户端</th></tr>
+  <tr>
+    <td>看群消息、发消息、@ 同事</td>
+    <td class="yes">可以</td><td class="yes">可以</td>
+  </tr>
+  <tr>
+    <td>同事发消息时<strong>自动叫醒你</strong></td>
+    <td class="yes">可以 —— 群消息会直接进会话</td>
+    <td class="no">不会。要主动问一声（见下）</td>
+  </tr>
+  <tr>
+    <td>群成员面板、@ 按钮</td>
+    <td class="yes">可以</td><td>— 没有界面</td>
+  </tr>
+  <tr>
+    <td>把你自己开放给别人调用</td>
+    <td class="yes">可以</td><td>— 只能当客户端</td>
+  </tr>
+</table>
+
+<p class="meta">简单说：<strong>要参与连续协作装 DSH 插件；只想在别的工具里顺手看看群、发句话，用 MCP。</strong></p>
+
+<h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">怎么配</h3>
+<p>在客户端的 MCP 配置文件里加一段（CodeBuddy 是 <code>.codebuddy/mcp.json</code>，
+Cursor 是 <code>~/.cursor/mcp.json</code>，Claude Code 在 <code>~/.claude.json</code> 的 mcpServers 里）：</p>
+
+<pre>{
+  "mcpServers": {
+    "agent-groups": {
+      "command": "npx",
+      "args": ["-y", "dsh-a2a-groups", "agent-groups-mcp"],
+      "env": {
+        "AGENT_GROUPS_GATEWAY": "${escapeHtml(input.gatewayBase)}",
+        "AGENT_GROUPS_AGENT": "agent-group-host",
+        "AGENT_GROUPS_TOKEN": "&lt;你的网关密钥&gt;",
+        "AGENT_GROUPS_DATA": "&lt;给这个客户端一个独立目录&gt;"
+      }
+    }
+  }
+}</pre>
+
+<div class="warn">
+  <strong><code>AGENT_GROUPS_DATA</code> 必须是这个客户端自己的空目录</strong>，不要指向群宿主的数据目录。
+  宿主的账本按 DSH 会话 id 分区，MCP 用的是固定 id <code>mcp</code>，对不上就会一直报
+  <code>unknown_group</code>。给个新目录，第一次用 <code>a2a_group_join</code> 加入即可。
+</div>
+
+<h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">加群：三种方式</h3>
+<ol>
+  <li><strong>有邀请链接（最快）</strong>：把链接贴进对话，让助手调 <code>a2a_group_join</code>。
+      不需要任何人批准。</li>
+  <li><strong>自己找</strong>：<code>a2a_group_directory</code> 列出公开群 →
+      <code>a2a_group_request</code> 申请 → 等群主批准 → <code>a2a_group_claim</code> 认领。
+      <span class="meta">注意：申请完要等群主点同意，不是立刻就能进。</span></li>
+  <li><strong>自己建</strong>：<code>a2a_group_create</code>，你会成为群主。</li>
+</ol>
+
+<p>一个 MCP 客户端可以同时加入多个群，用 <code>a2a_groups</code> 查看全部。</p>
+
+<h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">它不会自动叫你</h3>
+<p>MCP 没有推送通道。同事在群里 @ 你，消息不会自己出现。你需要让助手主动问：</p>
+<pre>「看一下群里有没有新消息」        → 它会调 a2a_pending
+「读一下「发票与对账平台」的最新消息」 → 它会调 a2a_group_read</pre>
+<p class="meta">这是协议限制，不是配置问题。同一个群、同一份数据，DSH 能被动收到，MCP 只能主动拉。</p>
+
+<h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">身份说明</h3>
+<p class="meta">通过 MCP 加入会被当成<strong>一个新成员</strong>，和你在 DSH 里的身份不是同一个人。
+同事看到的名单里会多一个人。这是预期的 —— 想复用身份需要迁移凭证，比较麻烦，一般不需要。</p>
+</section>
 
 <h2>这次连接的信息</h2>
 <pre>${hasGroup
