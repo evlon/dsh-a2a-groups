@@ -14,6 +14,24 @@ things in one package:
 `dsh-session-bus/` alongside is a SEPARATE repository (gitignored), not part of this tree.
 Run every command from inside `dsh-a2a/`.
 
+## Branches
+
+Three long-lived branches, each with one job:
+
+| Branch | Job | When to commit here |
+|---|---|---|
+| `master` | main development line (ahead toward 0.2.x) | everyday work, fixes, small features |
+| `v0.1.x` | **bugfix-only** maintenance for the 0.1.x line | a fix for a shipped 0.1.x bug |
+| `v0.2.x` | **refactor + new features** toward 0.2.x | breaking changes, new capability |
+
+Rules:
+
+- A **bug fix** goes to `v0.1.x` first (cherry-pick back), then forward to `master`.
+- A **refactor or new feature** goes to `v0.2.x` (or `master`), never to `v0.1.x`.
+- `v0.1.x` must stay releasable: no breaking changes, no new tools that change the contract.
+- A `v0.1.x` release is a patch/minor bump off that branch; a `v0.2.x` release comes from `master`/`v0.2.x`.
+
+
 - Node >= 22, ESM (`"type": "module"`), no build step, **no runtime or dev dependencies**
   (only `vitest`, `typescript`, `@types/node` as devDependencies).
 - Package entry `lib/index.js`; MCP entry `lib/mcp-server.js`; host entry `bin/agent-groups.js`.
