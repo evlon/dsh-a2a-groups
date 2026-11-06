@@ -56,6 +56,58 @@ export function registerTools(ctx, deps) {
   }
 
   /**
+   * Who wrote the message this post answers, if that can be learned without risk.
+   *
+   * The tool arguments carry only a seq, so the name has to be read back out of the group. For a group this instance
+   * hosts that is a memory lookup; for a remote one it is a network call to the host's A2A endpoint.
+   *
+   * Every failure returns `''`, and the caller falls back to wording that names nobody. That asymmetry is deliberate: a
+   * missing name makes the card slightly less informative, while a thrown error would make it impossible to answer at
+   * all — and the whole point of this path is to let a person answer.
+   *
+   * @param {object} args - the tool arguments (`groupId`, `replyTo`).
+   * @param {object} groupRow - the identity row, when the ledger knows this group.
+   * @returns {Promise<string>} the sender's display name, or `''`.
+   */
+  async function lookedUpSender(args, groupRow) {
+    const replyTo = typeof args?.replyTo === 'number' ? args.replyTo : undefined;
+    const groupId = typeof args?.groupId === 'string' ? args.groupId : '';
+    if (replyTo === undefined || groupId === '' || groupRow === undefined) return '';
+    try {
+      // Read exactly the one entry: `sinceSeq` is the seq before it, and a limit of 1 keeps the reply small.
+      if (groupRow.local === true) {
+        const member = deps.identities?.get?.(groupId, sessionId) ?? {
+          personId: groupRow.personId,
+          personKey: groupRow.personKey,
+        };
+        const page = deps.store?.read?.({ groupId, member, sinceSeq: replyTo - 1, limit: 1 });
+        const entry = page?.entries?.[0];
+        return typeof entry?.from?.displayName === 'string' ? entry.from.displayName : '';
+      }
+      const result = await deps.bridge.send(
+        { baseUrl: groupRow.baseUrl, personKey: groupRow.personKey },
+        {
+          skill: 'group/read',
+          text: `read ${groupId} at ${replyTo}`,
+          data: {
+            groupId,
+            personId: groupRow.personId,
+            personKey: groupRow.personKey,
+            sinceSeq: replyTo - 1,
+            limit: 1,
+          },
+        },
+      );
+      const entry = (result?.data?.entries ?? [])[0];
+      if (entry === undefined) return '';
+      return typeof entry.from === 'string' ? entry.from : (entry.from?.displayName ?? '');
+    } catch {
+      // Silent by design: an unavailable name must not block the question.
+      return '';
+    }
+  }
+
+  /**
    * Ask this Session's human before doing something on a colleague's behalf.
    *
    * Returns `null` when no confirmation is needed, or a refusal result when it was needed and did not happen. The caller
@@ -117,6 +169,14 @@ export function registerTools(ctx, deps) {
     const groupRow = typeof args?.groupId === 'string'
       ? deps.identities?.list?.().find((row) => row.groupId === args.groupId && row.groupName !== undefined)
       : undefined;
+    // WHO is being answered, when it can be learned cheaply.
+    //
+    // The title is supposed to answer 「谁要你做什么」, and without a sender it can only say 「做什么」. The name is not in
+    // the tool arguments, so it has to be read back from the group — which is a network call for a remote group.
+    //
+    // This is best-effort ON PURPOSE: a lookup failure must never turn a confirmation into an unanswerable card. On any
+    // error the sender is simply omitted and the title falls back to the neutral wording.
+    const repliedSender = await lookedUpSender(args, groupRow, sessionId);
     const decision = decideFromAnswer(await askHuman({
       seam: questionSeam,
       agent: exec?.agent,
@@ -124,6 +184,7 @@ export function registerTools(ctx, deps) {
         groupName: groupRow?.groupName ?? '',
         draft: typeof args?.message === 'string' ? args.message : '',
         replyingTo: typeof args?.replyTo === 'number' ? args.replyTo : undefined,
+        sender: repliedSender,
       }),
       onTimeout: verdict.onTimeout,
       timeoutMs: verdict.timeoutMs,

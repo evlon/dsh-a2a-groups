@@ -117,10 +117,10 @@ test('the detail says what each choice does to the group', () => {
 
 test('the thread number appears when the reply answers a specific message', () => {
   const withThread = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 282 });
-  assert.match(withThread.questions[0].question, /#282/);
+  assert.match(withThread.questions[0].detail, /#282/);
   // And is simply absent when it is not a reply to anything in particular.
   const without = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: undefined });
-  assert.ok(without.questions[0].question.includes('#') === false);
+  assert.ok(without.questions[0].detail.includes('#') === false);
 });
 
 test('a very long draft is cut with a VISIBLE marker', () => {
@@ -266,4 +266,22 @@ test('the Host deadline honours the allow policy too', async () => {
   const result = await askHuman({ seam, agent: {}, question: { questions: [] }, onTimeout: 'allow', timeoutMs: 60 });
   assert.equal(result.outcome, 'timed-out-allow');
   assert.equal(decideFromAnswer(result).proceed, true);
+});
+
+test('the title names the sender when it is known, because that is the 「谁」', () => {
+  const built = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 287, sender: '张三' });
+  // The name is in detail, where the full card width is available.
+  assert.match(built.questions[0].detail, /张三/);
+  // Still one short line: the whole point of the rewrite.
+  assert.ok(built.questions[0].question.length <= 7, `the title must fit one line, got ${built.questions[0].question}`);
+  // The seq still has to be somewhere: it moved to detail, where there is room.
+  assert.match(built.questions[0].detail, /#287/);
+});
+
+test('an unknown sender falls back to neutral wording instead of inventing a name', () => {
+  const built = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 287, sender: '' });
+  assert.ok(built.questions[0].detail.indexOf('张三') === -1);
+  assert.match(built.questions[0].detail, /#287/);
+  // And it must NOT invent 「一位同事」 or similar: naming nobody is better than naming a fiction.
+  assert.ok(built.questions[0].detail.indexOf('一位同事') === -1);
 });

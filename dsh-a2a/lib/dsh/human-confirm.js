@@ -121,13 +121,14 @@ export function confirmationPolicy({ settings, post, grade }) {
  * Option descriptions state the CONSEQUENCE rather than restating the label: 「允许」 and 「拒绝」 mean nothing unless the
  * reader knows whether their colleagues will see something.
  *
- * @param {object} input - `{ groupName, draft, replyingTo }`.
+ * @param {object} input - `{ groupName, draft, replyingTo, sender }`.
  * @returns {object} a user-questions request payload (without the agent).
  */
-export function confirmationQuestion({ groupName, draft, replyingTo }) {
+export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
   const where = typeof groupName === 'string' && groupName.trim() !== '' ? groupName.trim() : '';
   const body = typeof draft === 'string' ? draft.trim() : '';
   const thread = typeof replyingTo === 'number' ? replyingTo : undefined;
+  const who = typeof sender === 'string' ? sender.trim() : '';
 
   // Quote the draft so it reads as material rather than as the question itself. A long one is cut with a VISIBLE
   // marker: silently truncating would let the reader approve something they were never shown.
@@ -149,13 +150,27 @@ export function confirmationQuestion({ groupName, draft, replyingTo }) {
         // outright, which surfaced as 「没有许可（error）」 and no dialog at all — measured on a live run.
         id: 'a2a-human-confirm',
         header: where === '' ? '协作群' : where,
-        // SHORT, and it does not repeat the group name.
+        // VERY SHORT — measured against the real layout, not guessed.
         //
-        // Measured on a live run: the card renders in a narrow column, so 「要往「发票与对账平台」回复 #287，允许吗？」
-        // wrapped into EIGHT lines of three characters each and pushed the options out of view entirely. The group is
-        // already in the header above, so naming it again costs the most expensive space in the card and buys nothing.
-        question: threadPhrase === '' ? '发送这条回复？' : `回复 ${threadPhrase}？`,
-        detail: `${quoted}\n\n---\n\n**允许** → 发到${wherePhrase}，同事能看到\n\n**拒绝** → 不发，${wherePhrase}不会出现任何内容`,
+        // The card is 340px wide but the title block gets only 43px, because the header's right-hand controls
+        // (「172秒后继续工作」 「慢慢回答」 「×」) claim the rest. 43px is about THREE Chinese characters per line.
+        //
+        // Measured title widths, in order:
+        //   「要往「发票与对账平台」回复 #287，允许吗？」  → 8 lines
+        //   「回复 张三 · #287？」                        → 3 lines
+        //   「回复 张三？」                              → 3 lines (still!)
+        //
+        // So the title cannot carry any name at all. It carries only the ACTION — the one word that decides what the
+        // buttons mean — and every piece of identifying context moves to `detail`, where the full 340px is available.
+        question: '发出这条回复？',
+        detail: [
+          // Who and which message, first, because that is what the reader looks for.
+          who === '' && thread === undefined ? '' : [who === '' ? '' : `**${who}**`, thread === undefined ? '' : `#${thread}`].filter(Boolean).join(' · '),
+          quoted,
+          '---',
+          `**允许** → 发到${wherePhrase}，同事能看到`,
+          `**拒绝** → 不发，${wherePhrase}不会出现任何内容`,
+        ].filter((part) => part !== '').join('\n\n'),
         options: [
           { label: '允许', description: `发到${wherePhrase}` },
           { label: '拒绝', description: '不发，同事看不到' },

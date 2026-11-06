@@ -219,3 +219,21 @@ test('a Session that inherits follows the profile default', () => {
     .catch((error) => { assert.notEqual(error.code, 'human_confirm_refused'); })
     .then(() => assert.ok(true));
 });
+
+test('a failed sender lookup still produces an answerable card', async () => {
+  // The name is read back from the group, which for a remote group is a network call. A lookup that throws must not
+  // make the question unanswerable — the point of this path is to let a person answer, not to be informative first.
+  const asked = [];
+  const seam = { ask: async (request) => { asked.push(request); return { answers: [{ id: 'a2a-human-confirm', selected: ['允许'] }] }; } };
+  const { tools } = harness({ humanConfirm: { enabled: true, trigger: 'always', onTimeout: 'never' }, seam });
+  // deps.bridge.send is stubbed to reject in the harness, so the remote lookup fails; the gate must still ask.
+  let error;
+  try {
+    await tools.get('a2a_group_post').execute({ groupId: 'g-1', message: '收到', replyTo: 7 }, exec());
+  } catch (caught) {
+    error = caught;
+  }
+  assert.equal(asked.length, 1, 'the question must still be asked when the name cannot be read');
+  assert.equal(asked[0].questions[0].id, 'a2a-human-confirm');
+  if (error !== undefined) assert.notEqual(error.code, 'human_confirm_refused');
+});
