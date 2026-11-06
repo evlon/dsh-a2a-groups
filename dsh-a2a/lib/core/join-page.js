@@ -36,6 +36,14 @@ export const JOIN_TOKEN_TTL_MS = 15 * 60 * 1000;
 /** Path the join page is served at, under the host's own base. */
 export const JOIN_PATH = '/join';
 
+/**
+ * Path of the permanent, token-free entry point for "connect, no particular group".
+ *
+ * Short and sayable on purpose: this is the address a colleague can be told over the phone or find in a document, while
+ * a `/join?t=<32 hex chars>` link is paste-only. The next version puts OIDC in front of the whole page.
+ */
+export const SETUP_PATH = '/setup';
+
 /** The sentence the page puts on the clipboard. */
 const INSTRUCTION_HEAD_WITH_GROUP = `帮我配置 DSH 以加入协作群「{groupName}」。
 {groupIdLine}
@@ -273,9 +281,13 @@ export function renderJoinPage(input) {
 </div>
 
 <h2>发给同事</h2>
-<p class="meta">同事打开这个链接就能自己配好。链接一次性有效，用完即失效。</p>
+${input.permanent === true
+  ? `<p class="meta">同事打开同一个地址就能自己配好，不需要另外生成链接。</p>
 <pre id="shareLink">…</pre>
-<p><button id="copyShare" type="button">复制链接</button></p>
+<p><button id="copyShare" type="button">复制链接</button></p>`
+  : `<p class="meta">同事打开这个链接就能自己配好。链接一次性有效，用完即失效。</p>
+<pre id="shareLink">…</pre>
+<p><button id="copyShare" type="button">复制链接</button></p>`}
 
 <section class="alt">
 <h2>不用 DSH？用 MCP 客户端（CodeBuddy / MobileWork / Claude Code / Cursor）</h2>
@@ -364,7 +376,9 @@ Cursor 是 <code>~/.cursor/mcp.json</code>，Claude Code 在 <code>~/.claude.jso
 网关  ${escapeHtml(input.gatewayBase)}
 说明  配置完成后可以用 a2a_group_directory 看有哪些群，再决定加入哪个`}</pre>
 
-<p class="meta">这个页面一次性有效，${expiresIn} 分钟后作废。关掉后重新打开需要新的链接。</p>
+<p class="meta">${input.permanent === true
+  ? '这个地址可以收藏，随时打开都是同一份配置说明。'
+  : `这个页面一次性有效，${expiresIn} 分钟后作废。关掉后重新打开需要新的链接。`}</p>
 
 <script>
   // The page's own URL carries the token, so it is read here rather than templated twice.
@@ -373,10 +387,13 @@ Cursor 是 <code>~/.cursor/mcp.json</code>，Claude Code 在 <code>~/.claude.jso
   // The shareable link, derived from the address the browser is ACTUALLY on. A gateway may mount this page at
   // /agent-groups/join and strip the prefix before forwarding, so the host only ever sees /join and cannot
   // reconstruct the prefix. location.pathname has it, which is why the browser computes this and not the host.
+  var permanent = ${input.permanent === true ? 'true' : 'false'};
   function computeShareLink() {
     // RegExp from a string, not a literal: this page is emitted from a template literal, and a regex literal
     // here loses its escapes on the way out, which silently turned the pattern into a comment.
-    var prefix = window.location.pathname.replace(new RegExp('/join/?' + '$'), '');
+    var prefix = window.location.pathname.replace(new RegExp('/(join|setup)/?' + '$'), '');
+    // The permanent (configure-only) entry point needs no token: the same address serves everyone, every time.
+    if (permanent) return window.location.origin + prefix + '/setup';
     var group = new URLSearchParams(window.location.search).get('g') || '';
     var url = window.location.origin + prefix + '/join?t=' + encodeURIComponent(token);
     // Carry the group through, or the colleague lands on a configure-only page while holding an invitation.

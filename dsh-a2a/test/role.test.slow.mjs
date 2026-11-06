@@ -179,6 +179,51 @@ test('a member stored before layer A existed still reads as a valid view', (t) =
   assert.ok(Array.isArray(row.tags));
 });
 
+test('the roster carries the person-level headline for the colleague card', (t) => {
+  const store = makeStore(t);
+  const group = makeGroup(store);
+  // Set the person-level headline ("what I do everywhere"), then read it back out of the roster.
+  store.setPersonProfile({ groupId: group.groupId, member: group.owner, headline: '后端工程师' });
+
+  const row = store.members({ groupId: group.groupId, member: group.owner })[0];
+  assert.equal(row.headline, '后端工程师', 'the roster must carry the headline so a colleague card can show it');
+});
+
+test('setProfile writes the display name into both the membership and the person table', (t) => {
+  const store = makeStore(t);
+  const group = makeGroup(store, '改名群');
+  // A member who joined with a session-id-looking default renames themselves to a short name.
+  const before = store.members({ groupId: group.groupId, member: group.owner })[0];
+  assert.equal(before.displayName, 'me', 'join default is the owner display name');
+
+  const set = store.setProfile({
+    groupId: group.groupId,
+    member: group.owner,
+    displayName: '小 D',
+  });
+  assert.equal(set.displayName, '小 D');
+  assert.equal(set.changed, true);
+
+  // The membership row is what the group roster reads.
+  const after = store.members({ groupId: group.groupId, member: group.owner })[0];
+  assert.equal(after.displayName, '小 D', 'the roster must show the new name');
+
+  // The person table is what the colleague card reads; the two must not disagree.
+  const person = store.personProfile(group.owner.personId);
+  assert.equal(person.displayName, '小 D', 'the colleague card must show the same name');
+});
+
+test('setProfile leaves displayName alone when omitted, and never grants permission', (t) => {
+  const store = makeStore(t);
+  const group = makeGroup(store);
+  const guest = addMember(store, group, 'guest');
+
+  store.setProfile({ groupId: group.groupId, member: guest, about: '我是产品' });
+  const row = store.members({ groupId: group.groupId, member: group.owner }).find((r) => r.personId === guest.personId);
+  assert.equal(row.displayName, 'guest', 'omitting displayName keeps the join-time name');
+  assert.equal(row.role, 'member', 'a rename must not change the permission bit');
+});
+
 test('a role change is visible in the feed as a system line', (t) => {
   const store = makeStore(t);
   const group = makeGroup(store);

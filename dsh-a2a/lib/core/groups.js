@@ -1452,6 +1452,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // tell an update from a repeat — and the report that started this was exactly that.
     const beforeAbout = member.roleAbout ?? '';
     const beforeTags = JSON.stringify([...(member.tags ?? [])].sort());
+    const beforeDisplayName = member.displayName ?? '';
 
     if (input.about !== undefined) {
       member.roleAbout = input.about === null || input.about === ''
@@ -1459,18 +1460,26 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
         : requireText(input.about, 'about', MAX_ROLE_ABOUT_CHARS, '角色说明');
     }
     if (input.tags !== undefined) member.tags = normalizeTags(input.tags);
+    // The display name is how this person appears IN THIS GROUP. It is the one field here that is also a
+    // person fact — the colleague card shows the same name — so when it changes, the person table must
+    // follow or the roster and the card disagree on what this person is called.
+    if (input.displayName !== undefined && input.displayName !== null && input.displayName !== '') {
+      member.displayName = requireText(input.displayName, 'displayName', MAX_DISPLAY_NAME_CHARS, '昵称');
+    }
 
     // Normalised on both sides: comparing a raw array against a normalised one would report a change on
     // every save, which is the same bug wearing a different hat.
     const afterAbout = member.roleAbout ?? '';
     const afterTags = JSON.stringify([...(member.tags ?? [])].sort());
-    const profileChanged = beforeAbout !== afterAbout || beforeTags !== afterTags;
+    const nameChanged = member.displayName !== beforeDisplayName;
+    const profileChanged = beforeAbout !== afterAbout || beforeTags !== afterTags || nameChanged;
 
     if (profileChanged === false) {
       // A no-op save: return the current state and touch nothing. `profileUpdatedAt` in particular stays,
       // because it means "when this last changed" and bumping it would make the value lie.
       return {
         personId: member.personId,
+        displayName: member.displayName,
         roleAbout: member.roleAbout,
         tags: [...member.tags],
         updatedAt: member.profileUpdatedAt ?? at,
@@ -1478,13 +1487,34 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       };
     }
 
+    // Sync the display name into the person table, so the colleague card and the roster read one name.
+    if (nameChanged) {
+      const person = persons.get(member.personId);
+      if (person !== undefined) {
+        person.displayName = member.displayName;
+        person.updatedAt = at;
+      } else {
+        persons.set(member.personId, {
+          personId: member.personId,
+          displayName: member.displayName,
+          headline: '',
+          tags: [],
+          endpoint: typeof member.endpoint === 'string' ? member.endpoint : '',
+          updatedAt: at,
+        });
+      }
+    }
+
     member.profileUpdatedAt = at;
     dirty = true;
     persist();
 
-    // A system line so other members can notice a role change without re-reading the member list. It
-    // carries no identity detail, only the fact of the change — and now only when there IS one.
-    appendSystem(group, `${member.displayName} 更新了本群角色`);
+    // A system line so other members can notice a change without re-reading the member list. The wording
+    // names what actually changed, so a rename is not announced as a role edit.
+    const changedParts = [];
+    if (nameChanged) changedParts.push('昵称');
+    if (beforeAbout !== afterAbout || beforeTags !== afterTags) changedParts.push('本群角色');
+    appendSystem(group, `${member.displayName} 更新了${changedParts.join(' 和 ')}`);
     log.info('member profile updated', {
       groupId: group.groupId,
       personId: member.personId,
@@ -1492,6 +1522,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     });
     return {
       personId: member.personId,
+      displayName: member.displayName,
       roleAbout: member.roleAbout,
       tags: [...member.tags],
       updatedAt: at,
@@ -2772,6 +2803,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
 
   /** Public view of a member. Never includes `keyHash`. */
   function publicMember(member, at) {
+    // The person-level headline ("what I do everywhere") is a person fact, not a membership fact. It lives in the
+    // person table, and the roster must carry it alongside the per-group role so a colleague card can show both
+    // without a second round trip. Absent when the person row does not exist yet (a member who joined before the
+    // person table existed, or who has never set a headline).
+    const person = persons.get(member.personId);
     return {
       personId: member.personId,
       displayName: member.displayName,
@@ -2792,6 +2828,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       roleAbout: member.roleAbout,
       tags: Array.isArray(member.tags) ? [...member.tags] : [],
       profileUpdatedAt: member.profileUpdatedAt,
+      // Person-level self-description, carried so the colleague card can render it. Not a membership fact, so it is
+      // read from the person table rather than copied onto the membership row.
+      headline: typeof person?.headline === 'string' ? person.headline : '',
     };
   }
 

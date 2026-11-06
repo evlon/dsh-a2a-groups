@@ -476,7 +476,7 @@ return {
           const joined = store.join({
             groupId,
             token: typeof data.token === 'string' && data.token !== '' ? data.token : undefined,
-            displayName: typeof data.displayName === 'string' && data.displayName !== '' ? data.displayName : 'member',
+            displayName: typeof data.displayName === 'string' && data.displayName !== '' ? data.displayName : '成员',
             endpoint,
 			// Present when the caller is taking over an identity this host already knows for that person — the
 			// normal case when somebody opens a new working directory and rejoins a long-lived group. The store
@@ -792,6 +792,9 @@ return {
                 displayName: entry.displayName,
                 role: entry.role,
                 roleAbout: entry.roleAbout ?? '',
+                // The person-level headline, carried so a colleague card can show it without a second call. Distinct
+                // from roleAbout: that one is per-group, this one follows the person everywhere.
+                headline: typeof entry.headline === 'string' ? entry.headline : '',
                 tags: Array.isArray(entry.tags) ? entry.tags : [],
                 // Where this person can be reached directly, when it is known. Empty is the
                 // normal case for a host with no gateway base configured; a caller must read it
@@ -1086,14 +1089,19 @@ return {
             // `undefined` means "leave it alone"; an empty string clears it.
             about: data.about === undefined ? undefined : data.about,
             tags: data.tags === undefined ? undefined : data.tags,
+            // The display name is this member's name IN THIS GROUP. Pass it through so a caller that renames
+            // itself actually renames itself instead of silently keeping the join-time default (a session id).
+            displayName: data.displayName === undefined ? undefined : data.displayName,
           });
           return {
             text: `Updated your role in this group.\n`
+              + `name : ${updated.displayName ?? ''}\n`
               + `about: ${updated.roleAbout ?? '(cleared)'}\n`
               + `tags : ${(updated.tags ?? []).join('、') || '(none)'}`,
             meta: {
               groupId,
               personId: updated.personId,
+              displayName: updated.displayName ?? '',
               about: updated.roleAbout ?? '',
               tags: updated.tags ?? [],
               updatedAt: updated.updatedAt,
@@ -1256,6 +1264,102 @@ return {
           return {
             text: removed ? 'Left the group.' : 'You were already not a member.',
             meta: { groupId, removed: removed === true },
+          };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/wait',
+      name: 'Wait for new group messages',
+      description:
+        'Block up to timeoutMs waiting for a NEW message in one group, then say whether one arrived. '
+        + 'Used by a client with no push channel (an MCP client): one long call instead of polling, and the '
+        + 'host answers the moment a post lands. hasNew=false on timeout or disconnect is "nothing yet", '
+        + 'not an error.',
+      examples: ['Wait up to 30 seconds for new messages in the invoice group'],
+      async run(input, context) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        const sinceSeq = finiteOr(data.sinceSeq, 0);
+        const timeoutMs = clamp(finiteOr(data.timeoutMs, 30_000), 1_000, 55_000);
+        // One mapping for both reads, so a field added to publicEntry cannot drop from the wait path while
+        // group/read still carries it — the exact class of bug the feed parity test exists for.
+        const entryView = (entry) => ({
+          seq: entry.seq,
+          msgId: entry.msgId,
+          at: entry.at,
+          atIso: entry.atIso,
+          from: { personId: entry.from.personId, displayName: entry.from.displayName },
+          mentions: Array.isArray(entry.mentions) ? [...entry.mentions] : undefined,
+          replyTo: Number.isInteger(entry.replyTo) ? entry.replyTo : undefined,
+          rootSeq: Number.isInteger(entry.rootSeq) ? entry.rootSeq : undefined,
+          kind: entry.kind,
+          text: entry.text,
+        });
+        try {
+          // New messages already waiting? Answer immediately instead of making the caller wait for nothing.
+          const caught = store.read({ groupId, member, sinceSeq, limit: 200 });
+          if (caught.entries.length > 0) {
+            return {
+              text: `${caught.entries.length} new message(s) already waiting.`,
+              meta: {
+                hasNew: true,
+                waitedMs: 0,
+                lastSeq: caught.lastSeq,
+                entries: caught.entries.map(entryView),
+              },
+            };
+          }
+          // Otherwise hold until a post lands, the window elapses, or the caller disconnects.
+          const started = clock();
+          const next = await new Promise((resolve) => {
+            let dispose = () => {};
+            let timer;
+            let settled = false;
+            const finish = (entry) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              dispose();
+              resolve(entry);
+            };
+            // Subscribe FIRST, then re-read: a post that lands between the initial read and the subscription
+            // would otherwise be missed, and the waiter would block until the window expires despite new mail
+            // already being there. The re-read closes that lost-wakeup window.
+            dispose = store.subscribe({ groupId, fn: (entry) => finish(entry) });
+            const raced = store.read({ groupId, member, sinceSeq, limit: 200 });
+            if (raced.entries.length > 0) {
+              finish(raced.entries[raced.entries.length - 1]);
+              return;
+            }
+            timer = setTimeout(() => finish(undefined), timeoutMs);
+            const signal = context?.signal;
+            if (signal !== undefined && signal !== null) {
+              if (signal.aborted) finish(undefined);
+              else signal.addEventListener('abort', () => finish(undefined), { once: true });
+            }
+          });
+          if (next === undefined) {
+            // The window passed with no post: a calm "nothing yet", not an error the caller would retry.
+            return {
+              text: 'No new message in the wait window.',
+              meta: { hasNew: false, waitedMs: clock() - started, lastSeq: sinceSeq, entries: [] },
+            };
+          }
+          // A post landed; re-read so the reply carries everything that arrived, not just the one that woke us.
+          const after = store.read({ groupId, member, sinceSeq, limit: 200 });
+          // `hasNew` is literally "did we read new messages", not "did a post happen". A stale cursor beyond the
+          // real head can wake without producing entries, and calling that "new" would teach the caller a false wake.
+          return {
+            text: after.entries.length === 0 ? 'No new message in the wait window.' : `${after.entries.length} new message(s).`,
+            meta: {
+              hasNew: after.entries.length > 0,
+              waitedMs: clock() - started,
+              lastSeq: after.lastSeq,
+              entries: after.entries.map(entryView),
+            },
           };
         } catch (error) {
           refuse(error);

@@ -160,3 +160,34 @@ test('a record without a personId does not mark the first roster row as mine', (
   ]);
   assert.equal(cards.every((card) => card.isSelf !== true), true);
 });
+
+// ---------------------------------------------------------------------------
+// the person-level headline survives into the card
+
+test('a headline carried by the roster is the card headline, not the first role', () => {
+  const cards = aggregateColleagueCards([
+    {
+      groupId: 'g-1',
+      groupName: 'A',
+      members: [{ personId: 'm-1', displayName: '小 D', headline: '后端工程师', roleAbout: '负责对账' }],
+    },
+  ]);
+  assert.equal(cards[0].headline, '后端工程师', 'the person headline outranks the per-group role');
+  // The per-group role still lives on, in roles, because a card carries both.
+  assert.deepEqual(cards[0].roles, ['负责对账']);
+});
+
+test('without a headline the card falls back to the first role, as before', () => {
+  const cards = aggregateColleagueCards([
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工', roleAbout: '兼产品' }] },
+  ]);
+  assert.equal(cards[0].headline, '兼产品');
+});
+
+test('the first non-empty headline across rosters wins', () => {
+  const cards = aggregateColleagueCards([
+    { groupId: 'g-1', groupName: 'A', members: [{ personId: 'm-1', displayName: '张工', roleAbout: '研发' }] },
+    { groupId: 'g-2', groupName: 'B', members: [{ personId: 'm-1', displayName: '张工', headline: '项目负责', roleAbout: '产品' }] },
+  ]);
+  assert.equal(cards[0].headline, '项目负责');
+});

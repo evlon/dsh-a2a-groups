@@ -341,3 +341,66 @@ test('group/leave lets a member remove themselves', async () => {
     env.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// group/wait — the host-side long poll the MCP client leans on
+// ---------------------------------------------------------------------------
+
+test('group/wait holds until a post lands and returns only what is new', async () => {
+  const env = harness();
+  try {
+    // A member posts first, then the waiter reads from a cursor past that post.
+    const invited = await env.run('group/invite', { groupId: env.groupId, ...env.owner });
+    const token = /[?&]t=([A-Za-z0-9_-]+)/u.exec(invited.meta.link)[1];
+    const joined = await env.run('group/join', { groupId: env.groupId, token, displayName: '李四' });
+    const member = { personId: joined.meta.personId, personKey: joined.meta.personKey };
+    const posted = await env.run('group/post', { groupId: env.groupId, ...member, text: '先发的' });
+
+    // The wait must return IMMEDIATELY for a message already above the cursor.
+    const waited = await env.run('group/wait', { groupId: env.groupId, ...member, sinceSeq: 0, timeoutMs: 3000 });
+    assert.equal(waited.meta.hasNew, true);
+    assert.equal(waited.meta.waitedMs, 0);
+    assert.ok(waited.meta.entries.some((entry) => entry.text === '先发的'));
+
+    // From a cursor AT the current head, the wait must block and wake on the next post.
+    // Schedule the post to land AFTER the wait has subscribed, so the blocking path is genuinely exercised.
+    const head = env.store.snapshot({ groupId: env.groupId }).lastSeq;
+    const start = Date.now();
+    const laterPost = new Promise((resolve) => {
+      setTimeout(() => resolve(env.run('group/post', { groupId: env.groupId, ...env.owner, text: '后发的' })), 150);
+    });
+    const blocking = await env.run('group/wait', { groupId: env.groupId, ...member, sinceSeq: head, timeoutMs: 5000 });
+    await laterPost;
+
+    assert.equal(blocking.meta.hasNew, true);
+    assert.ok(blocking.meta.entries.some((entry) => entry.text === '后发的'));
+    // The blocking wait must be answered by the post, not by waiting out the window.
+    assert.ok(Date.now() - start < 4000, 'group/wait must wake on the post');
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('group/wait times out with hasNew=false rather than failing', async () => {
+  const env = harness();
+  try {
+    const head = env.store.snapshot({ groupId: env.groupId }).lastSeq;
+    const waited = await env.run('group/wait', { groupId: env.groupId, ...env.owner, sinceSeq: head, timeoutMs: 1000 });
+    assert.equal(waited.meta.hasNew, false);
+    assert.deepEqual(waited.meta.entries, []);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('group/wait refuses a caller without a valid membership', async () => {
+  const env = harness();
+  try {
+    await assert.rejects(
+      () => env.run('group/wait', { groupId: env.groupId, personId: env.owner.personId, personKey: 'mk_wrong' }),
+      (error) => error.code === 'not_member',
+    );
+  } finally {
+    env.cleanup();
+  }
+});

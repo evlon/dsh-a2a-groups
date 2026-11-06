@@ -163,7 +163,7 @@ node lib/mcp-server.js
 | 找人 | `a2a_agents` `a2a_discover` `a2a_send` `a2a_stream` |
 | 一对一 | `a2a_person_send` `a2a_person_inbox` `a2a_person_ack` |
 | 建群/邀请 | `a2a_group_create` `a2a_group_invite` `a2a_group_join` |
-| 群内 | `a2a_group_post` `a2a_group_read` `a2a_group_summary` `a2a_group_set_card` |
+| 群内 | `a2a_group_post` `a2a_group_read` `a2a_group_summary` `a2a_group_set_card` `a2a_group_wait` |
 | 浏览 | `a2a_group_directory` |
 | 申请审批 | `a2a_group_request` `a2a_group_approvals` `a2a_group_decide` `a2a_group_claim` |
 | 管理 | `a2a_group_kick` `a2a_group_rename` `a2a_group_archive` |
@@ -248,6 +248,32 @@ codebuddy -p "开始前查 a2a_inbox_check；每完成一个阶段再查一次"
 ```
 
 **顺序有讲究**：一对一消息在前，因为邀请会阻塞进度（不收就无法参与），而群消息只是上下文。
+
+### 长轮询：`a2a_group_wait`
+
+没有推送通道时，「定时查」可以换成「挂起等」，把延迟从「最长一个轮询周期」压到约 0 秒：
+
+```json
+{
+  "name": "a2a_group_wait",
+  "arguments": { "groupId": "g-816ebab5", "sinceSeq": 300, "timeoutMs": 30000 }
+}
+```
+
+- 有比 `sinceSeq` 更新的消息 → **立刻返回** `hasNew: true`，`entries` 带上全部增量；
+- 窗口内来了新消息 → **消息一落地宿主就唤醒返回**（不是等满窗口）；
+- 窗口内没有 → 返回 `hasNew: false`（**这不是错误**，是「暂时没有」，循环继续等即可）。
+
+`timeoutMs` 会被宿主夹在 1–55 秒（保在 MCP 客户端工具调用超时之内）。客户端循环：
+
+```
+后台任务启动
+循环（在预算时间内）:
+    r = await a2a_group_wait(30 秒, sinceSeq=上次的 lastSeq)
+    if r.hasNew: 立即处理并报告
+```
+
+**局限**：IDE 关掉后循环就停了（这是所有「无推送」方案的共同限制）。想要真推送见下一节。
 
 ### 想要真正的推送怎么办
 

@@ -306,6 +306,8 @@ function rosterOf(members, selfId) {
     // The two fields that make a card worth reading. Without them a card can only say "in this group", which is the one
     // thing the reader already knows.
     roleAbout: member.roleAbout,
+    // Person-level self-description, carried so the colleague card can show it. Distinct from roleAbout.
+    headline: typeof member.headline === 'string' ? member.headline : '',
     tags: Array.isArray(member.tags) ? member.tags : undefined,
   }));
 }
@@ -903,7 +905,12 @@ function requireSession(sessionId, tool) {
     // The Session that joins is the member: two Sessions of one instance may join
     // the same group as two distinct members, each with its own credential.
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_join');
-    const displayName = args.displayName ?? senderOf(exec).id ?? 'member';
+    // A display name must read as a person. A Session id does not: it is a long opaque string that leaks an
+    // internal identifier into every roster and card. When nobody supplied a name, use a stable short default
+    // the member can rename later with a2a_group_set_card — never the session id.
+    const displayName = (typeof args.displayName === 'string' && args.displayName.trim() !== '')
+      ? args.displayName.trim()
+      : '成员';
     // A link carries the gateway target as well as the group, so a remote group
     // needs no separate registration step — that is the point of the link.
     const parsed = typeof args.link === 'string' && args.link !== ''
@@ -1149,7 +1156,7 @@ function requireSession(sessionId, tool) {
     if (args.displayName !== undefined) data.displayName = args.displayName;
 
     if (membership.local === true) {
-      const updated = store.setProfile({ groupId, member: data, about: data.about, tags: data.tags });
+      const updated = store.setProfile({ groupId, member: data, about: data.about, tags: data.tags, displayName: data.displayName });
       // The headline lives on the PERSON row, not the membership row, so it needs its own write. Done after
       // the membership write because a caller who passes both expects both to land.
       if (args.headline !== undefined) {
@@ -1158,6 +1165,7 @@ function requireSession(sessionId, tool) {
       await store.flush();
       return {
         groupId,
+        displayName: updated.displayName ?? '',
         about: updated.roleAbout ?? '',
         tags: updated.tags ?? [],
         // Reported so a caller can tell "accepted" from "already that", and so an untouched headline is
@@ -1191,6 +1199,7 @@ function requireSession(sessionId, tool) {
     }
     return {
       groupId,
+      displayName: meta.displayName ?? '',
       about: meta.about ?? '',
       tags: meta.tags ?? [],
       headline: args.headline ?? '',
@@ -1261,6 +1270,8 @@ function requireSession(sessionId, tool) {
             // version skew looks like the group misbehaving.
             clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
             roleAbout: member.roleAbout,
+            // Person-level headline, so the colleague card (aggregated from these cached rosters) can show it.
+            headline: typeof member.headline === 'string' ? member.headline : '',
             tags: Array.isArray(member.tags) ? member.tags : undefined,
           }))
         : undefined,
@@ -1286,6 +1297,61 @@ function requireSession(sessionId, tool) {
       // The roster itself. `rosterCount` alone answered 「5 人」 and left the caller unable to name any of them, which is
       // the wrong half of the answer for anyone trying to find a colleague.
       members: rosterOf(meta.members, membership.personId),
+    };
+  },
+  'a2a_group_wait': async function a2a_group_wait(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_wait');
+    const groupId = requireText(args.groupId, 'groupId');
+    const sinceSeq = Number.isFinite(args.sinceSeq) ? args.sinceSeq : 0;
+    const waitMs = Number.isFinite(args.timeoutMs) ? Math.max(1000, Math.min(args.timeoutMs, 55_000)) : 30_000;
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    if (membership.local === true) {
+      // A group this instance hosts has no wire to cross, so the same wait runs in-process against the
+      // store's own watcher registry. Shape the entries the same way the remote branch does.
+      const member = { personId: membership.personId, personKey: membership.personKey };
+      const caught = store.read({ groupId, member, sinceSeq, limit: 200 });
+      if (caught.entries.length > 0) {
+        return {
+          hasNew: true,
+          waitedMs: 0,
+          lastSeq: caught.lastSeq,
+          entries: caught.entries,
+        };
+      }
+      const started = Date.now();
+      const next = await new Promise((resolve) => {
+        let dispose = () => {};
+        let settled = false;
+        const finish = (entry) => {
+          if (settled) return;
+          settled = true;
+          dispose();
+          resolve(entry);
+        };
+        dispose = store.subscribe({ groupId, fn: (entry) => finish(entry) });
+        setTimeout(() => finish(undefined), waitMs);
+      });
+      if (next === undefined) {
+        return { hasNew: false, waitedMs: Date.now() - started, lastSeq: sinceSeq, entries: [] };
+      }
+      const after = store.read({ groupId, member, sinceSeq, limit: 200 });
+      return { hasNew: true, waitedMs: Date.now() - started, lastSeq: after.lastSeq, entries: after.entries };
+    }
+    // A remote group: the HOST owns the feed, so it also owns the wait. Its `group/wait` skill blocks and
+    // answers the moment a post lands. The HTTP layer must outlive the wait by a margin, or the bridge
+    // times out just before the host's honest "no message" arrives.
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/wait',
+      text: `wait ${groupId} after ${sinceSeq}`,
+      data: { groupId, personId: membership.personId, personKey: membership.personKey, sinceSeq, timeoutMs: waitMs },
+      timeoutMs: waitMs + 5000,
+    });
+    const meta = result.data ?? {};
+    return {
+      hasNew: meta.hasNew === true,
+      waitedMs: Number.isFinite(meta.waitedMs) ? meta.waitedMs : 0,
+      lastSeq: Number.isFinite(meta.lastSeq) ? meta.lastSeq : sinceSeq,
+      entries: Array.isArray(meta.entries) ? meta.entries : [],
     };
   },
   'a2a_group_read': async function a2a_group_read(args, exec) {

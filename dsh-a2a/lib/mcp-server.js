@@ -201,7 +201,10 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
                 + '=== KEEPING UP DURING WORK ===\n'
                 + 'Call a2a_inbox_check at the START of a turn, and again every few minutes during long work. It returns unread\n'
                 + 'group messages plus one-to-one invitations in one call. If it reports nothing, say so briefly and carry\n'
-                + 'on — do not silently skip it.\n\n'
+                + 'on — do not silently skip it.\n'
+                + 'To WATCH a group without burning turns, use a2a_group_wait: it blocks up to timeoutMs and returns the moment a\n'
+                + 'new message lands (hasNew=true) or the window passes (hasNew=false). Loop it while the user wants to keep\n'
+                + 'watching. hasNew=false is NOT an error — it means "nothing yet", so loop rather than report a failure.\n\n'
                 + 'There is no push channel here: a2a_group_inbox does not exist and would be a lie. To catch up on a\n'
                 + 'specific group, use a2a_group_read with sinceSeq (the last seq you saw) so you fetch only what is new.\n\n'
 

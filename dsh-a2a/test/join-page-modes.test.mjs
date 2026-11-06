@@ -17,7 +17,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
 
-import { buildJoinInstruction, renderJoinPage } from '../lib/core/join-page.js';
+import { SETUP_PATH, buildJoinInstruction, renderJoinPage } from '../lib/core/join-page.js';
 
 const BASE = {
   gatewayBase: 'http://gw:3000/a2a',
@@ -89,4 +89,46 @@ test('the group is carried in the share link when there is one', () => {
   const html = renderJoinPage(WITH_GROUP);
   // Without this the colleague lands on a configure-only page while holding an invitation.
   assert.match(html, /get\('g'\)/);
+});
+
+// ---------------------------------------------------------------------------
+// The permanent (token-free) entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * REGRESSION: the configure-only page existed but no command could produce its URL.
+ *
+ * `mintJoinToken` is only handed to `group/invite`, and that skill always names a group — so the one page written for
+ * a colleague who has not been invited anywhere yet was unreachable. And `/join?t=<32 hex>` is paste-only: useless to
+ * say out loud or type into a document.
+ *
+ * `/setup` fixes both. It is ALSO permanent on purpose: the first design minted a token per visit, which means five
+ * colleagues opening it at once leave five unused one-time tokens, and a refresh loop leaves unbounded ones.
+ */
+test('the permanent page does not claim to be a one-time link', () => {
+  const html = renderJoinPage({ ...NO_GROUP, permanent: true });
+  // A page that says 「一次性有效，N 分钟后作废」 while being bookmarkable is worse than no notice at all.
+  assert.ok(!html.includes('一次性有效'), 'a permanent page must not warn about expiry');
+  assert.ok(html.includes('可以收藏'), 'it should say the address is worth keeping');
+});
+
+test('the permanent page shares /setup, not a token URL', () => {
+  const html = renderJoinPage({ ...NO_GROUP, permanent: true });
+  // The share link is computed in the page's own script, so the path appears there rather than as a rendered value.
+  assert.ok(html.includes('/setup'), 'the share link must point at the stable path');
+  // The branch is guarded by `permanent`, so the token URL is never built for this page.
+  assert.ok(html.includes('if (permanent) return'), 'the share link must branch on permanence');
+});
+
+test('the token page still warns about expiry', () => {
+  // The guard above must not have removed the notice where it IS true.
+  const html = renderJoinPage(WITH_GROUP);
+  assert.ok(html.includes('一次性有效'), 'an invitation page carries a credential and must say so');
+  assert.ok(!html.includes('可以收藏'));
+});
+
+test('SETUP_PATH is a short stable path, not a query-carrying link', () => {
+  // Sayable over the phone is the whole point; a path with a query string is not.
+  assert.equal(SETUP_PATH, '/setup');
+  assert.ok(!SETUP_PATH.includes('?'), 'the address must not need a token to be valid');
 });

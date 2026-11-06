@@ -63,9 +63,11 @@ test('the change signature notices a roster change', () => {
 
 test('the panel can replace the injected table', () => {
   // The page renders from a global injected once. A refresh changes the ledger, not that global.
-  assert.match(CLIENT, /function replaceGroups\(groups, directoryError\)/u);
+  assert.match(CLIENT, /function replaceGroups\(groups, directoryError, cards\)/u);
   const body = CLIENT.slice(CLIENT.indexOf('function replaceGroups('));
   assert.match(body, /CHANGE_EVENT/u, 'subscribers must be woken, or the poll is the only path to a re-render');
+  // Cards ride the same poll so a profile save shows up without a full reload.
+  assert.match(body, /patch\.cards = cards/u, 'polled cards must overwrite the frozen page copy');
 });
 
 test('the refresh button is always reachable, not only when stale', () => {

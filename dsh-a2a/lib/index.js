@@ -54,6 +54,7 @@ import { createInbox } from './dsh/inbox.js';
 import { registerTools } from './dsh/tools.js';
 import { PROMPT_SECTION, PROMPT_SECTION_NAME, PROMPT_SECTION_ORDER } from './dsh/prompt.js';
 import { TaskStore } from './core/wire.js';
+import { aggregateColleagueCards } from './core/colleague-cards.js';
 
 /** Cordis plugin name. */
 export const name = 'a2a';
@@ -257,6 +258,7 @@ const PANEL_FEED_TAIL = 8;
           member: { personId: record.personId, personKey: record.personKey },
           about: body.about,
           tags: body.tags,
+          displayName: body.displayName,
         });
         // A group-independent headline, when the panel edits the personal profile.
         if (body.headline !== undefined) {
@@ -285,6 +287,7 @@ const PANEL_FEED_TAIL = 8;
               personKey: record.personKey,
               about: body.about,
               tags: body.tags,
+              displayName: body.displayName,
             },
             timeoutMs: config.client.timeoutMs,
           },
@@ -706,21 +709,28 @@ const PANEL_FEED_TAIL = 8;
         // card per group, stitched together from whichever rosters happened to be cached.
         cards: (() => {
           try {
-            const people = typeof groups.listPersons === 'function' ? groups.listPersons() : [];
-            return people.map((person) => ({
-              personId: person.personId,
-              name: person.displayName,
-              headline: person.headline,
-              tags: Array.isArray(person.tags) ? person.tags : [],
-              endpoint: typeof person.endpoint === 'string' ? person.endpoint : '',
-              // "Mine" is decided by the ledger: it knows which person ids this instance holds.
-              // Matching on a display name would mark a stranger's card as mine, and offer an
-              // edit that changes the wrong profile.
-              isSelf: identities.list().some((record) => record.personId === person.personId),
-              // Presence is the one fact a profile cannot carry: it changes by the minute. It is
-              // read from the cached rosters, and absence simply means "unknown", not "offline".
-              online: identities.list().some((record) => (record.members ?? [])
-                .some((member) => member.personId === person.personId && member.online === true)),
+            // Cards are aggregated from the cached ROSTERS, not from the local person table.
+            //
+            // The local `groups.listPersons()` is the wrong source for a MEMBER instance: it only holds people from
+            // groups THIS machine hosts (zero for a member), so the colleague cards showed 张三/李四/王五 from one old
+            // local group while the joined group "Codebuddy测试" (hosted on the remote host) listed 小C and 小D in its
+            // roster. Two names for the same panel, one stale and one live.
+            //
+            // The roster is the host's own answer about who is in the group, already cached on each membership row
+            // from the last `a2a_group_summary`. Aggregating it (the pure `aggregateColleagueCards`) makes the cards
+            // come from the SAME data the member list reads, so a rename or a headline change shows up everywhere at
+            // once instead of in one place only.
+            const records = identities.list();
+            return aggregateColleagueCards(records).map((card) => ({
+              personId: card.personId,
+              name: card.name,
+              headline: card.headline,
+              tags: card.tags,
+              roles: card.roles,
+              groups: card.groups,
+              endpoint: '',
+              isSelf: card.isSelf === true,
+              online: card.online === true,
             }));
           } catch (error) {
             // Cards are reference material; a failure must not blank the panel.
@@ -828,6 +838,7 @@ const PANEL_FEED_TAIL = 8;
                   // group instead of letting a version skew look like a bug in the group.
                   clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
                   roleAbout: member.roleAbout,
+                  headline: typeof member.headline === 'string' ? member.headline : '',
                   tags: Array.isArray(member.tags) ? member.tags : undefined,
                 }))
               : undefined,
@@ -886,6 +897,11 @@ const PANEL_FEED_TAIL = 8;
                 ok: true,
                 value: {
                   groups: snapshot.groups,
+                  // Cards travel with every poll, not only the page render. A profile save used to be invisible
+                  // until the next full reload, because the page's injected copy was frozen at load time — the
+                  // exact "saved but nothing changed" report. The poll already re-reads live state, so the cards
+                  // come from the server each time instead of from a stale copy.
+                  cards: snapshot.cards,
                   directoryError: snapshot.directoryError,
                   directoryAt: snapshot.directoryAt,
                   at: clock(),

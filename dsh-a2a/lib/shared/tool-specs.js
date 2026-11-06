@@ -531,7 +531,7 @@ export const TOOL_SPECS = Object.freeze([
   
     name: 'a2a_group_set_card',
     description:
-      'Say what you do in ONE group, and change it whenever it changes. This is self-description, not a permission — it grants nothing, and nobody can set it for you. Use it when someone takes on a different hat in a project (a developer who is also acting as product), so the group sees the current role rather than the job title. Omit `about` or `tags` to leave that part unchanged; pass an empty string / empty array to clear it.',
+      'Say what you do in ONE group, and change it whenever it changes. This is self-description, not a permission — it grants nothing, and nobody can set it for you. Use it when someone takes on a different hat in a project (a developer who is also acting as product), so the group sees the current role rather than the job title. Omit `about` or `tags` to leave that part unchanged; pass an empty string / empty array to clear it. `displayName` is how you appear in this group\'s member list and colleague cards — set it when your name shows as a long id (like a session id) instead of a name.',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -543,7 +543,7 @@ export const TOOL_SPECS = Object.freeze([
           items: { type: 'string' },
           description: 'Up to 5 short labels describing your role here, e.g. ["产品","验收"]. An empty array clears them.',
         },
-        displayName: { type: 'string', description: 'Optional: how you appear in this group, if you want to change it too.' },
+        displayName: { type: 'string', description: 'How you appear in this group\'s member list and colleague cards, e.g. "小 D". Set it when your name shows as a long id instead of a name.' },
         headline: { type: 'string', description: 'How you introduce yourself in ONE sentence, independent of any group - it appears on every colleague card. Different from about, which is what you do in THIS group. Empty string clears it. Omit to leave unchanged.' },
       },
       required: ['groupId'],
@@ -554,17 +554,19 @@ export const TOOL_SPECS = Object.freeze([
         additionalProperties: false,
         properties: {
           groupId: { type: 'string' },
+          displayName: { type: 'string' },
           about: { type: 'string' },
           tags: { type: 'array', items: { type: 'string' } },
         },
       },
       render: (args, value) => [{
         type: 'text',
-        text: `Your role in this group is now:\n`
+        text: `Your card in this group is now:\n`
+          + (value.displayName === undefined || value.displayName === '' ? '' : `  name : ${value.displayName}\n`)
           + `  about: ${value.about === '' ? '(not set)' : value.about}\n`
           + `  tags : ${(value.tags ?? []).join('、') || '(none)'}\n\n`
           + 'This is self-description only — it grants no permission, and it only '
-          + 'changes YOUR role, not anyone else\'s.',
+          + 'changes YOUR card, not anyone else\'s.',
       }],
     },
   runtime: 'a2a_group_set_card',
@@ -722,6 +724,41 @@ export const TOOL_SPECS = Object.freeze([
       },
     },
   runtime: 'a2a_self_check',
+  },
+  {
+    name: 'a2a_group_wait',
+    description:
+      'Wait up to timeoutMs for NEW messages in one group, then report whether any arrived. This is long-polling: one call that holds until a message lands (answered immediately) or the window expires (answered hasNew=false). Use it when told to keep watching a group in the background — it is the closest thing to a push channel this server has. Keep timeoutMs at or below 55 seconds; the host clamps it. Pass sinceSeq (the last seq you saw) so only genuinely new messages count. Timeout is NOT an error: hasNew=false means "nothing yet", so loop it rather than reporting a failure.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        sinceSeq: { type: 'integer', description: 'Only messages with seq above this count. Defaults to 0.' },
+        timeoutMs: { type: 'integer', description: 'How long to wait, in milliseconds. Defaults to 30000; the host clamps to at most 55000.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          hasNew: { type: 'boolean' },
+          waitedMs: { type: 'number' },
+          lastSeq: { type: 'integer' },
+          entries: { type: 'array', items: { type: 'object' } },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: value.hasNew === true
+          ? `${(value.entries ?? []).length} new message(s):\n`
+            + value.entries.map((entry) => `#${entry.seq} ${entry.from?.displayName ?? '?'}: ${entry.text}`).join('\n')
+          : `No new message within the wait window (waited ${value.waitedMs} ms).`,
+      }],
+    },
+    runtime: 'a2a_group_wait',
   },
   {
   

@@ -495,3 +495,105 @@ test('a2a_group_archive keeps the group readable but stops new posts', async () 
     env.cleanup();
   }
 });
+
+// ---------------------------------------------------------------------------
+// a2a_group_wait — long polling, both the local and the remote branch
+// ---------------------------------------------------------------------------
+
+test('a2a_group_wait answers immediately when a new message is already waiting', async () => {
+  const env = harness();
+  try {
+    env.store.post({ groupId: env.groupId, member: { personId: env.personId, personKey: env.ownerKey }, text: '先来一条' });
+
+    const waited = await env.runtime.call('a2a_group_wait', {
+      groupId: env.groupId,
+      sinceSeq: 0,
+      timeoutMs: 3000,
+    }, { sessionId: env.sessionId });
+
+    assert.equal(waited.hasNew, true);
+    assert.equal(waited.waitedMs, 0, 'an already-waiting message must not make the caller wait');
+    assert.ok(waited.entries.some((entry) => entry.text === '先来一条'));
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a2a_group_wait wakes the moment a post lands, not when the window ends', async () => {
+  const env = harness();
+  try {
+    // `create` already wrote a system entry (seq 1), so start the cursor at the real head — otherwise the wait
+    // returns immediately with that entry and never exercises the blocking path.
+    const head = env.store.snapshot({ groupId: env.groupId }).lastSeq;
+    const start = Date.now();
+    const postLater = new Promise((resolve) => {
+      setTimeout(() => {
+        env.store.post({ groupId: env.groupId, member: { personId: env.personId, personKey: env.ownerKey }, text: '醒了' });
+        resolve();
+      }, 150);
+    });
+
+    const waited = await env.runtime.call('a2a_group_wait', {
+      groupId: env.groupId,
+      sinceSeq: head,
+      timeoutMs: 5000,
+    }, { sessionId: env.sessionId });
+    await postLater;
+
+    assert.equal(waited.hasNew, true);
+    assert.ok(Date.now() - start < 4000, 'the waiter must return on the post, not the full window');
+    assert.ok(waited.entries.some((entry) => entry.text === '醒了'));
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a2a_group_wait times out calmly with hasNew=false, not an error', async () => {
+  const env = harness();
+  try {
+    const head = env.store.snapshot({ groupId: env.groupId }).lastSeq;
+    const waited = await env.runtime.call('a2a_group_wait', {
+      groupId: env.groupId,
+      sinceSeq: head,
+      timeoutMs: 1000,
+    }, { sessionId: env.sessionId });
+
+    assert.equal(waited.hasNew, false);
+    assert.equal(Array.isArray(waited.entries), true);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a2a_group_wait on a remote group goes through the host with a padded timeout', async () => {
+  const bridge = stubBridge({ answer: { data: { hasNew: true, waitedMs: 12, lastSeq: 9, entries: [{ seq: 9, from: { displayName: '李四' }, text: '来了' }] } } });
+  const env = harness({ bridge });
+  try {
+    const waited = await env.runtime.call('a2a_group_wait', {
+      groupId: env.remoteGroupId,
+      sinceSeq: 4,
+      timeoutMs: 30000,
+    }, { sessionId: env.sessionId });
+
+    assert.equal(waited.hasNew, true);
+    assert.equal(waited.entries[0].text, '来了');
+    const waitCall = bridge.calls.find((call) => call.input.skill === 'group/wait');
+    assert.ok(waitCall, 'a remote wait must reach the host');
+    assert.equal(waitCall.input.timeoutMs, 35000, 'the HTTP timeout must outlive the wait window by a margin');
+    assert.equal(waitCall.input.data.timeoutMs, 30000);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('a2a_group_wait refuses a group this instance is not in', async () => {
+  const env = harness();
+  try {
+    await assert.rejects(
+      () => env.runtime.call('a2a_group_wait', { groupId: 'g-nope', timeoutMs: 30000 }, { sessionId: env.sessionId }),
+      (error) => error.code === 'unknown_group',
+    );
+  } finally {
+    env.cleanup();
+  }
+});

@@ -95,12 +95,18 @@ export function aggregateColleagueCards(records) {
           roles: [],
           groups: [],
           online: false,
+          // The person-level headline, when the roster carries it. Kept on the card so a member who set "what I do
+          // everywhere" sees it on their own card, distinct from the per-group roles below.
+          headline: typeof member.headline === 'string' ? member.headline.trim() : '',
           // Set from the ledger's own member id, never from the name: two people can share a
           // display name, and mistaking somebody else's row for mine would offer an edit that
           // changes the wrong person's profile.
           isSelf: selfIds.has(member.personId) || (typeof member.personId !== 'string' && selfNames.has(name)),
         };
         byPerson.set(key, card);
+      } else if (card.headline === '' && typeof member.headline === 'string' && member.headline.trim() !== '') {
+        // A later roster carries the headline the first one lacked; keep the first non-empty one.
+        card.headline = member.headline.trim();
       }
 
       // Any sighting counts: rosters are fetched at different times, and a person seen
@@ -128,9 +134,9 @@ export function aggregateColleagueCards(records) {
     personId: card.personId,
     name: card.name,
     isSelf: card.isSelf === true,
-    // The first role they declared. Empty when they never declared one — deliberately not a
-    // placeholder, because a placeholder reads as knowledge.
-    headline: card.roles[0] ?? '',
+    // The person-level headline when declared; otherwise the first role they declared. Empty when neither exists —
+    // deliberately not a placeholder, because a placeholder reads as knowledge.
+    headline: card.headline !== '' ? card.headline : (card.roles[0] ?? ''),
     tags: card.tags.slice(0, MAX_TAGS),
     roles: card.roles.slice(0, MAX_ROLES),
     groups: card.groups.slice(0, MAX_GROUPS),

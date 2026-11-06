@@ -588,7 +588,7 @@ window.__ModuleLoader__.load({
 		 * and an empty directory are different facts that both render as an empty list, and only one of them is good news.
 		 * Omitted by callers that only have the array, which keeps the local read path unchanged.
 		 */
-		function replaceGroups(groups, directoryError) {
+		function replaceGroups(groups, directoryError, cards) {
 			if (!Array.isArray(groups)) return;
 			const host = hostObject();
 			if (host === undefined) return;
@@ -596,6 +596,9 @@ window.__ModuleLoader__.load({
 				const existing = host[GLOBAL_KEY];
 				const patch = { groups: groups };
 				if (typeof directoryError === "string") patch.directoryError = directoryError;
+				// Cards follow the same rule as groups: an array from the server replaces the page's copy; an
+				// absent field leaves it alone, so an older Host that does not poll cards changes nothing here.
+				if (Array.isArray(cards)) patch.cards = cards;
 				const next = existing !== null && typeof existing === "object" && !Array.isArray(existing)
 					? Object.assign({}, existing, patch)
 					: patch;
@@ -637,6 +640,12 @@ window.__ModuleLoader__.load({
 				}
 				const last = group.lastMessage;
 				if (last !== undefined) signature += ":" + last.id + ":" + String(last.text.length);
+			}
+			// Card names and headlines: a profile save moves only these, and a signature blind to them would
+			// receive the new cards and keep rendering the old ones.
+			const cards = Array.isArray(snapshot.cards) ? snapshot.cards : [];
+			for (const card of cards) {
+				signature += "|c" + String(card.id) + "/" + String(card.name) + "/" + String(card.headline);
 			}
 			return signature;
 		}
@@ -934,18 +943,23 @@ window.__ModuleLoader__.load({
 					panelRpcCaller("/a2a-panel", "groups", {}).then(function (result) {
 						if (disposed) return;
 						if (result !== null && result !== undefined && result.ok === true) {
-							const groups = result.value !== undefined && result.value !== null ? result.value.groups : undefined;
-							const directoryError = result.value !== undefined && result.value !== null && typeof result.value.directoryError === "string"
-								? result.value.directoryError
+							const value = result.value;
+							const groups = value !== undefined && value !== null ? value.groups : undefined;
+							const directoryError = value !== undefined && value !== null && typeof value.directoryError === "string"
+								? value.directoryError
 								: "";
 							// `replaceGroups` refuses anything that is not an array, and that refusal is what made this
 							// whole fix do nothing for an hour: the endpoint reported success while handing back the
 							// wrong object, so every poll wrote nothing and the page kept its load-time snapshot. Warn
 							// rather than fail silently — an unusable body is a broken endpoint, not a quiet no-op.
 							if (!Array.isArray(groups)) {
-								warn("panel poll returned no group array", result.value);
+								warn("panel poll returned no group array", value);
 							}
-							replaceGroups(groups, directoryError);
+							// Cards ride the same poll when the Host sent them. A profile save used to stay invisible
+							// until a full reload, because the page's card copy was frozen at load time; writing the
+							// polled cards over the injected copy is what makes "save → see it" work without one.
+							const cards = value !== undefined && value !== null && Array.isArray(value.cards) ? value.cards : undefined;
+							replaceGroups(groups, directoryError, cards);
 						}
 						readLocal();
 					}).catch(function () {
@@ -1861,6 +1875,9 @@ window.__ModuleLoader__.load({
 		 * @returns {object} the editor.
 		 */
 		function RoleEditor(props) {
+			// The display name is how this member appears in the group's roster and on every colleague card. It is
+			// the field a person edits when their name shows as a long id (a session id) instead of a name.
+			const [displayName, setDisplayName] = react.useState(props.displayName ?? "");
 			const [about, setAbout] = react.useState(props.about ?? "");
 			const [tags, setTags] = react.useState((props.tags ?? []).join("、"));
 			// The person-level headline. Different scope from `about`: that one is this membership, this one
@@ -1882,6 +1899,10 @@ window.__ModuleLoader__.load({
 				saveProfile({
 					groupId: props.groupId,
 					sessionId: props.sessionId,
+					// Omitted when untouched rather than sent empty: an absent field means "leave it alone".
+					displayName: String(displayName ?? "").trim() === String(props.displayName ?? "").trim()
+						? undefined
+						: String(displayName ?? "").trim(),
 					about: String(about ?? "").trim(),
 					tags: parsed,
 					// Omitted when untouched rather than sent empty: an absent field means "leave it alone",
@@ -1902,6 +1923,16 @@ window.__ModuleLoader__.load({
 				// Scope stated in the label, not only in a placeholder: editing the wrong one produces a
 				// change that does not show up where the reader expects, and the difference is invisible in a
 				// screenshot.
+				h("span", { style: { fontSize: "10px", opacity: 0.6 } }, "昵称（群名单和同事名片里显示的名字）"),
+				h("input", {
+					type: "text",
+					value: displayName,
+					placeholder: "例如：小 D",
+					onChange: function (event) {
+						setDisplayName(event !== null && event !== undefined && event.target !== undefined ? event.target.value : "");
+					},
+					style: membersLayout.editorInput
+				}),
 				h("span", { style: { fontSize: "10px", opacity: 0.6 } }, "个人介绍（所有群共用，显示在同事名片上）"),
 				h("input", {
 					type: "text",
@@ -3966,6 +3997,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					? h(RoleEditor, {
 						groupId: group.id,
 						sessionId: sessionId,
+						displayName: (self !== null && self !== undefined ? self.name : "") || "",
 						about: self.about,
 						tags: self.tags,
 						// Read from the person table, not the roster row: the headline is a person fact and a

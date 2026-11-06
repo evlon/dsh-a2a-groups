@@ -42,6 +42,7 @@ import { randomUUID } from 'node:crypto';
 import { A2A_PATH, CARD_ALIAS_PATH, CARD_PATH, buildCard, resolveAgentUrl } from './card.js';
 import {
   JOIN_PATH,
+  SETUP_PATH,
   createJoinTokenStore,
   renderJoinErrorPage,
   renderJoinPage,
@@ -306,6 +307,76 @@ export function createServer({
   let disposers = [];
   let attached = false;
   /**
+   * The stable entry point for "connect to collaboration, no particular group".
+   *
+   * WHY THIS EXISTS
+   *
+   * The configure-only page already worked, but nothing could produce its URL: `mintJoinToken` is only handed to
+   * `group/invite`, and that skill always names a group. So a colleague who had not been invited anywhere yet — the one
+   * person the configure-only page is written for — had no way to reach it.
+   *
+   * And `/join?t=<32 hex chars>` is write-only: fine to paste, useless to say out loud or type. This path is short,
+   * memorable, and can go into a document or an IM message as-is:
+   *
+   *     http://<host>:<port>/setup
+   *
+   * WHY NO TOKEN, AND WHY THAT IS NOT A HOLE
+   *
+   * A join-page token exists because THAT page carries an invitation and a group id — opening it twice must not work.
+   * This page carries neither: it states the gateway address and how to write a config file, and both are public in the
+   * README. It grants nothing, and joining an actual group still requires an invitation.
+   *
+   * It also must NOT mint a token per visit, which was the first design: five colleagues opening it at once would leave
+   * five unused one-time tokens behind, and a refresh loop would leave unbounded ones. Rendering directly stores no
+   * state at all.
+   *
+   * The next version puts an OIDC login in front of this page, at which point "who is asking" is known and this becomes
+   * a normal authenticated route. Until then the trade is deliberate: convenient inside a network, disclosing only
+   * topology the documentation already discloses.
+   *
+   * @param {object} req - request.
+   * @param {object} res - response.
+   */
+  async function handleSetup(req, res) {
+    let detail;
+    try {
+      // Undefined group: that is the configure-only mode, and it is what decides the page's wording.
+      detail = typeof joinContext === 'function' ? await joinContext(undefined) : undefined;
+    } catch (error) {
+      writeHtml(res, 503, renderJoinErrorPage('unknown'));
+      warn('could not build the setup page', error);
+      return;
+    }
+    if (detail === undefined || detail === null) {
+      send(res, 503, 'text/html; charset=utf-8', renderJoinErrorPage('unknown'));
+      return;
+    }
+    const publicOrigin = resolvePublicOrigin({
+      req,
+      configured: serverConfig.publicUrl,
+      origin: originProvider(),
+    });
+    try {
+      const html = renderJoinPage({
+        ...detail,
+        // Empty group: the wording, the instruction, and the share link all follow from this.
+        groupName: '',
+        groupId: '',
+        expiresAt: Date.now(),
+        // Stops the page claiming it is a one-time link, because it is not one.
+        permanent: true,
+        publicOrigin,
+      });
+      // No credential today, but the next version puts an identity in front of it.
+      res.setHeader('cache-control', 'no-store');
+      writeHtml(res, 200, html);
+    } catch (error) {
+      warn('could not render the setup page', error);
+      writeHtml(res, 503, renderJoinErrorPage('unknown'));
+    }
+  }
+
+  /**
    * Serve the join page, or explain why this token is spent.
    *
    * @param {object} req - request.
@@ -386,6 +457,9 @@ export function createServer({
       // Unauthenticated on purpose: the token in the query string IS the authentication, and requiring the
       // A2A bearer on top would mean a colleague cannot open this until they are already configured.
       register.call(registrar, { kind: 'exact', path: JOIN_PATH, handler: handleJoin }),
+      // The short, sayable entry point for the configure-only page. Deliberately NOT `/join`: that name reads as
+      // "join a group", and this page exists for somebody who is not joining one yet.
+      register.call(registrar, { kind: 'exact', path: SETUP_PATH, handler: handleSetup }),
     ];
     attached = true;
     info();

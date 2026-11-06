@@ -8,6 +8,24 @@
 
 ---
 
+## [0.1.23] — 2026-11-06
+
+> 新功能：**长轮询 `a2a_group_wait`**。MCP 客户端没有推送通道，「定时查」可以换成「挂起等」。
+
+### 新功能
+
+- **新工具 `a2a_group_wait`**（DSH 与 MCP 共用同一份 spec）：阻塞最多 `timeoutMs`，有新消息立刻返回（`hasNew:true` + 增量），窗口内无消息则返回 `hasNew:false`（非错误）。
+- **宿主新增 `group/wait` skill**：复用现成的 `store.subscribe` watcher registry——`post`/`appendSystem` 每次本就 `notify()`，长轮询直接挂在这个通知上，无新造状态。订阅后立即补读一次，堵住「先读后订阅」之间的丢消息窗口。
+- **MCP 引导语更新**：告诉模型「后台盯群用 `a2a_group_wait` 循环，`hasNew=false` 不是错误」。
+
+### 关键约束
+
+- `timeoutMs` 被宿主夹在 1–55 秒（保在 MCP 客户端工具调用超时之内）。
+- `bridge.send` 的 HTTP 超时取 `waitMs + 5000`，否则 HTTP 层会先于宿主的诚实「无消息」返回。
+- 端到端实测（经网关真实往返）：8 秒窗口 1 秒后 post → **1.3 秒返回**；3 秒窗口无 post → **3.0 秒返回 `hasNew:false`**。
+
+---
+
 ## [0.1.10] — 2026-11-06
 
 > 新功能：**人工确认**。收到同事的消息时，可以先让你本人确认再开始处理。
