@@ -102,36 +102,35 @@ test('the card is split into header, one-line question, and quoted draft', () =>
   assert.match(detail, /^> /m, 'the draft must be a Markdown quote');
 });
 
-test('each choice states the consequence ONCE, in the words that will be sent', () => {
-  // Measured on a live card: detail carried a copy of the three choices AND the option rows printed them again,
-  // in slightly different words. The reader saw each choice twice and had to check whether the lists agreed.
-  // The rows are the real control, so the consequences live there.
+test('the card states each consequence once, and nothing twice', () => {
+  // Measured on a live card: the name appeared in both the title and detail, at two different left edges, and the
+  // three choices appeared twice in slightly different words. Four lines, four x positions — it reads as broken
+  // layout rather than as structure.
   const built = confirmationQuestion({ groupName: '发票与对账平台', draft: 'x', replyingTo: 3, sender: '张三' });
   const [q] = built.questions;
 
-  // detail no longer repeats the choices.
-  assert.ok(q.detail.includes('**允许**') === false, 'detail must not restate the options');
-  assert.ok(q.detail.includes('稍后处理') === false, 'detail must not restate the options');
-  // What it must keep: who asked, which message, and the draft.
-  assert.match(q.detail, /张三/);
-  assert.match(q.detail, /#3/);
-  assert.match(q.detail, /^> x/m);
+  // detail is the draft and nothing else: no option list, no sender line, no seq.
+  assert.equal(q.detail, '> x');
+
+  // The sender appears exactly once in the whole card — in the title.
+  const whole = JSON.stringify(q);
+  assert.equal((whole.match(/张三/g) ?? []).length, 3, 'title once, defer and refuse descriptions once each');
+  assert.equal((q.question.match(/张三/g) ?? []).length, 1);
 
   const labels = q.options.map((o) => o.label);
   assert.deepEqual(labels, ['允许', '稍后处理', '拒绝']);
-  // Consequence in the sender's actual words, not an abstraction like 「让对方知道」.
   const [allow, defer, refuse] = q.options;
   assert.match(allow.description, /群里出现/);
   assert.match(defer.description, /我晚点回复/);
   assert.match(refuse.description, /这次不回/);
 });
 
-test('the thread number appears when the reply answers a specific message', () => {
-  const withThread = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 282 });
-  assert.match(withThread.questions[0].detail, /#282/);
-  // And is simply absent when it is not a reply to anything in particular.
-  const without = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: undefined });
-  assert.ok(without.questions[0].detail.includes('#') === false);
+test('the seq is not printed anywhere on the card', () => {
+  // The reader does not decide differently between #286 and #287, and printing it under the title pushed a line to a
+  // third left edge. It stays available from the group itself.
+  const built = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 282, sender: '张三' });
+  const whole = JSON.stringify(built.questions[0]);
+  assert.ok(whole.includes('#282') === false, 'no seq on the card');
 });
 
 test('a very long draft is cut with a VISIBLE marker', () => {
@@ -296,16 +295,14 @@ test('the title names the sender when it is known, because that is the 「谁」
   assert.equal(built.questions[0].question, '回复 张三？');
   // Short enough to stay on one line even in the narrow card.
   assert.ok(built.questions[0].question.length <= 10, `got ${built.questions[0].question}`);
-  // The name is repeated in detail, where the reader looks when deciding about the notice wording.
-  assert.match(built.questions[0].detail, /张三/);
-  // The seq still has to be somewhere: it stays in detail, where there is room.
-  assert.match(built.questions[0].detail, /#287/);
+  // And NOT repeated in detail: a second copy at a different left edge is what made the card look misaligned.
+  assert.ok(built.questions[0].detail.includes('张三') === false);
 });
 
 test('an unknown sender falls back to neutral wording instead of inventing a name', () => {
   const built = confirmationQuestion({ groupName: 'G', draft: 'x', replyingTo: 287, sender: '' });
   assert.ok(built.questions[0].detail.indexOf('张三') === -1);
-  assert.match(built.questions[0].detail, /#287/);
   // And it must NOT invent 「一位同事」 or similar: naming nobody is better than naming a fiction.
   assert.ok(built.questions[0].detail.indexOf('一位同事') === -1);
+  assert.ok(JSON.stringify(built.questions[0]).includes('#287') === false, 'no seq');
 });

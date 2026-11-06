@@ -127,7 +127,6 @@ export function confirmationPolicy({ settings, post, grade }) {
 export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
   const where = typeof groupName === 'string' && groupName.trim() !== '' ? groupName.trim() : '';
   const body = typeof draft === 'string' ? draft.trim() : '';
-  const thread = typeof replyingTo === 'number' ? replyingTo : undefined;
   const who = typeof sender === 'string' ? sender.trim() : '';
 
   // Quote the draft so it reads as material rather than as the question itself. A long one is cut with a VISIBLE
@@ -169,17 +168,19 @@ export function confirmationQuestion({ groupName, draft, replyingTo, sender }) {
         // choice twice, in slightly different words (「告诉张三「我晚点回复」」 above, 「让对方知道你看过了」 below), and had
         // to work out whether the two lists were the same list. They were.
         //
-        // The option rows are the real control, so the consequences belong THERE, once. `detail` keeps what the rows
-        // cannot show: who asked, which message, and the exact text that would be sent.
-        detail: [
-          who === '' && thread === undefined ? '' : [who === '' ? '' : `**${who}**`, thread === undefined ? '' : `#${thread}`].filter(Boolean).join(' · '),
-          quoted,
-        ].filter((part) => part !== '').join('\n\n'),
+        // The option rows are the real control, so the consequences belong THERE, once.
+        //
+        // NO sender/seq line here either. The seam already renders `question` as a heading two lines above, and putting
+        // 「张三 · #295」 under it printed the name a second time at a DIFFERENT left edge — measured on a live card, four
+        // lines started at four different x positions, which reads as broken layout rather than as structure. The seq is
+        // in the option text scheme below and in the group itself; the name is in the title. Nothing here needs repeating
+        // it.
+        detail: quoted,
         // Each description states what the COLLEAGUE will receive, in the words that will actually be sent. "Allows it"
         // and "denies it" mean nothing to the reader unless they know what the other person ends up seeing — and an
         // abstract 「让对方知道」 is worse than the sentence itself, because the reader cannot tell how blunt it sounds.
         options: [
-          { label: '允许', description: `现在回复，群里出现这段内容` },
+          { label: '允许', description: '现在回复，群里出现这段内容' },
           // Separate from 拒绝 on purpose. 「我看到了，但晚点再说」 and 「这条我不打算回」 are different answers, and in a
           // group they lead to different follow-ups. Collapsing them forces the person to pick the wrong one.
           { label: '稍后处理', description: `先不发，改成告诉${who === '' ? '对方' : who}「我晚点回复」` },
