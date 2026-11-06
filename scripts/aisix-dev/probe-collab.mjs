@@ -24,8 +24,8 @@
 
 const GATEWAY = process.env.A2A_GATEWAY ?? 'http://127.0.0.1:3000/a2a';
 const CALLER_KEY = process.env.A2A_KEY ?? 'dev-caller-key-not-a-secret';
-const HOST_AGENT = process.env.A2A_HOST_AGENT ?? 'dsh-groups';
-const GUEST_AGENT = process.env.A2A_GUEST_AGENT ?? 'dsh-group';
+const HOST_AGENT = process.env.A2A_HOST_AGENT ?? 'agent-group-host';
+const GUEST_AGENT = process.env.A2A_GUEST_AGENT ?? 'agent-person-dev1';
 
 const baseHeaders = {
   'x-api-key': CALLER_KEY,

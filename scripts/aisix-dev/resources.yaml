@@ -1,17 +1,25 @@
 # AISIX resources — local development for the DSH × A2A × AISIX chain.
 #
-# Two A2A agents are registered so the same gateway proves both directions of
-# the chain:
+# Four A2A agents are registered:
 #
-#   mock-a2a    — the dependency-free test double (scripts/aisix-dev/mock-agent.mjs)
-#                 running on the Windows side. Proves card rewriting, JSON-RPC
-#                 forwarding, SSE relay, credential injection and ACL.
-#   dsh-group   — the future DSH "group host" (dsh-a2a plugin, port 3091).
-#                 Disabled until the plugin exists; flip `enabled` when it does.
+#   mock-a2a           — the dependency-free test double (scripts/aisix-dev/mock-agent.mjs)
+#                        running on the Windows side. Proves card rewriting, JSON-RPC
+#                        forwarding, SSE relay, credential injection and ACL.
+#   agent-group-host   — THE group host (standalone Node program, bin/agent-groups.js, port 3095).
+#                        One entry serves every group: the group id travels in the request body,
+#                        never in the URL.
+#   agent-person-dev1  — a member DSH instance (port 3091).
+#   agent-person-dev2  — a second member DSH instance (port 3093), for a genuinely remote join.
 #
-# One caller key per person (recommended): each colleague gets their own
-# plaintext key, and `allowed_agents` decides which group they may reach. The
-# plaintext below is DEV ONLY — the hash is what is stored.
+# Two namespaces, because they are two different things:
+#
+#   agent-group-host   ONE entry serves every group (a group is data, addressed by data.groupId).
+#   agent-person-*     ONE entry per machine — the gateway can only forward a path to one address,
+#                      so two people behind one entry would leave one of them unreachable.
+#
+# One caller key per person (recommended): each colleague gets their own plaintext key, and
+# `allowed_agents` decides which agent they may reach. The plaintext below is DEV ONLY — the hash
+# is what is stored.
 #
 #   plaintext : (set AISIX_DEV_CALLER_KEY; not committed)
 #   sha256    : regenerate for your own key — see scripts/aisix-dev/aisix-dev.sh
@@ -26,24 +34,18 @@ api_keys:
     allowed_models: ["*"]
     # Explicit per-agent grant: no `allowed_agents` means NO A2A access at all.
     #
-    # `dsh-group*` is here because it is the name member instances register under (see the
-    # `dsh-group` entry below, which points at 3091). Without it a member could JOIN a group but
-    # could not call the host through the gateway — the join succeeded and every later call came
-    # back 403, which reads as "the plugin is broken" rather than "the ACL is incomplete".
-    # Two namespaces, because they are two different things:
-    #
-    #   agent-group-host   the host. ONE entry serves every group: a group is data, addressed by
-    #                      data.groupId inside the payload, so adding one never touches the gateway.
-    #   agent-person-*     a person's DSH. ONE entry per machine, because the gateway can only
-    #                      forward a path to one address — two people behind one entry would leave
-    #                      one of them permanently unreachable.
-    #
-    # `agent-group*` also keeps the older single-group name working; `group-*` is kept for the
-    # A2A convention of addressing a group directly.
-    allowed_agents: ["mock-a2a", "agent-group-host", "agent-group*", "group-*", "agent-person-*"]
-    # Generate this for your own key — never commit a real one:
+    # Exactly the agents registered below, no more. The old `agent-group*` / `group-*` wildcards
+    # dated from the single-group-name design and are DELIBERATELY absent: a group is data inside
+    # the payload (data.groupId), not an agent name, so there is no per-group entry to grant. A
+    # wildcard here would re-teach a model to "add a gateway entry per group" — the exact mistake
+    # this file exists to prevent.
+    allowed_agents: ["mock-a2a", "agent-group-host", "agent-person-dev1", "agent-person-dev2"]
+    # sha256 of the DEV caller key `dev-caller-key-not-a-secret` (the default in aisix-dev.sh and every
+    # probe script). Pre-filled so `./aisix-dev.sh smoke` works out of the box — the old all-zero
+    # placeholder made every fresh checkout fail smoke with 401, which reads as a gateway bug. To use
+    # your OWN key, regenerate with:
     #   printf %s "your-caller-key" | sha256sum
-    key_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+    key_hash: "a85d1a349d20e140a139276aadca59c67364207a432cb058107b9dca32e5ceb3"
 
 a2a_agents:
   - name: "mock-a2a"

@@ -8,7 +8,7 @@
 // A2A 1.0 wire format, and the DSH server's skill dispatch.
 
 const base = process.argv[2] ?? 'http://127.0.0.1:3000';
-const agent = process.argv[3] ?? 'dsh-group';
+const agent = process.argv[3] ?? 'agent-group-host';
 const key = process.argv[4] ?? (process.env.A2A_KEY ?? 'dev-caller-key-not-a-secret');
 
 let failed = 0;
@@ -87,7 +87,7 @@ if (groupId !== undefined) {
 
 // 6. The gateway's own telemetry saw the calls, keyed by agent.
 const metricsText = await (await fetch('http://127.0.0.1:9090/metrics')).text();
-check('gateway counted the agent calls', /aisix_a2a_requests_total\{agent="dsh-group"/.test(metricsText), 'per-agent counter');
+check('gateway counted the agent calls', /aisix_a2a_requests_total\{agent="agent-group-host"/.test(metricsText), 'per-agent counter');
 
 console.log(`\nchain: ${failed === 0 ? 'OK' : `${failed} FAILED`}`);
 process.exit(failed === 0 ? 0 : 1);

@@ -8,7 +8,12 @@
 //   node scripts/aisix-dev/show-feed.mjs [--limit N] [--groups-only]
 import { readFileSync } from 'node:fs';
 
-const file = process.env.GROUPS_FILE ?? 'C:/Users/niukl/.dsh-groups/a2a/groups.json';
+// The group store's groups.json, driven by env rather than a hard-coded home: a path that works on one machine is a
+// trap on every other. Default to the standalone host's temp data dir; point GROUPS_FILE at a member instance's
+// <DSH_HOME>/a2a/groups.json to read that instead.
+const file = process.env.GROUPS_FILE
+  ?? (process.env.AGENT_GROUPS_DATA ? `${process.env.AGENT_GROUPS_DATA}/groups.json` : undefined)
+  ?? 'groups.json';
 const args = process.argv.slice(2);
 const limitArg = args.indexOf('--limit');
 const limit = limitArg >= 0 ? Number(args[limitArg + 1]) : 8;
