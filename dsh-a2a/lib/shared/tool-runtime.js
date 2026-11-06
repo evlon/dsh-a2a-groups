@@ -1787,6 +1787,10 @@ function requireSession(sessionId, tool) {
       const code = typeof error?.code === 'string' ? error.code : (typeof error?.data === 'string' ? error.data : '');
       // "You are already not a member" is the outcome we wanted, however it arrives.
       if (code !== 'not_member' && code !== 'unknown_group') {
+        // A business refusal (last member must transfer or archive first) is a REAL answer, not a transport
+        // failure. Marking it "retry later" would tell the caller to try again forever, when the fix is to act on
+        // the group, not to wait. Re-throw it so the caller reads the actual reason.
+        if (code === 'last_member') throw error;
         // Keep the row, record the intent, and let the caller retry. This is the branch that makes leave safe.
         identities.upsert({
           sessionId,

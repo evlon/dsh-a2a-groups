@@ -298,6 +298,9 @@ export const GROUP_ERROR_CODES = Object.freeze([
   // A person already in the group applies to join it: not an error in the queue's terms, but a dangling request
   // nobody can act on, so it is refused with its own code.
   'already_member',
+  // The last remaining member tries to leave: a group with nobody left to administer it is stranded forever, so the
+  // ordinary path refuses rather than manufacture an ownerless group.
+  'last_member',
 ]);
 
 /**
@@ -1697,8 +1700,19 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    * @param {object} [input.member]
    * @returns {boolean} whether a member was removed
    */
-  function leave(input = {}) {    const group = requireGroup(input.groupId);
+  function leave(input = {}) {
+    const group = requireGroup(input.groupId);
     const member = resolveMember(group, input.member);
+    // Last-one-out refuses to leave (design decision A, colleague-approved): a group whose ONLY remaining member
+    // leaves would become permanently ownerless, and nothing but a fresh join could ever administer it again. The
+    // ownerless-promotion on `join` stays as a backstop for STALE data (a pre-upgrade group, a crash-recovered file),
+    // but the ordinary path must not manufacture new ownerless groups.
+    if (group.members.length <= 1) {
+      throw new GroupError(
+        'last_member',
+        '你是群里最后一个人，不能直接退群。请先转让群主或删除这个群（a2a_group_archive 归档）。',
+      );
+    }
     const index = group.members.findIndex((entry) => entry.personId === member.personId);
     group.members.splice(index, 1);
     for (const key of buckets.keys()) {

@@ -4,140 +4,102 @@ This file provides guidance to CodeBuddy Code when working with code in this rep
 
 ## Where the code is
 
-The repository root holds one package, `dsh-session-bus/` — a Cordis plugin for DSH
-(DeepSeek Harness) that pushes messages between Sessions and wakes the receiver. Run every
-command from inside `dsh-session-bus/`.
+The repository root holds one package, `dsh-a2a/` (npm package `dsh-a2a-groups`) — three
+things in one package:
 
-- Node >= 22, ESM (`"type": "module"`), no build step, **no runtime or dev dependencies**.
-- Package entry `lib/index.js`; the bundle patch is `cordis.patch.yml` (wired via
-  `package.json` → `dsh.bundle.patch`).
+1. a Cordis plugin for DSH that lets a Session join collaboration groups;
+2. a standalone group host (`bin/agent-groups.js`, zero-dependency Node, no DSH);
+3. an MCP stdio server (`lib/mcp-server.js`) so CodeBuddy / Claude Code / Cursor can use the same tools.
+
+`dsh-session-bus/` alongside is a SEPARATE repository (gitignored), not part of this tree.
+Run every command from inside `dsh-a2a/`.
+
+- Node >= 22, ESM (`"type": "module"`), no build step, **no runtime or dev dependencies**
+  (only `vitest`, `typescript`, `@types/node` as devDependencies).
+- Package entry `lib/index.js`; MCP entry `lib/mcp-server.js`; host entry `bin/agent-groups.js`.
+- The bundle patch is `cordis.patch.yml` (wired via `package.json` → `dsh.bundle.patch`).
 
 ## Commands
 
 ```powershell
-cd dsh-session-bus
-npm test                                   # 162 tests, listed file by file
-node --test test/threads.test.mjs          # one file
-node --test --test-name-pattern "hop" test/bus.test.mjs   # one test by name
+cd dsh-a2a
+node node_modules/vitest/vitest.mjs run --no-file-parallelism   # full suite (~750 tests)
+node node_modules/vitest/vitest.mjs run test/groups.test.slow.mjs   # one file
+node scripts/mcp-probe.mjs                                      # MCP stdio end-to-end
 ```
 
-Use `npm test`, not `node --test test/`: on Node 24 the directory form fails with
-`MODULE_NOT_FOUND`. Adding a test file means adding it to the `test` script in
-`package.json` — the glob is not picked up automatically.
+Use the vitest runner above, not `npm test` — `npm test` runs `vitest run` which can hit
+`--no-file-parallelism` memory issues on this machine under concurrent files.
 
-```powershell
-pwsh -NoProfile -File scripts/install.ps1                    # copy into the DSH profile (hot-reloaded)
-pwsh -NoProfile -File scripts/install.ps1 -Mode path         # mount this source tree directly
-pwsh -NoProfile -File scripts/install.ps1 -Mode copy -Suffix 2   # force a fresh ES module after edits
-pwsh -NoProfile -File scripts/install.ps1 -Mode bundle       # visible on the Plugins page (needs restart)
-pwsh -NoProfile -File scripts/install.ps1 -Uninstall
+## Directory boundary: one sentence
+
+- `lib/core/` — zero-DSH group state machine, reusable by any host. **No `ctx` here.**
+- `lib/shared/` — `tool-specs.js` (27 tools' name/description/schema/render, pure data) +
+  `tool-runtime.js` (execution bodies). DSH and MCP consume the SAME specs, so a tool
+  behaves identically in both hosts.
+- `lib/dsh/` — the only place that reads `ctx` (tools adapter, inbox delivery, panel).
+- `lib/mcp/` — the only place that reads MCP protocol (`mcp-deps.js`).
+- `lib/index.js` — DSH plugin entry; `lib/mcp-server.js` — MCP entry.
+- `bin/agent-groups.js` — standalone host (zero-dependency Node program, NOT a DSH instance).
+
+Self-check (should return nothing except `lib/dsh/` and `lib/index.js`):
+
+```bash
+grep -rn '\bctx\b' lib/ --include='*.js' | grep -v '^lib/dsh/' | grep -v '^lib/index.js'
 ```
 
-Node caches an ES module by resolved path, so edits to `lib/` only take effect in a running
-Host after a new `-Suffix` directory or a DSH restart.
+## Cross-cutting conventions
 
-Publishing is release-driven: creating a GitHub Release runs `.github/workflows/publish.yml`
-(tests, then `npm publish --provenance` via OIDC trusted publishing — there is no npm token).
-CI (`test.yml`) runs `npm test` on windows-latest for Node 22 and 24.
+- **Self-contained imports.** Only `node:*` and relative paths. No `@deepseek-ai/*` outside
+  `lib/dsh/`; profile/workspace plugins are loaded by plain Node resolution.
+- **Spec ↔ runtime 1:1.** Every tool in `tool-specs.js` must have a body in `tool-runtime.js`
+  and vice versa (guarded by `test/tool-rename-guard.test.mjs`). A rename that touches one and
+  not the other leaves a tool that throws `unknown tool` on first call.
+- **Feed field parity.** `publicEntry` in `groups.js` publishes fields; `group/read` and the
+  panel must forward every one. This has broken five times — `test/feed-field-parity.test.mjs`
+  guards it structurally.
+- **Errors are codes, not prose.** Callers branch on stable codes (`GroupError#code`,
+  `A2aClientError#kind`). A remote call wraps the JSON-RPC sub-code in `error.data`, not
+  `error.code` — the stub in `test/tool-coverage.test.slow.mjs` reproduces this on purpose.
+- **A remote group's authority lives on the HOST.** Group tools branch on
+  `membership.local !== true` and send a skill over the bridge (`group/post`, `group/requests`,
+  …); `requireLocalMembership` is ONLY for things that genuinely require local hosting.
+- **Presence is computed, not stored.** `lastSeenAt` is a fact; `online` is derived at read
+  time. Never cache the boolean.
+- **Credentials never leave the store.** Public views (`snapshot`, `members`, `read`) carry no
+  `keyHash`/`tokenHash`; `personKey` is shown exactly once at issuance.
 
-## Architecture
+## Tool surface (27 tools, same in DSH and MCP)
 
-Layers, outermost first:
+`a2a_agents` `a2a_discover` `a2a_send` `a2a_stream` · `a2a_person_send` `a2a_person_inbox`
+`a2a_person_ack` · `a2a_inbox_check` `a2a_self_check` `a2a_group_wait` · `a2a_group_create`
+`a2a_group_invite` `a2a_group_join` `a2a_group_leave` · `a2a_group_post` `a2a_group_read`
+`a2a_group_summary` `a2a_group_set_card` `a2a_groups` · `a2a_group_directory`
+`a2a_group_request` `a2a_group_approvals` `a2a_group_decide` `a2a_group_claim` ·
+`a2a_group_kick` `a2a_group_rename` `a2a_group_archive`.
 
-| File | Role |
-| --- | --- |
-| `lib/index.js` | Cordis entry: `name`, `inject: ['tools','sessionController']`, `apply()` wires bus → event hook → tools → prompt section |
-| `lib/tools.js` | The twelve `bus_*` tool definitions: raw JSON Schema in/out, plus per-tool text renderers |
-| `lib/bus.js` | `SessionBus`: host I/O, target resolution, delivery pipeline, permission elevation, persistence, audit |
-| `lib/coordination.js` | `RoleRegistry`, `TaskLedger`, `AttentionLedger` (v0.8 main/dev model) |
-| `lib/leases.js` | `LeaseLedger`: path-prefix write claims with TTL and overlap detection |
-| `lib/envelope.js` | Wire format: render/parse `[session-bus v1] …` header + `--- message ---` / `--- reply ---` sections |
-| `lib/resolve.js` | Pure target/workspace resolution, strictly ordered rungs, ambiguity is a failure |
-| `lib/config.js` | `DEFAULT_CONFIG` and `normalizeConfig()` (every malformed value falls back, never throws) |
-| `lib/toolkit.js` | Dependency-free `defineTool`: argument validation + output projection |
-| `lib/prompt.js` | The system-prompt section injected into every Session (token-compressed on purpose) |
+MCP hides exactly two (`a2a_serve`, `a2a_group_inbox`) — they dereference DSH-only services.
+MCP has no push channel; `a2a_inbox_check` + `a2a_group_wait` (long-poll) are how a client
+stays current.
 
-`SessionBus` is the only module that touches the host, and it does so exclusively through the
-injected `ctx`: `sessionController` (`list/prompt/inspect/create`), and lazily via
-`ctx.get(name)` for `workspaceRegistry`, `permissionPresets`, `sessions`, and `sessionQuery`.
-Every optional service is checked for existence, and the bus degrades rather than throwing.
-This is what lets the whole suite run against fake hosts with no DSH runtime.
+## Identity red line (MCP)
 
-### The delivery pipeline (`SessionBus#deliver`, lib/bus.js:1292)
+One `AGENT_GROUPS_DATA` directory = one person. The gateway token is shared; `personId` +
+`personKey` (in `memberships.json`, 0600) are the identity. Never point MCP's
+`AGENT_GROUPS_DATA` at the host's data dir or a DSH plugin's `a2a` dir. See `docs/MCP.md`.
 
-Order matters and the comments state the invariants:
+## Key design decisions (do not regress)
 
-1. Validate and refuse with a stable `BusError` code (`no_sender`, `empty_message`,
-   `self_send_disabled`, `cross_workspace_disabled`, `hop_budget_exhausted`, `invalid_payload`,
-   `message_too_long`, …). A refusal is audited, performs no delivery, and leaves no permission change.
-2. Normalize `payload` (JSON ≤ `maxPayloadChars`) and `attachments` (path/sha256/note, capped).
-3. `ThreadLedger.next()` decides thread and hop. Hops count **hand-offs per thread**, not sends
-   per Session; a new peer always starts at hop 1; `closing` bypasses the budget.
-4. A reply to the peer's own message is upgraded from `queue` to `interrupt` when the kind is a
-   conclusion/correction (only the unnamed default; an explicit `mode` wins).
-5. `renderEnvelope()` builds the user message text; long bodies spool to
-   `<DSH_HOME>/session-bus/spool/<msg>.md` with a pointer in the envelope.
-6. Raise the target's permission preset to the caller's level (`targetPermission: 'delegate'`),
-   then admit. If admission throws, the preset is rolled back and `delivery_failed` is raised.
-7. Record the thread, debounce-persist state, append one audit line, return the receipt.
-
-Two delivery paths, selected by `inboundPresentation`:
-
-- `notice` (default): `agent.followup()` / `agent.steer()` / `agent.inject()` with a durable
-  `agent-message` source, so the Web UI renders a left "task message received" card. This is the
-  same Agent API DSH's own schedule/tool-jobs/subagent plugins use.
-- `bubble`: legacy `sessionController.prompt()` with a `requestId` for idempotency.
-
-A host lacking the Agent API falls back to `bubble` automatically; `inbox` mode without
-`inject` falls back to a normal wake.
-
-### Persistent state
-
-All under `<DSH_HOME>/session-bus/`, versioned together at `version: 3`:
-
-- `state.json` — threads/hops/message index, pending permission restores, leases, roles, tasks,
-  attentions. Written debounced; bounded maps (threads 400, messages 1000, leases 300,
-  tasks 300, attentions 200) with TTL pruning.
-- `audit.jsonl` — one JSON line per deliver/reject/lease/release/permission_restore/role/task/attention.
-- `spool/` — long message bodies.
-
-Persistence is controlled by the **constructor option** `persist`, while `config.persistState`
-is what `apply()` passes in. Tests must pass `persist: false` directly so they can never write
-into a real `DSH_HOME`. The DSH home is captured at construction, not read fresh on every write.
-
-### Cross-cutting conventions
-
-- **Self-contained imports.** Only `node:*` and relative paths. `@deepseek-ai/*` resolves solely
-  for plugins inside the DSH installation, and profile/workspace plugins are loaded by plain
-  Node resolution — that is why `toolkit.js` and `config.js` exist instead of `defineTool` and
-  `schemastery`. Do not add a dependency.
-- **Schema is the contract.** The registry validates tool results with
-  `additionalProperties: false` *after* the tool body has run, so `defineTool` projects each
-  result down to `output.schema` before returning. When adding a field: add it to the schema,
-  not just the return value.
-- **Envelope parsing is backward compatible.** New header attributes are optional; a header with
-  no `thread`/`re` still parses under the old semantics.
-- **Errors are codes, not prose.** Callers and audits branch on `BusError#code`; keep codes stable
-  and add new ones deliberately.
-- **Windows is the primary target** (CI runs windows-latest). Path comparison folds case on
-  `win32`, normalizes separators, and strips trailing separators; relative paths resolve against
-  the calling Session's cwd.
-- **`lib/prompt.js` is a token budget.** v0.8.1 cut it from ~11.2K to ~6.1K characters; it is a
-  stable prompt-cache prefix, so edits should stay terse and keep every behavioral rule.
+- **No group password.** Admission is invite-link or request/approve; an existing member who
+  moved working directories re-adopts their identity with their own credential (no second row).
+- **Group posts grade who gets woken**: `@me` / `@all` wake, ordinary posts only raise unread.
+- **`replyTo` vs `rootSeq`**: the former is who you answered, the latter which conversation.
+- **Last-member leave is refused** (`last_member`): a group with nobody left to administer it
+  is stranded. `join` still promotes into a stale ownerless group (dangling `ownerPersonId`).
 
 ## Test conventions
 
-Each test file stands alone with a hand-written fake host:
-
-- `test/bus.test.mjs` — `createHost()` double + `createBus()` with injected `clock` and
-  `idFactory`, asserting on the requests the host received.
-- `test/plugin.test.mjs` — mounts the real plugin through `apply()` with `createFakeContext()`
-  and calls every tool; `assertDeclared()` re-checks each result against `output.schema`,
-  catching drift the host would reject after side effects.
-- `test/presentation.test.mjs` — fakes the Agent API (`followup/steer/inject`) to pin which
-  path each mode takes, including the interrupt upgrade and idempotency.
-- Pure modules (`envelope`, `resolve`, `toolkit`, `config`, `leases`, `coordination`) are tested
-  directly, with no host at all.
-
-When adding behavior, cover both the happy path and the refusal path, and assert the refusal
-produced no audit/delivery/permission side effect.
+Fast tests are `*.test.mjs` (pure memory), slow are `*.test.slow.mjs` (real HTTP/disk). Each
+slow file owns its own temp dir and port. When adding behavior, cover happy + refusal paths
+and assert the refusal produced no side effect. Structural guards (`tool-rename-guard`,
+`feed-field-parity`, `client-syntax`) exist because silent drift is the failure mode.

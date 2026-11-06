@@ -111,12 +111,34 @@ test('leaving a group this Session was never in reports success', async () => {
 test('leaving a hosted group removes the member and the local row', async () => {
   const env = harness();
   try {
+    // A single-member group now REFUSES the last leave, so add a second member first — otherwise the owner is the
+    // last one and the leave is rejected by design (see the last-member test below).
+    const invite = env.store.invite({ groupId: env.localGroupId, ownerKey: env.identities.get(env.localGroupId, SESSION).personKey });
+    env.store.join({ groupId: env.localGroupId, token: invite.token, displayName: '李四' });
+
     const result = await env.runtime.call('a2a_group_leave', { groupId: env.localGroupId }, { sessionId: SESSION });
     assert.equal(result.left, true);
 
     // The store is the authority for a hosted group, so both sides must change together.
     assert.equal(env.identities.get(env.localGroupId, SESSION), undefined);
-    assert.equal(env.store.snapshot({ groupId: env.localGroupId }).memberCount, 0);
+    // The owner left; the second member (李四) is promoted to owner, so one member remains.
+    assert.equal(env.store.snapshot({ groupId: env.localGroupId }).memberCount, 1);
+  } finally {
+    env.cleanup();
+  }
+});
+
+test('the last remaining member cannot leave (design A: refuse, do not strand the group)', async () => {
+  const env = harness();
+  try {
+    // The owner is the ONLY member. Leaving would produce a permanently ownerless group, so it must refuse with a
+    // business reason — not mark it "retry later", which would loop forever.
+    await assert.rejects(
+      () => env.runtime.call('a2a_group_leave', { groupId: env.localGroupId }, { sessionId: SESSION }),
+      (error) => error.code === 'last_member',
+    );
+    // The member is still there: a refusal must not have removed anybody.
+    assert.equal(env.store.snapshot({ groupId: env.localGroupId }).memberCount, 1);
   } finally {
     env.cleanup();
   }
@@ -125,8 +147,13 @@ test('leaving a hosted group removes the member and the local row', async () => 
 test('leaving a hosted group twice is not an error', async () => {
   const env = harness();
   try {
+    // Add a second member so the owner is not the last one, then leave twice.
+    const invite = env.store.invite({ groupId: env.localGroupId, ownerKey: env.identities.get(env.localGroupId, SESSION).personKey });
+    env.store.join({ groupId: env.localGroupId, token: invite.token, displayName: '李四' });
+
     await env.runtime.call('a2a_group_leave', { groupId: env.localGroupId }, { sessionId: SESSION });
     const again = await env.runtime.call('a2a_group_leave', { groupId: env.localGroupId }, { sessionId: SESSION });
+    // Idempotence: converging to "gone" twice must not produce a failure the caller has to interpret.
     assert.equal(again.left, true);
   } finally {
     env.cleanup();

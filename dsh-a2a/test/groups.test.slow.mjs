@@ -770,18 +770,31 @@ test('leave() transfers ownership when the owner leaves, so the group stays mana
 });
 
 test('the first joiner of an owner-less group becomes the owner, so it never stays stranded', () => {
+  // Design decision A now REFUSES the last-member leave on the ordinary path. But STALE data can still exist: a group
+  // whose `ownerPersonId` points at no member AND whose member row lost its owner role (a crash-recovered file, a
+  // pre-upgrade group). That is the real ownerless shape the promotion on `join` must rescue.
   const env = harness();
   const owner = seed(env);
-  // Mint the invite BEFORE the owner leaves, then leave: the group has no owner and no members.
   const invite = env.store.invite({ groupId: owner.groupId, ownerKey: owner.ownerKey });
-  env.store.leave({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey } });
+
+  // Simulate a stale ownerless group: point the owner at a non-existent id AND demote the member's role, then reload.
+  // `sanitizeGroup` recovers a dangling pointer by re-promoting a role:owner member, so BOTH must be cleared to make a
+  // genuinely ownerless group survive a reload.
+  const raw = readState(env);
+  raw.groups[0].ownerPersonId = 'm-00000000deadbeef';
+  raw.groups[0].members = raw.groups[0].members.map((m) => ({ ...m, role: 'member' }));
+  writeFileSync(env.file, JSON.stringify(raw), { mode: 0o600 });
+  const reloaded = createGroupStore({
+    home: env.home, clock: () => START,
+    config: { groups: { gatewayBase: 'https://gw.ict.cmcc', agentName: 'group-7f3a1c' } },
+  });
 
   // A fresh person joins with the invite the (former) owner minted.
-  const joined = env.store.join({ groupId: owner.groupId, token: invite.token, displayName: '接盘者' });
+  const joined = reloaded.join({ groupId: owner.groupId, token: invite.token, displayName: '接盘者' });
 
   // The first joiner of an owner-less group must be owner, not a stranded `member` who cannot rename/archive/kick.
   assert.equal(joined.member.role, 'owner');
-  const snapshot = env.store.snapshot({ groupId: owner.groupId });
+  const snapshot = reloaded.snapshot({ groupId: owner.groupId });
   assert.equal(snapshot.owner.personId, joined.member.personId);
   assert.equal(snapshot.owner.displayName, '接盘者');
 });
@@ -989,10 +1002,18 @@ test('has() answers the join routing question without a credential', () => {
   const owner = seed(env);
   assert.equal(env.store.has(owner.groupId), true, 'a local group is hosted here');
 
-  env.store.leave({ groupId: owner.groupId, member: { personId: owner.ownerId, personKey: owner.ownerKey } });
-  // The group record survives an owner leaving (it has no members left, so it is
-  // inert but still on disk); `has` reports the record, not a usable group.
-  assert.equal(env.store.has(owner.groupId), true);
+  // A group whose owner left (now only reachable through stale data, since the last-member leave is refused) still has
+  // a record on disk. `has` reports the RECORD, not a usable group. Simulate it the same way as the ownerless test:
+  // a dangling owner pointer with the member role demoted, so sanitize keeps the group but leaves it ownerless.
+  const raw = readState(env);
+  raw.groups[0].ownerPersonId = 'm-00000000deadbeef';
+  raw.groups[0].members = raw.groups[0].members.map((m) => ({ ...m, role: 'member' }));
+  writeFileSync(env.file, JSON.stringify(raw), { mode: 0o600 });
+  const reloaded = createGroupStore({
+    home: env.home, clock: () => START,
+    config: { groups: { gatewayBase: 'https://gw.ict.cmcc', agentName: 'group-7f3a1c' } },
+  });
+  assert.equal(reloaded.has(owner.groupId), true, 'the record survives an owner leaving');
 });
 
 test('lastEntry() returns the newest entry, or undefined when there is none', () => {
