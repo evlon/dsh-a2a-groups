@@ -608,6 +608,9 @@ export const TOOL_SPECS = Object.freeze([
                 personId: { type: 'string' },
                 displayName: { type: 'string' },
                 role: { type: 'string' },
+                // Which row is the caller. A roster of five names answers 「who is in this group」 and leaves 「which of them
+                // am I」 unanswered; a person has a different personId per group, so it cannot be derived elsewhere.
+                isSelf: { type: 'boolean' },
                 roleAbout: { type: 'string' },
                 tags: { type: 'array', items: { type: 'string' } },
                 clientVersion: { type: 'string' },
@@ -625,12 +628,14 @@ export const TOOL_SPECS = Object.freeze([
         const now = Date.now();
         const lines = roster.map((member) => {
           const role = member.role === 'owner' ? '（群主）' : '';
+          // Marking the caller is what turns a roster into an answer to 「我是谁」.
+          const self = member.isSelf === true ? '（我）' : '';
           const about = typeof member.roleAbout === 'string' && member.roleAbout !== '' ? ` — ${member.roleAbout}` : '';
           const tags = Array.isArray(member.tags) && member.tags.length > 0 ? ` [${member.tags.join(' ')}]` : '';
           const seen = Number.isFinite(member.lastSeenAt)
             ? (now - member.lastSeenAt <= ONLINE_MS ? '在线' : '不在线')
             : '状态未知';
-          return `  - ${member.displayName}${role}${about}${tags} · ${seen}`;
+          return `  - ${member.displayName}${role}${self}${about}${tags} · ${seen}`;
         });
         return [{
           type: 'text',
@@ -644,6 +649,79 @@ export const TOOL_SPECS = Object.freeze([
       },
     },
   runtime: 'a2a_group_summary',
+  },
+  {
+    name: 'a2a_self_check',
+    description:
+      'Check whether THIS client is set up correctly, and report who it is. Answers one question in one call: can I reach the host, is my credential good, which groups am I in, and what is my identity in each. Use it first when anything looks wrong — a wrong gateway, an expired token and a genuinely empty account all produce the same "no groups" symptom, and only this tool tells them apart.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean' },
+          gateway: { type: 'string' },
+          agent: { type: 'string' },
+          // Never the token itself: a diagnostic that echoes a secret into a transcript is how secrets leak into logs.
+          tokenPresent: { type: 'boolean' },
+          groups: { type: 'integer' },
+          identities: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                groupId: { type: 'string' },
+                groupName: { type: 'string' },
+                personId: { type: 'string' },
+                displayName: { type: 'string' },
+              },
+            },
+          },
+          // Whether this host can PUSH. False on MCP, and the reader needs to know that before wondering why nothing
+          // arrives on its own.
+          push: { type: 'boolean' },
+          checks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                name: { type: 'string' },
+                ok: { type: 'boolean' },
+                detail: { type: 'string' },
+                fix: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      render: (args, value) => {
+        const mark = (ok) => (ok === true ? '✓' : '✗');
+        const lines = value.checks.map((check) => (
+          `${mark(check.ok)} ${check.name}${check.detail === '' ? '' : `  ${check.detail}`}`
+          // A failing check without a fix is a complaint, not a diagnosis. The whole point of this tool is that the
+          // reader learns what to change.
+          + (check.ok === true || check.fix === '' ? '' : `\n     → ${check.fix}`)
+        ));
+        const who = value.identities.length === 0
+          ? '\n我的身份：（还没有加入任何群）'
+          : `\n我的身份：\n${value.identities.map((row) => (
+            `  - ${row.groupName === '' ? row.groupId : row.groupName}：${row.displayName === '' ? '(未命名)' : row.displayName} [${row.personId}]`
+          )).join('\n')}`;
+        return [{
+          type: 'text',
+          text: `${value.ok === true ? '配置可用' : '配置有问题'}\n${lines.join('\n')}${who}`
+            + `\n推送通道：${value.push === true ? '有（群消息会自己到达）' : '无（需要主动 a2a_inbox_check 拉取）'}`,
+        }];
+      },
+    },
+  runtime: 'a2a_self_check',
   },
   {
   
@@ -775,6 +853,10 @@ export const TOOL_SPECS = Object.freeze([
                 groupId: { type: 'string' },
                 name: { type: 'string' },
                 role: { type: 'string' },
+                // WHO I AM in this group. A person has a different personId per group, so this is per-row fact rather
+                // than a constant — and without it 「我是谁」 has no answer anywhere on the tool surface.
+                personId: { type: 'string' },
+                displayName: { type: 'string' },
                 members: { type: 'integer' },
                 lastSeq: { type: 'integer' },
                 lastMessage: { type: 'string' },
@@ -788,7 +870,12 @@ export const TOOL_SPECS = Object.freeze([
         text: value.groups.length === 0
           ? 'No groups yet. Create one with a2a_group_create, or join one with a2a_group_join.'
           : value.groups.map((group) => (
-            `- ${group.name} (${group.groupId}) — ${group.role}, ${group.members} member(s), last seq ${group.lastSeq}`
+            `- ${group.name} (${group.groupId}) — ${group.role}`
+            // Who I am here. A person has a different personId per group, so it is worth printing on each row rather than
+            // once at the top.
+            + (typeof group.displayName === 'string' && group.displayName !== '' ? ` as ${group.displayName}` : '')
+            + (typeof group.personId === 'string' && group.personId !== '' ? ` [${group.personId}]` : '')
+            + `, ${group.members} member(s), last seq ${group.lastSeq}`
             + (group.lastMessage === '' ? '' : `\n  "${group.lastMessage}"`)
           )).join('\n'),
       }],

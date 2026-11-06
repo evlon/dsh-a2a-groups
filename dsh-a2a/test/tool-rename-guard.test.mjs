@@ -109,3 +109,18 @@ test('the MCP preamble only names tools that exist', () => {
   const unknown = [...mentioned].filter((name) => specNames.has(name) === false);
   assert.deepEqual(unknown, [], `preamble names tools that do not exist:\n${unknown.join('\n')}`);
 });
+
+test('no top-level function is declared twice in the runtime module', () => {
+  // Measured bug: a new helper named `displayNameOf(record, summary)` was added while an older `displayNameOf(exec)`
+  // already existed. In the same module scope the SECOND definition wins, so every call received the wrong argument
+  // shape and quietly returned undefined — a colleague's name simply disappeared from the output, with no error, no
+  // warning, and every test still green.
+  //
+  // This is worth a structural test rather than care: the failure is silent by construction.
+  const source = readFileSync('lib/shared/tool-runtime.js', 'utf8');
+  const declared = [...source.matchAll(/^function\s+([A-Za-z0-9_$]+)\s*\(/gm)].map((match) => match[1]);
+  const counts = new Map();
+  for (const name of declared) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const duplicated = [...counts].filter(([, count]) => count > 1).map(([name, count]) => `${name} x${count}`);
+  assert.deepEqual(duplicated, [], `declared more than once:\n${duplicated.join('\n')}`);
+});

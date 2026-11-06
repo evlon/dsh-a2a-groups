@@ -282,15 +282,23 @@ function requireMembership(store, identities, groupId, sessionId) {
  * field guarantees, so one function keeps them from drifting apart. That drift is exactly what made `a2a_group_summary`
  * return a headcount while the ledger quietly held the full roster.
  *
+ * `selfId` marks the row that IS the caller. Without it a roster of five names answers 「who is in this group」 and
+ * leaves 「which of them am I」 unanswered — and a person has a different personId per group, so the caller cannot work
+ * it out from anywhere else on the card.
+ *
  * @param {Array<object>|undefined} members - the host's member records.
+ * @param {string} [selfId] - the caller's personId in this group.
  * @returns {Array<object>|undefined} the same records, trimmed, or undefined when there is no list.
  */
-function rosterOf(members) {
+function rosterOf(members, selfId) {
   if (Array.isArray(members) !== true) return undefined;
   return members.map((member) => ({
     personId: member.personId,
     displayName: member.displayName,
     role: member.role,
+    // `isSelf` uses only the id. Matching on displayName would mark the wrong row whenever two colleagues share a name,
+    // and it would silently mark NONE of them when the caller has not set one.
+    isSelf: selfId !== undefined && member.personId === selfId,
     lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
     // Which build this member reported. A mixed group is worth seeing; without it a version skew looks like the group
     // misbehaving.
@@ -302,6 +310,26 @@ function rosterOf(members) {
   }));
 }
 
+/**
+ * This member's own display name, or `''` when it is not known.
+ *
+ * The ledger stores `personId` but not `displayName` — a name is the group's record of a person, and copying it into a
+ * local cache makes it stale the moment somebody renames themselves. So the name is read from the roster the last
+ * `a2a_group_summary` cached, matched by personId.
+ *
+ * @param {object} record - the ledger row (has `personId`, may have `members`).
+ * @param {object} summary - a locally hosted group summary, when there is one.
+ * @returns {string} the name, or `''`.
+ */
+function memberDisplayNameOf(record, summary) {
+  const fromSummary = summary?.members?.find((member) => member.personId === record.personId);
+  if (typeof fromSummary?.displayName === 'string' && fromSummary.displayName !== '') return fromSummary.displayName;
+  const fromCache = Array.isArray(record.members)
+    ? record.members.find((member) => member.personId === record.personId)
+    : undefined;
+  return typeof fromCache?.displayName === 'string' ? fromCache.displayName : '';
+}
+
 function safeList(store, identities) {
   const map = new Map();
   try {
@@ -311,16 +339,6 @@ function safeList(store, identities) {
   }
   void identities;
   return map;
-}
-
-/** A one-line summary of the last message in a group summary. */
-function lastMessageOf(summary, record) {
-  const entry = summary?.feedTail?.at?.(-1);
-  if (entry !== undefined && typeof entry.text === 'string') {
-    return `${entry.from?.displayName ?? '?'}: ${truncate(entry.text, 120)}`;
-  }
-  void record;
-  return '';
 }
 
 /** The registry as the flat list the tool returns. */
@@ -1202,7 +1220,7 @@ function requireSession(sessionId, tool) {
         // caller could learn 「5 人」 and nothing about who they were. For a person reading a colleague card that is the
         // difference between a directory and a headcount — and the panel reads the ledger, which is why nobody noticed
         // the tool itself was blind.
-        members: rosterOf(snapshot.members),
+        members: rosterOf(snapshot.members, membership.personId),
       };
     }
 
@@ -1260,7 +1278,7 @@ function requireSession(sessionId, tool) {
       rosterCount: Array.isArray(meta.members) ? meta.members.length : 0,
       // The roster itself. `rosterCount` alone answered 「5 人」 and left the caller unable to name any of them, which is
       // the wrong half of the answer for anyone trying to find a colleague.
-      members: rosterOf(meta.members),
+      members: rosterOf(meta.members, membership.personId),
     };
   },
   'a2a_group_read': async function a2a_group_read(args, exec) {
@@ -1352,6 +1370,114 @@ function requireSession(sessionId, tool) {
       })),
     };
   },
+  /**
+   * Answer 「is this client configured correctly, and who is it」 in one call.
+   *
+   * WHY ONE TOOL AND NOT FIVE ERRORS
+   *
+   * Three different faults produce the same first symptom — `a2a_groups` returning nothing:
+   *
+   *   a wrong gateway      the request never arrives anywhere
+   *   a bad token          the gateway answers `invalid_api_key`
+   *   an empty account     everything works and there is simply nothing to list
+   *
+   * A person looking at 「没有群」 cannot tell which of those happened, and the fix differs in each case. Reporting them as
+   * separate checks, each with its own remedy, is the difference between a complaint and a diagnosis.
+   *
+   * The token is reported as a BOOLEAN. Echoing it into a transcript is how a secret ends up in a log.
+   */
+  'a2a_self_check': async function a2a_self_check(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_self_check');
+    const checks = [];
+    const gatewayBase = config.groups.gatewayBase ?? '';
+    const agentName = config.groups.agentName ?? '';
+    const token = config.client.apiKey ?? '';
+    const push = inbox !== undefined && inbox !== null;
+
+    checks.push({
+      name: '网关地址已配置',
+      ok: gatewayBase !== '',
+      detail: gatewayBase,
+      fix: '在插件配置里填 groups.gatewayBase，例如 http://127.0.0.1:3000/a2a',
+    });
+    checks.push({
+      name: '宿主 agent 名已配置',
+      ok: agentName !== '',
+      detail: agentName,
+      fix: '填 groups.agentName，要和网关 resources.yaml 里的 name 一致（通常 agent-group-host）',
+    });
+    checks.push({
+      name: '调用方令牌已配置',
+      ok: token !== '',
+      // Presence only. Never the value.
+      detail: token === '' ? '（空）' : '（已填，不显示内容）',
+      fix: '填 client.apiKey，用的是网关发给调用方的 key，不是 server.token',
+    });
+
+    // The only real proof that gateway + token + host all work: one round trip that needs all three.
+    let reachable = false;
+    let reachDetail = '';
+    try {
+      const first = identities.list({ sessionId })[0];
+      const target = first !== undefined
+        ? targetOf(first, config)
+        : { baseUrl: `${gatewayBase.replace(/\/+$/, '')}/${agentName}` };
+      await bridge.send(target, {
+        skill: 'group/directory',
+        text: 'self check',
+        data: { limit: 1 },
+        timeoutMs: config.client.timeoutMs,
+      });
+      reachable = true;
+      reachDetail = '网关 → 宿主 往返成功';
+    } catch (error) {
+      reachDetail = String(error?.message ?? error).slice(0, 160);
+    }
+    checks.push({
+      name: '网关与宿主可达',
+      ok: reachable,
+      detail: reachDetail,
+      fix: reachable ? '' : '确认网关在跑（curl <网关>/livez），以及宿主在它后面（agent-group-host → 127.0.0.1:3095）',
+    });
+
+    const rows = identities.list({ sessionId });
+    const hostedMap = safeList(store, identities);
+    const identitiesOut = rows.map((record) => ({
+      groupId: record.groupId,
+      groupName: record.groupName ?? '',
+      personId: record.personId,
+      displayName: memberDisplayNameOf(record, hostedMap.get(record.groupId)),
+    }));
+
+    checks.push({
+      name: '已加入群',
+      // Not a failure: an empty account is a legitimate first run, and marking it ✗ would contradict what
+      // a2a_inbox_check tells the reader.
+      ok: rows.length > 0,
+      detail: rows.length === 0 ? '0 个（还没加入任何群）' : `${rows.length} 个`,
+      fix: rows.length === 0 ? '用 a2a_group_join 贴入邀请链接，或 a2a_group_directory 浏览' : '',
+    });
+
+    checks.push({
+      name: '推送通道',
+      ok: true,
+      detail: push ? '有' : '无 —— 需要主动 a2a_inbox_check 拉取',
+      fix: '',
+    });
+
+    return {
+      // `ok` means the SETUP is sound, not that there is work to do. An empty account with a good token is ok.
+      ok: gatewayBase !== '' && agentName !== '' && token !== '' && reachable,
+      gateway: gatewayBase,
+      agent: agentName,
+      tokenPresent: token !== '',
+      groups: rows.length,
+      identities: identitiesOut,
+      push,
+      checks,
+    };
+  },
+
   'a2a_groups': async function a2a_groups(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_groups');
     // Hosted groups come from the group store; joined ones from the ledger.
@@ -1365,6 +1491,13 @@ function requireSession(sessionId, tool) {
         groupId: record.groupId,
         name: summary?.name ?? record.groupName ?? record.groupId,
         role: summary?.owner?.personId === record.personId ? 'owner' : record.role,
+        // WHO I AM in this group, not just what I may do.
+        //
+        // `role` alone answered 「member」 and left the caller unable to name itself: it could not answer 「我是谁」, and
+        // when a roster came back from a2a_group_summary it had no way to tell which row was its own. A person has a
+        // DIFFERENT personId per group, so this is genuinely per-row information, not a constant.
+        personId: record.personId,
+        displayName: memberDisplayNameOf(record, summary),
         // `summary` comes from locally hosted groups only. For a remote group it is undefined, and falling back to
         // 0 made every remote group report 0 members while group_info showed the real count — a mismatch a member
         // reasonably read as data corruption. The ledger already caches the count from the last info call.
