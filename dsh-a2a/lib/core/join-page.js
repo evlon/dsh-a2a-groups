@@ -48,15 +48,21 @@ export const SETUP_PATH = '/setup';
 const INSTRUCTION_HEAD_WITH_GROUP = `帮我配置 DSH 以加入协作群「{groupName}」。
 {groupIdLine}
 
-要做两件事，请先给我看改动，我确认后再写：`;
+要做三件事，请先给我看改动，我确认后再写：`;
 
 const INSTRUCTION_HEAD_CONFIG_ONLY = `帮我配置 DSH 以接入协作模式（不加入具体的群）。
 
-要做两件事，请先给我看改动，我确认后再写：`;
+要做三件事，请先给我看改动，我确认后再写：`;
 
 /** The YAML block, identical in both modes. */
 const INSTRUCTION_BODY = `
-1. 在 profile 的 cordis.patch.yml 里，把 a2a 段替换成：
+1. 安装插件（如果还没装）：
+   dsh plugin --profile web add dsh-a2a-groups@latest
+
+2. 确认 <DSH_HOME>/profiles/web/package.json 的 dsh.profile.bundles 里有 dsh-a2a-groups。
+   没有就加在数组最后。装了包但没挂载，UI 里什么都不会出现，也不报错。
+
+3. 在 profile 的 cordis.patch.yml 里，把 a2a 段替换成：
    - id: a2a
      name: dsh-a2a-groups
      config:
@@ -71,9 +77,6 @@ const INSTRUCTION_BODY = `
          forwardProto: http
        tools: true
        promptSection: true
-
-2. 确认 <DSH_HOME>/profiles/web/package.json 的 dsh.profile.bundles 里有 dsh-a2a-groups。
-   没有就加在数组最后。
 
 改完重启 DSH，然后告诉我「协作群」按钮有没有出现。`;
 
