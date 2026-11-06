@@ -275,6 +275,33 @@ function requireMembership(store, identities, groupId, sessionId) {
 }
 
 /** Hosted-group summaries as a map, tolerant of a store that cannot list. */
+/**
+ * Shape a host's member list into what a caller should see.
+ *
+ * Two call sites need this — the local snapshot and the remote `group/info` reply — and they arrive with different
+ * field guarantees, so one function keeps them from drifting apart. That drift is exactly what made `a2a_group_summary`
+ * return a headcount while the ledger quietly held the full roster.
+ *
+ * @param {Array<object>|undefined} members - the host's member records.
+ * @returns {Array<object>|undefined} the same records, trimmed, or undefined when there is no list.
+ */
+function rosterOf(members) {
+  if (Array.isArray(members) !== true) return undefined;
+  return members.map((member) => ({
+    personId: member.personId,
+    displayName: member.displayName,
+    role: member.role,
+    lastSeenAt: Number.isFinite(member.lastSeenAt) ? member.lastSeenAt : undefined,
+    // Which build this member reported. A mixed group is worth seeing; without it a version skew looks like the group
+    // misbehaving.
+    clientVersion: typeof member.clientVersion === 'string' ? member.clientVersion : '',
+    // The two fields that make a card worth reading. Without them a card can only say "in this group", which is the one
+    // thing the reader already knows.
+    roleAbout: member.roleAbout,
+    tags: Array.isArray(member.tags) ? member.tags : undefined,
+  }));
+}
+
 function safeList(store, identities) {
   const map = new Map();
   try {
@@ -620,8 +647,8 @@ function requireSession(sessionId, tool) {
     return { acked, unknown: [...new Set(unknown)] };
   },
 
-  'a2a_pending': async function a2a_pending(args, exec) {
-    const sessionId = requireSession(senderOf(exec).id, 'a2a_pending');
+  'a2a_inbox_check': async function a2a_inbox_check(args, exec) {
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_inbox_check');
     const includeGroups = args.includeGroups !== false;
 
     // Direct messages first: an invitation blocks progress, a group message does not.
@@ -1002,7 +1029,7 @@ function requireSession(sessionId, tool) {
       role: 'member',
       lastSeq: meta.lastSeq ?? 0,
       // The host already told us the size at join; not storing it made `a2a_groups` report 「0 member(s)」 until the
-      // first `a2a_group_info` filled it in. Reproduced by running the exact sequence a new conversation runs:
+      // first `a2a_group_summary` filled it in. Reproduced by running the exact sequence a new conversation runs:
       //
       //   [2] join        -> ok, no count recorded
       //   [3] a2a_groups  -> members: 0        <- the reported symptom
@@ -1087,7 +1114,7 @@ function requireSession(sessionId, tool) {
       rootSeq: Number.isInteger(result.data?.rootSeq) ? result.data.rootSeq : undefined,
     };
   },
-  'a2a_group_role': async function a2a_group_role(args, exec) {
+  'a2a_group_set_card': async function a2a_group_set_card(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_read');
     const groupId = requireText(args.groupId, 'groupId');
     const membership = requireMembership(store, identities, groupId, sessionId);
@@ -1151,9 +1178,9 @@ function requireSession(sessionId, tool) {
       headline: args.headline ?? '',
     };
   },
-  'a2a_group_info': async function a2a_group_info(args, exec) {
+  'a2a_group_summary': async function a2a_group_summary(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
-    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_info');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_summary');
     const membership = requireMembership(store, identities, groupId, sessionId);
 
     if (membership.local === true) {
@@ -1169,6 +1196,13 @@ function requireSession(sessionId, tool) {
         onlineCount: snapshot.onlineCount,
         lastSeq: snapshot.lastSeq,
         isOwner: snapshot.owner?.personId === membership.personId,
+        // The roster, not just its size.
+        //
+        // The host has always sent `members`; this function answered with `memberCount` and dropped the rest, so a
+        // caller could learn 「5 人」 and nothing about who they were. For a person reading a colleague card that is the
+        // difference between a directory and a headcount — and the panel reads the ledger, which is why nobody noticed
+        // the tool itself was blind.
+        members: rosterOf(snapshot.members),
       };
     }
 
@@ -1224,10 +1258,13 @@ function requireSession(sessionId, tool) {
       lastSeq: Number.isFinite(meta.lastSeq) ? meta.lastSeq : 0,
       isOwner: meta.isOwner === true,
       rosterCount: Array.isArray(meta.members) ? meta.members.length : 0,
+      // The roster itself. `rosterCount` alone answered 「5 人」 and left the caller unable to name any of them, which is
+      // the wrong half of the answer for anyone trying to find a colleague.
+      members: rosterOf(meta.members),
     };
   },
   'a2a_group_read': async function a2a_group_read(args, exec) {
-    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_role');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_set_card');
     const groupId = requireText(args.groupId, 'groupId');
     const sinceSeq = args.sinceSeq ?? 0;
     const limit = args.limit ?? 50;
@@ -1339,7 +1376,7 @@ function requireSession(sessionId, tool) {
     return { groups: rows };
   },
   'a2a_group_inbox': async function a2a_group_inbox(args, exec) {
-    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_requests');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_approvals');
     const action = args.action ?? 'status';
     if (action === 'on') await inbox.enable(args.groupId);
     if (action === 'off') await inbox.disable(args.groupId);
@@ -1377,9 +1414,9 @@ function requireSession(sessionId, tool) {
       duplicate: meta.duplicate === true,
     };
   },
-  'a2a_group_requests': async function a2a_group_requests(args, exec) {
+  'a2a_group_approvals': async function a2a_group_approvals(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
-    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_requests');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_approvals');
     const membership = requireLocalMembership(identities, groupId, sessionId);
     const requests = store.listRequests({
       groupId,
@@ -1414,10 +1451,10 @@ function requireSession(sessionId, tool) {
       displayName: decided.displayName,
     };
   },
-  'a2a_group_remove': async function a2a_group_remove(args, exec) {
+  'a2a_group_kick': async function a2a_group_kick(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const targetPersonId = requireText(args.targetPersonId, 'targetPersonId');
-    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_remove');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_kick');
     const membership = requireMembership(store, identities, groupId, sessionId);
     if (membership.local === true) {
       const removed = store.removeMember({

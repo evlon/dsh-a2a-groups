@@ -61,8 +61,8 @@ function harness() {
 }
 
 test('the role tool declares a headline parameter', () => {
-  const spec = TOOL_SPECS.find((entry) => entry.name === 'a2a_group_role');
-  assert.ok(spec, 'a2a_group_role must exist');
+  const spec = TOOL_SPECS.find((entry) => entry.name === 'a2a_group_set_card');
+  assert.ok(spec, 'a2a_group_set_card must exist');
   assert.ok(spec.parameters.properties.headline, 'the tool must accept a headline');
   assert.match(
     spec.parameters.properties.headline.description,
@@ -74,7 +74,7 @@ test('the role tool declares a headline parameter', () => {
 test('setting a headline writes the person row and leaves about alone', async () => {
   const env = harness();
   try {
-    await env.runtime.call('a2a_group_role', {
+    await env.runtime.call('a2a_group_set_card', {
       groupId: env.groupId,
       about: '负责对账',
       headline: '后端工程师',
@@ -98,11 +98,11 @@ test('setting a headline writes the person row and leaves about alone', async ()
 test('omitting the headline leaves the stored one untouched', async () => {
   const env = harness();
   try {
-    await env.runtime.call('a2a_group_role', { groupId: env.groupId, headline: '后端工程师' }, { sessionId: env.sessionId });
+    await env.runtime.call('a2a_group_set_card', { groupId: env.groupId, headline: '后端工程师' }, { sessionId: env.sessionId });
 
     // Changing only the group-scoped part must not wipe the person-scoped one. This is the mistake a caller
     // makes naturally: they pass what they are editing and nothing else.
-    const result = await env.runtime.call('a2a_group_role', { groupId: env.groupId, about: '兼产品' }, { sessionId: env.sessionId });
+    const result = await env.runtime.call('a2a_group_set_card', { groupId: env.groupId, about: '兼产品' }, { sessionId: env.sessionId });
 
     assert.equal(result.headline, '后端工程师', 'the response must report the headline that is still stored');
     const person = env.store.listPersons().find((row) => row.personId === env.personId);
@@ -115,8 +115,8 @@ test('omitting the headline leaves the stored one untouched', async () => {
 test('an empty string clears the headline', async () => {
   const env = harness();
   try {
-    await env.runtime.call('a2a_group_role', { groupId: env.groupId, headline: '后端工程师' }, { sessionId: env.sessionId });
-    await env.runtime.call('a2a_group_role', { groupId: env.groupId, headline: '' }, { sessionId: env.sessionId });
+    await env.runtime.call('a2a_group_set_card', { groupId: env.groupId, headline: '后端工程师' }, { sessionId: env.sessionId });
+    await env.runtime.call('a2a_group_set_card', { groupId: env.groupId, headline: '' }, { sessionId: env.sessionId });
 
     // Clearing must be possible: a headline that can only be overwritten is a field people cannot retract.
     const person = env.store.listPersons().find((row) => row.personId === env.personId);

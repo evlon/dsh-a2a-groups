@@ -1304,7 +1304,7 @@ window.__ModuleLoader__.load({
 								// Not an error: naming the members needs a member credential, and
 								// this page is rendered before any Session exists. Say where the
 								// answer lives instead of leaving a gap that reads as "nobody here".
-								? h("span", { style: S.chip }, "名单需在会话里查看（a2a_group_role）")
+								? h("span", { style: S.chip }, "名单需在会话里查看（a2a_group_set_card）")
 								: group.members.map((member) =>
 										h(
 											"span",
@@ -1703,7 +1703,7 @@ window.__ModuleLoader__.load({
 		 *
 		 * ## Why an instruction and not a save button
 		 *
-		 * The browser bundle holds no membership credential. `a2a_group_role` authenticates
+		 * The browser bundle holds no membership credential. `a2a_group_set_card` authenticates
 		 * with `{personId, personKey}`, and that key lives in `memberships.json` on the Host
 		 * (0600) and is never published into the page — `lib/index.js` publishes only the
 		 * read-only snapshot. A form that POSTed from here would have to either carry the
@@ -1713,7 +1713,7 @@ window.__ModuleLoader__.load({
 		 * was written.
 		 *
 		 * So the click writes a prefilled instruction into the composer. The reader edits
-		 * the sentence and presses Enter; the assistant calls `a2a_group_role` with the
+		 * the sentence and presses Enter; the assistant calls `a2a_group_set_card` with the
 		 * values that are now visible in the draft. History, validation and error reporting
 		 * are the turn's, which means the failure message ("about is too long") appears in
 		 * the conversation next to the thing that caused it rather than in a toast that
@@ -1954,7 +1954,7 @@ window.__ModuleLoader__.load({
 			}).join("、");
 
 			const lines = [
-				"用 a2a_group_role 更新我在「" + (groupName === "" ? "这个群" : groupName) + "」的群内介绍" + (groupId === "" ? "" : "（groupId: " + groupId + "）") + "："
+				"用 a2a_group_set_card 更新我在「" + (groupName === "" ? "这个群" : groupName) + "」的群内介绍" + (groupId === "" ? "" : "（groupId: " + groupId + "）") + "："
 			];
 			lines.push("about：" + about);
 			if (tags !== "") lines.push("tags：" + tags);
@@ -1978,7 +1978,7 @@ window.__ModuleLoader__.load({
 			const given = input === null || input === undefined ? {} : input;
 			const groupName = pickString(given.groupName);
 			const groupId = pickString(given.groupId);
-			return "用 a2a_group_role 把我在「" + (groupName === "" ? "这个群" : groupName) + "」的群内介绍清空"
+			return "用 a2a_group_set_card 把我在「" + (groupName === "" ? "这个群" : groupName) + "」的群内介绍清空"
 				+ (groupId === "" ? "" : "（groupId: " + groupId + "）")
 				+ "：about 传空字符串，tags 传空数组。发送即可。";
 		}
@@ -3938,7 +3938,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 							refreshNote
 						),
 				members.length === 0
-					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_info）才会出现。")
+					? h("p", { style: membersLayout.hint }, "名单需要在会话里查一次（a2a_group_summary）才会出现。")
 					: h("div", { style: membersLayout.roster }, rosterRows),
 				editingRole && group !== undefined
 					? h(RoleEditor, {

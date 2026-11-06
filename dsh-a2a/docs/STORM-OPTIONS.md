@@ -100,7 +100,7 @@ mode: (grade === 'mention' || config.groups.noticeWakes === true) ? 'queue' : 'i
 
 - `@all` 加限流（每人每小时 N 次）
 - 提供 `a2a_group_read` 让会话主动查看（已有）
-- `a2a_pending` 汇报积压（已有）
+- `a2a_inbox_check` 汇报积压（已有）
 
 ---
 
@@ -187,7 +187,7 @@ mode: (grade === 'mention' || config.groups.noticeWakes === true) ? 'queue' : 'i
 ### 消息没有丢
 
 静默只是**不唤醒**：mode inbox 仍会把消息放进队列（deliver.js 注释：seated without waking anything），
-下一次自然检查时通过 a2a_pending / a2a_group_read 一次性读全。
+下一次自然检查时通过 a2a_inbox_check / a2a_group_read 一次性读全。
 
 ### 一个实现细节
 
@@ -263,6 +263,6 @@ if (post.seq - lastWokenSeq < THROTTLE) return 'ambient';
 
 **按方案 A，这七条消息一次都不会唤醒任何人。**
 
-三人都会在下一轮通过 `a2a_pending` 看到积压，然后一次性读完。
+三人都会在下一轮通过 `a2a_inbox_check` 看到积压，然后一次性读完。
 
 **这正是想要的效果。**

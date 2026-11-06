@@ -78,7 +78,7 @@ export const DEFAULT_CONFIG = Object.freeze({
     // produced six wakes per round and each wake could produce another message — the "group storm". Off means only a
     // mention or an @all starts a turn; an unaddressed post is seated quietly and read at the next natural moment.
     //
-    // Nothing is lost: the post is still delivered, still in the feed, and still counted by `a2a_pending`. A group
+    // Nothing is lost: the post is still delivered, still in the feed, and still counted by `a2a_inbox_check`. A group
     // that wants ambient chatter can turn this back on.
     wakeMembers: false,
     // Human confirmation before acting on somebody else's group message.

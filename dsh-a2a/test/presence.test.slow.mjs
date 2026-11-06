@@ -3,7 +3,7 @@
  *
  * WHAT WENT WRONG
  *
- * `a2a_group_info` cached the host's `members` array verbatim, including `online` — which the host computes as
+ * `a2a_group_summary` cached the host's `members` array verbatim, including `online` — which the host computes as
  * `now - lastSeenAt <= 120s`. Caching that freezes an inference about the present as though it were a stored fact.
  *
  * Observed in a three-person group: 张三 and 李四 each showed 王五 as offline from a roster cached ~50 minutes earlier,
@@ -84,7 +84,7 @@ function harness({ seenAgoMs = 1000 } = {}) {
 test('the cached roster keeps lastSeenAt and drops online', async () => {
   const env = harness({ seenAgoMs: 1000 });
   try {
-    await env.runtime.call('a2a_group_info', { groupId: 'g-remote-1' }, { sessionId: SESSION });
+    await env.runtime.call('a2a_group_summary', { groupId: 'g-remote-1' }, { sessionId: SESSION });
 
     const cached = env.identities.get('g-remote-1', SESSION).members;
     assert.equal(cached.length, 3);
@@ -107,7 +107,7 @@ test('the cached roster keeps lastSeenAt and drops online', async () => {
 test('an old cache can still be read correctly, because the timestamp does not decay', async () => {
   const env = harness({ seenAgoMs: ONLINE_WINDOW_MS + 60_000 });
   try {
-    await env.runtime.call('a2a_group_info', { groupId: 'g-remote-1' }, { sessionId: SESSION });
+    await env.runtime.call('a2a_group_summary', { groupId: 'g-remote-1' }, { sessionId: SESSION });
     const cached = env.identities.get('g-remote-1', SESSION).members;
 
     // They were last seen two minutes ago, so they are away NOW — and a reader can work that out from the cache
@@ -141,7 +141,7 @@ test('the panel derives presence from the timestamp it holds', async () => {
 test('a member with no timestamp reports unknown rather than away', async () => {
   const env = harness({ seenAgoMs: 1000 });
   try {
-    await env.runtime.call('a2a_group_info', { groupId: 'g-remote-1' }, { sessionId: SESSION });
+    await env.runtime.call('a2a_group_summary', { groupId: 'g-remote-1' }, { sessionId: SESSION });
     const cached = env.identities.get('g-remote-1', SESSION).members;
 
     // A host that omits `lastSeenAt` is telling us it does not track presence for that row. Turning that into
@@ -156,7 +156,7 @@ test('a member with no timestamp reports unknown rather than away', async () => 
 test('the two other roster fields the panel needs are still cached', async () => {
   const env = harness({ seenAgoMs: 1000 });
   try {
-    await env.runtime.call('a2a_group_info', { groupId: 'g-remote-1' }, { sessionId: SESSION });
+    await env.runtime.call('a2a_group_summary', { groupId: 'g-remote-1' }, { sessionId: SESSION });
     const cached = env.identities.get('g-remote-1', SESSION).members;
 
     // The narrower mapping must not become a lossy one: a panel drawing names and roles needs both.

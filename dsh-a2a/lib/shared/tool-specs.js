@@ -203,7 +203,7 @@ export const TOOL_SPECS = Object.freeze([
         type: 'object',
         additionalProperties: false,
         properties: {
-          to: { type: 'string', description: 'personId of the recipient. Get it from a2a_group_info\'s roster or a colleague card.' },
+          to: { type: 'string', description: 'personId of the recipient. Get it from a2a_group_summary\'s roster or a colleague card.' },
           kind: {
             type: 'string',
             enum: ['group-invite', 'join-notice', 'welcome'],
@@ -296,7 +296,7 @@ export const TOOL_SPECS = Object.freeze([
       runtime: 'a2a_person_ack',
     },
   {
-    name: 'a2a_pending',
+    name: 'a2a_inbox_check',
     description:
       'Is anything waiting for me? One call that answers it: unread group messages plus one-to-one invitations and notices, with counts and a one-line summary each. Call this at the START of a turn, or every few minutes while working — this server cannot push to you, so polling this is how you notice a colleague. Say "nothing waiting" when it returns empty rather than silently moving on.',
     parameters: {
@@ -348,7 +348,7 @@ export const TOOL_SPECS = Object.freeze([
                 : '')),
       }],
     },
-    runtime: 'a2a_pending',
+    runtime: 'a2a_inbox_check',
   },
   {
   
@@ -529,7 +529,7 @@ export const TOOL_SPECS = Object.freeze([
   },
   {
   
-    name: 'a2a_group_role',
+    name: 'a2a_group_set_card',
     description:
       'Say what you do in ONE group, and change it whenever it changes. This is self-description, not a permission — it grants nothing, and nobody can set it for you. Use it when someone takes on a different hat in a project (a developer who is also acting as product), so the group sees the current role rather than the job title. Omit `about` or `tags` to leave that part unchanged; pass an empty string / empty array to clear it.',
     parameters: {
@@ -567,11 +567,11 @@ export const TOOL_SPECS = Object.freeze([
           + 'changes YOUR role, not anyone else\'s.',
       }],
     },
-  runtime: 'a2a_group_role',
+  runtime: 'a2a_group_set_card',
   },
   {
   
-    name: 'a2a_group_info',
+    name: 'a2a_group_summary',
     description:
       'Fetch one group name, topic, member count and your role in it. Use it after joining a remote group so the panel can show a real name instead of an id, or to check whether anybody is online.',
     parameters: {
@@ -595,18 +595,55 @@ export const TOOL_SPECS = Object.freeze([
           onlineCount: { type: 'integer' },
           lastSeq: { type: 'integer' },
           isOwner: { type: 'boolean' },
+          // WHO is in the group, not just how many.
+          //
+          // The host has always sent this; the tool dropped it, so the only way to learn a colleague's name was to read
+          // message headers and guess. A card without names is a headcount.
+          members: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                personId: { type: 'string' },
+                displayName: { type: 'string' },
+                role: { type: 'string' },
+                roleAbout: { type: 'string' },
+                tags: { type: 'array', items: { type: 'string' } },
+                clientVersion: { type: 'string' },
+                lastSeenAt: { type: 'integer' },
+              },
+            },
+          },
         },
       },
-      render: (args, value) => [{
-        type: 'text',
-        text: `${value.name}`
-          + (value.topic === '' ? '' : ` — ${value.topic}`)
-          + `\n${value.memberCount} 人`
-          + (value.onlineCount > 0 ? `，${value.onlineCount} 人在线` : '')
-          + `\n我的角色：${value.isOwner === true ? '群主' : '成员'}`,
-      }],
+      render: (args, value) => {
+        const roster = Array.isArray(value.members) ? value.members : [];
+        // Presence from lastSeenAt, never from a stored boolean: the boolean is a claim about NOW and is stale the moment
+        // it is cached. Same rule as the panel.
+        const ONLINE_MS = 5 * 60 * 1000;
+        const now = Date.now();
+        const lines = roster.map((member) => {
+          const role = member.role === 'owner' ? '（群主）' : '';
+          const about = typeof member.roleAbout === 'string' && member.roleAbout !== '' ? ` — ${member.roleAbout}` : '';
+          const tags = Array.isArray(member.tags) && member.tags.length > 0 ? ` [${member.tags.join(' ')}]` : '';
+          const seen = Number.isFinite(member.lastSeenAt)
+            ? (now - member.lastSeenAt <= ONLINE_MS ? '在线' : '不在线')
+            : '状态未知';
+          return `  - ${member.displayName}${role}${about}${tags} · ${seen}`;
+        });
+        return [{
+          type: 'text',
+          text: `${value.name}`
+            + (value.topic === '' ? '' : ` — ${value.topic}`)
+            + `\n${value.memberCount} 人`
+            + (value.onlineCount > 0 ? `，${value.onlineCount} 人在线` : '')
+            + `\n我的角色：${value.isOwner === true ? '群主' : '成员'}`
+            + (lines.length === 0 ? '' : `\n成员：\n${lines.join('\n')}`),
+        }];
+      },
     },
-  runtime: 'a2a_group_info',
+  runtime: 'a2a_group_summary',
   },
   {
   
@@ -853,7 +890,7 @@ export const TOOL_SPECS = Object.freeze([
   },
   {
   
-    name: 'a2a_group_requests',
+    name: 'a2a_group_approvals',
     description:
       'List the applications waiting for YOUR decision. Owner only: the queue holds other people\'s names and stated reasons. Use a2a_group_decide to answer one.',
     parameters: {
@@ -897,7 +934,7 @@ export const TOOL_SPECS = Object.freeze([
               + `\n  expires ${entry.expiresAt}`).join('\n'),
       }],
     },
-  runtime: 'a2a_group_requests',
+  runtime: 'a2a_group_approvals',
   },
   {
   
@@ -909,7 +946,7 @@ export const TOOL_SPECS = Object.freeze([
       additionalProperties: false,
       properties: {
         groupId: { type: 'string', description: 'Group id.' },
-        requestId: { type: 'string', description: 'Request id from a2a_group_requests.' },
+        requestId: { type: 'string', description: 'Request id from a2a_group_approvals.' },
         approve: { type: 'boolean', description: 'true to approve, false to reject. Defaults to true.' },
       },
       required: ['groupId', 'requestId'],
@@ -975,7 +1012,7 @@ export const TOOL_SPECS = Object.freeze([
   runtime: 'a2a_group_claim',
   },
   {
-    name: 'a2a_group_remove',
+    name: 'a2a_group_kick',
     description:
       'Remove another member from a group. Owner only. Their messages stay in the feed: deleting them would rewrite the conversation, and history is the group record rather than the leaver property. A system line records the removal so the remaining members know what happened. To leave yourself, use a2a_group_leave instead — that hands ownership on.',
     parameters: {
@@ -1007,7 +1044,7 @@ export const TOOL_SPECS = Object.freeze([
           + 'learns to drop its local record.',
       }],
     },
-  runtime: 'a2a_group_remove',
+  runtime: 'a2a_group_kick',
   },
   {
     name: 'a2a_group_rename',
@@ -1048,7 +1085,7 @@ topic: ${value.topic}`),
   {
     name: 'a2a_group_leave',
     description:
-      'Leave a group and give up my membership. For a locally hosted group this removes my row here; for a remote group it asks the host FIRST and only then drops the local credential — so a failed call is retryable rather than final. Safe to call twice: a second call retries the host instead of claiming you already left. Never removes anybody else; that is a2a_group_remove.',
+      'Leave a group and give up my membership. For a locally hosted group this removes my row here; for a remote group it asks the host FIRST and only then drops the local credential — so a failed call is retryable rather than final. Safe to call twice: a second call retries the host instead of claiming you already left. Never removes anybody else; that is a2a_group_kick.',
     parameters: {
       type: 'object',
       additionalProperties: false,

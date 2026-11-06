@@ -230,7 +230,7 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       groupName: input.groupName ?? previous.groupName,
       role: input.role ?? previous.role ?? 'member',
       lastSeq: typeof input.lastSeq === 'number' ? input.lastSeq : previous.lastSeq ?? 0,
-      // A cached view of the group, filled by `a2a_group_info`. Kept on the record
+      // A cached view of the group, filled by `a2a_group_summary`. Kept on the record
       // because the panel renders from this ledger, not from the network: without it a
       // remote group shows an id and "0 人", which reads as an empty group rather than
       // one that has simply not been fetched yet.

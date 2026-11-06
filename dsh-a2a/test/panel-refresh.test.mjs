@@ -41,7 +41,7 @@ test('refresh re-reads the group and writes the cache back', () => {
 
 test('refresh keeps the timestamp and drops the claim about now', () => {
   const body = HOST.slice(HOST.indexOf('const refreshGroupRoster'), HOST.indexOf('const disposePanelRpc'));
-  // Same rule as a2a_group_info: `lastSeenAt` is a fact, `online` is an inference that expires.
+  // Same rule as a2a_group_summary: `lastSeenAt` is a fact, `online` is an inference that expires.
   assert.match(body, /lastSeenAt: Number\.isFinite\(member\.lastSeenAt\)/u);
   assert.equal(/online: member\.online/u.test(body), false, 'a refresh must not copy a cached presence boolean');
 });

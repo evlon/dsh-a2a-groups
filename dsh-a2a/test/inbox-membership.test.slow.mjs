@@ -3,7 +3,7 @@
  *
  * THE BUG
  *
- * `a2a_person_inbox`, `a2a_person_ack` and `a2a_pending` all start with:
+ * `a2a_person_inbox`, `a2a_person_ack` and `a2a_inbox_check` all start with:
  *
  *     const membership = identities.list({ sessionId })[0];
  *
@@ -152,10 +152,10 @@ test('the personal inbox asks BOTH sides and merges them', async () => {
   }
 });
 
-test('a2a_pending reports direct messages from every host too', async () => {
+test('a2a_inbox_check reports direct messages from every host too', async () => {
   const env = harness();
   try {
-    const pending = await env.runtime.call('a2a_pending', {}, { sessionId: env.sessionId });
+    const pending = await env.runtime.call('a2a_inbox_check', {}, { sessionId: env.sessionId });
 
     // Same first-row pick, same consequence: an invitation waiting on the host is invisible if a local group sorts
     // first, and an invitation is exactly the thing that blocks progress.

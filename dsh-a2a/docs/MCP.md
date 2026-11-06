@@ -36,7 +36,7 @@ DSH ──原生工具───────────────────�
 ```
 AGENT_GROUPS_DATA = 宿主的 ag-final-test 目录
 → a2a_groups 返回 "No groups yet"
-→ a2a_group_info 返回 unknown_group
+→ a2a_group_summary 返回 unknown_group
 ```
 
 原因：MCP 的连接固定用 `sessionId = "mcp"`（`lib/mcp-server.js` 的 `CONNECTION_SESSION_ID`），
@@ -159,14 +159,14 @@ node lib/mcp-server.js
 
 | 组 | 工具 |
 |---|---|
-| **待办（先调这个）** | `a2a_pending` |
+| **待办（先调这个）** | `a2a_inbox_check` |
 | 找人 | `a2a_agents` `a2a_discover` `a2a_send` `a2a_stream` |
 | 一对一 | `a2a_person_send` `a2a_person_inbox` `a2a_person_ack` |
 | 建群/邀请 | `a2a_group_create` `a2a_group_invite` `a2a_group_join` |
-| 群内 | `a2a_group_post` `a2a_group_read` `a2a_group_info` `a2a_group_role` |
+| 群内 | `a2a_group_post` `a2a_group_read` `a2a_group_summary` `a2a_group_set_card` |
 | 浏览 | `a2a_group_directory` |
-| 申请审批 | `a2a_group_request` `a2a_group_requests` `a2a_group_decide` `a2a_group_claim` |
-| 管理 | `a2a_group_remove` `a2a_group_rename` `a2a_group_archive` |
+| 申请审批 | `a2a_group_request` `a2a_group_approvals` `a2a_group_decide` `a2a_group_claim` |
+| 管理 | `a2a_group_kick` `a2a_group_rename` `a2a_group_archive` |
 | 其他 | `a2a_groups` `a2a_group_inbox` `a2a_serve` |
 
 **描述和 schema 逐字节相同**，所以模型在一个宿主里学会的用法，在另一个宿主里一样成立。
@@ -197,7 +197,7 @@ node lib/mcp-server.js
 | | DSH 插件 | MCP 版 |
 |---|---|---|
 | 界面 | 侧边栏 + 标签页 + 成员栏 | **没有** |
-| 收群消息 | 自动进会话（inbox 订阅） | **不会自动**——要主动调 `a2a_pending` |
+| 收群消息 | 自动进会话（inbox 订阅） | **不会自动**——要主动调 `a2a_inbox_check` |
 | 启动方式 | DSH 装插件 | 客户端拉起进程 |
 | 凭证存哪 | `$DSH_HOME/a2a/memberships.json` | `AGENT_GROUPS_DATA` |
 | 工具数 | 26 | 26（同一份 spec） |
@@ -225,13 +225,13 @@ node lib/mcp-server.js
 
 ```bash
 # 单次
-codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<你的任务>"
+codebuddy -p "先调用 a2a_inbox_check 看有没有协作群消息，有未读先处理。然后：<你的任务>"
 
 # 长任务
-codebuddy -p "开始前查 a2a_pending；每完成一个阶段再查一次"
+codebuddy -p "开始前查 a2a_inbox_check；每完成一个阶段再查一次"
 ```
 
-`a2a_pending` 是一次调用返回全部待办的入口：
+`a2a_inbox_check` 是一次调用返回全部待办的入口：
 
 ```json
 {"total": 0, "directMessages": [], "groups": [], "summary": "Nothing waiting."}

@@ -878,7 +878,7 @@ test("when I am the owner there is one row, labelled 群主 and 我, still edita
 	}).exports.MembersPane({ sessionId: "sess-1", inputActions: input });
 	buttonsOf(root)[1].props.onClick();
 	assert.equal(input.inserted.length, 1, "clicking my own owner row edits, it does not @ me");
-	assert.ok(input.inserted[0].text.includes("a2a_group_role"), input.inserted[0].text);
+	assert.ok(input.inserted[0].text.includes("a2a_group_set_card"), input.inserted[0].text);
 });
 
 test("a group whose owner is not in the roster has no empty owner slot", () => {
@@ -924,7 +924,7 @@ test("clicking my row fills the composer with a prefilled role instruction", () 
 	assert.equal(input.inserted.length, 1, "exactly one insertion");
 	const { text, span } = input.inserted[0];
 	assert.ok(span !== undefined, "the two-step API needs the captured span");
-	assert.ok(text.includes("a2a_group_role"), `the tool must be named: ${text}`);
+	assert.ok(text.includes("a2a_group_set_card"), `the tool must be named: ${text}`);
 	assert.ok(text.includes("grp-1"), `groupId must be present, the tool requires it: ${text}`);
 	assert.ok(text.includes("负责网关灰度"), `current value must be prefilled so a small edit stays small: ${text}`);
 	assert.ok(text.includes("120"), `the length limit should be stated: ${text}`);
@@ -953,7 +953,7 @@ test("clearing my role uses its own instruction, because omission means 'unchang
 	// merely omitted `about` would silently do nothing. That property is what this test keeps.
 	const { exports: exportsObject } = bundleWith({ groups: [groupFixture()] });
 	const text = exportsObject.draftGroupRoleClear({ groupName: "内网部署协作群", groupId: "grp-1" });
-	assert.ok(text.includes("a2a_group_role"), text);
+	assert.ok(text.includes("a2a_group_set_card"), text);
 	assert.ok(text.includes("空字符串"), `the clear must be explicit, not implied: ${text}`);
 	assert.ok(text.includes("空数组"), `tags must be cleared explicitly too: ${text}`);
 });
@@ -1004,7 +1004,7 @@ test("the members pane renders with no data, no roster, and no input actions", (
 	// Joined but the roster was never fetched: the pane must say so rather than imply empty.
 	const noRoster = bundleWith({ groups: [groupFixture({ roster: [], memberCount: 4 })] });
 	const text = textOf(noRoster.exports.MembersPane({ sessionId: "sess-1" }));
-	assert.ok(text.includes("a2a_group_info"), `an unfetched roster must name the tool that fetches it: ${text}`);
+	assert.ok(text.includes("a2a_group_summary"), `an unfetched roster must name the tool that fetches it: ${text}`);
 
 	// No inputActions: the edit affordance says so instead of silently doing nothing. With an
 	// empty roster there is no row to carry the chip, so this is asserted on a real roster.
@@ -1285,13 +1285,13 @@ test("click me = edit my role; click anyone else = @ them", () => {
 	assert.ok(textOf(ownerRow).includes("阿强"), textOf(ownerRow));
 	ownerRow.props.onClick();
 	assert.equal(input.inserted[1].text, "@阿强 ");
-	assert.equal(input.inserted[1].text.includes("a2a_group_role"), false, "addressing a person is not an edit");
+	assert.equal(input.inserted[1].text.includes("a2a_group_set_card"), false, "addressing a person is not an edit");
 
 	// My row: the edit instruction, and never an @ of myself.
 	const selfRow = rows.filter((row) => textOf(row).includes("编辑介绍"))[0];
 	selfRow.props.onClick();
 	const edit = input.inserted[2].text;
-	assert.ok(edit.includes("a2a_group_role"), edit);
+	assert.ok(edit.includes("a2a_group_set_card"), edit);
 	assert.equal(edit.startsWith("@我"), false, "I must not mention myself");
 });
 
@@ -1306,7 +1306,7 @@ test("clicking my own owner row edits rather than mentioning myself", () => {
 	const rows = buttonsOf(exportsObject.MembersPane({ sessionId: "sess-1", inputActions: input }));
 	rows[1].props.onClick();
 	assert.equal(input.inserted.length, 1);
-	assert.ok(input.inserted[0].text.includes("a2a_group_role"), input.inserted[0].text);
+	assert.ok(input.inserted[0].text.includes("a2a_group_set_card"), input.inserted[0].text);
 	assert.equal(input.inserted[0].text.startsWith("@"), false, "no @self");
 });
 

@@ -179,7 +179,7 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
               // exists.
               //
               // It also has to say HOW TO START. Measured on a fresh data directory: every group tool answers
-              // `unknown_group`, and `a2a_pending` answers 「Nothing waiting.」 — which reads as "all quiet" while the
+              // `unknown_group`, and `a2a_inbox_check` answers 「Nothing waiting.」 — which reads as "all quiet" while the
               // truth is "you have joined nothing". A new user cannot tell those apart, and the model cannot either.
               instructions:
                 'Collaboration groups for this machine. THIS SERVER CANNOT REACH YOU: it cannot notify you when '
@@ -189,6 +189,8 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
                 + 'Read a2a_groups first. If it lists nothing, you have not joined any group yet, and THREE routes exist:\n'
                 + '  1. A colleague gave you an invite link (looks like `agent-a2a://group?v=1&...`).\n'
                 + '     Paste it into a2a_group_join. This is the fastest route and needs nobody\'s approval.\n'
+                + '     There is NO PASSWORD and no second step: the token inside the link IS the credential.\n'
+                + '     Do not ask the user for a password — nobody has one, and asking makes a one-step task look risky.\n'
                 + '  2. Browse with a2a_group_directory, then a2a_group_request. A human owner must approve, so tell the\n'
                 + '     user plainly: "已申请加入 X，等群主批准后我再认领" and keep the requestId + claimKey. Come back with\n'
                 + '     a2a_group_claim when they say it is approved. If claim reports request_pending, it simply has not\n'
@@ -197,7 +199,7 @@ export function createMcpHandler({ deps = {}, sessionId = CONNECTION_SESSION_ID,
                 + 'If none of these fit, ASK THE USER for an invite link. Do not sit there trying tools.\n\n'
 
                 + '=== KEEPING UP DURING WORK ===\n'
-                + 'Call a2a_pending at the START of a turn, and again every few minutes during long work. It returns unread\n'
+                + 'Call a2a_inbox_check at the START of a turn, and again every few minutes during long work. It returns unread\n'
                 + 'group messages plus one-to-one invitations in one call. If it reports nothing, say so briefly and carry\n'
                 + 'on — do not silently skip it.\n\n'
                 + 'There is no push channel here: a2a_group_inbox does not exist and would be a lie. To catch up on a\n'

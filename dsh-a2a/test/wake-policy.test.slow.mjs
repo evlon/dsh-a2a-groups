@@ -8,7 +8,7 @@
  *
  * Measured on a real group: feed seq 106-113 was seven turns with ZERO mentions. Three produced decisions; four said
  * "I accept your correction", "I withdraw", "agreed to stop". Under this change none of the seven wakes anyone —
- * all three members see the backlog through `a2a_pending` and read it once, together.
+ * all three members see the backlog through `a2a_inbox_check` and read it once, together.
  *
  * WHAT WAS ALREADY RIGHT
  *

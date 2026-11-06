@@ -103,7 +103,7 @@ identities.upsert({ ...existing, unreachableAt: Date.now() });   // 不是 remov
 3. 失败 → 保留记录 + 标记 leavingAt
 ```
 
-> 现在已经这样实现了（`a2a_group_leave` 工具）。但**历史上已经产生的 3b 无法自动修复**，只能让群主 `a2a_group_remove` 掉那条幽灵成员。
+> 现在已经这样实现了（`a2a_group_leave` 工具）。但**历史上已经产生的 3b 无法自动修复**，只能让群主 `a2a_group_kick` 掉那条幽灵成员。
 
 ### 4：离群待确认 → 重试收敛
 
@@ -137,7 +137,7 @@ identities.upsert({ ...existing, unreachableAt: Date.now() });   // 不是 remov
 
 **表现**：能收消息、能发言，但面板看不到这个群。
 
-**收敛方式**：在会话里调一次 `a2a_group_info`，会写回绑定。
+**收敛方式**：在会话里调一次 `a2a_group_summary`，会写回绑定。
 
 **不是 bug**：一个 DSH 可以有多个会话，同一台机器上两个会话可以是两个不同成员。
 
@@ -164,7 +164,7 @@ cat $DSH_HOME/a2a/memberships.json
 本地没有记录，但宿主 group_info 显示你在成员里
 ```
 
-**怎么修**：让群主 `a2a_group_remove` 掉你。你自己已经没有办法了。
+**怎么修**：让群主 `a2a_group_kick` 掉你。你自己已经没有办法了。
 
 ### 预防 3b
 

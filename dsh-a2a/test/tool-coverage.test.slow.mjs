@@ -5,7 +5,7 @@
  *
  * Measured coverage put `lib/shared/tool-runtime.js` at 48.7% lines and 40% branches, and the reason was concrete:
  * 15 of the 26 tools appeared NOWHERE in the test suite. They included `a2a_send` (the tool every remote call goes
- * through), `a2a_pending` (the one the MCP instructions tell a model to call first), and every group-management
+ * through), `a2a_inbox_check` (the one the MCP instructions tell a model to call first), and every group-management
  * tool.
  *
  * A tool with no test is not merely "untested" — it is a tool whose argument handling, error mapping and guard
@@ -283,13 +283,13 @@ test('a2a_person_inbox reads the remote inbox and a2a_person_ack clears it', asy
 });
 
 // ---------------------------------------------------------------------------
-// a2a_pending — the tool the MCP instructions tell a model to call first
+// a2a_inbox_check — the tool the MCP instructions tell a model to call first
 // ---------------------------------------------------------------------------
 
-test('a2a_pending answers "nothing waiting" without throwing', async () => {
+test('a2a_inbox_check answers "nothing waiting" without throwing', async () => {
   const env = harness();
   try {
-    const pending = await env.runtime.call('a2a_pending', {}, { sessionId: env.sessionId });
+    const pending = await env.runtime.call('a2a_inbox_check', {}, { sessionId: env.sessionId });
     // This is called at the start of every turn, so it must be cheap and must never throw when nothing is joined.
     assert.equal(typeof pending.total, 'number');
     assert.ok(Array.isArray(pending.directMessages));
@@ -299,25 +299,25 @@ test('a2a_pending answers "nothing waiting" without throwing', async () => {
   }
 });
 
-test('a2a_pending counts unread messages from a local group', async () => {
+test('a2a_inbox_check counts unread messages from a local group', async () => {
   const env = harness();
   try {
     // The owner posts twice; their own watermark is behind, so both count as unread.
     env.store.post({ groupId: env.groupId, member: { personId: env.personId, personKey: env.ownerKey }, text: '一' });
     env.store.post({ groupId: env.groupId, member: { personId: env.personId, personKey: env.ownerKey }, text: '二' });
 
-    const pending = await env.runtime.call('a2a_pending', {}, { sessionId: env.sessionId });
+    const pending = await env.runtime.call('a2a_inbox_check', {}, { sessionId: env.sessionId });
     assert.ok(pending.total >= 2, 'unread posts must be counted');
   } finally {
     env.cleanup();
   }
 });
 
-test('a2a_pending survives an unreachable host instead of failing the turn', async () => {
+test('a2a_inbox_check survives an unreachable host instead of failing the turn', async () => {
   const env = harness({ bridge: stubBridge({ fail: 'network' }) });
   try {
     // An unreachable host must not make the start-of-turn probe throw: the model would then lose the whole turn.
-    const pending = await env.runtime.call('a2a_pending', {}, { sessionId: env.sessionId });
+    const pending = await env.runtime.call('a2a_inbox_check', {}, { sessionId: env.sessionId });
     assert.equal(typeof pending.total, 'number');
   } finally {
     env.cleanup();
@@ -384,24 +384,24 @@ test('a2a_group_request describes what the applicant would send', async () => {
   }
 });
 
-test('a2a_group_requests lists pending applications for the owner', async () => {
+test('a2a_group_approvals lists pending applications for the owner', async () => {
   const env = harness();
   try {
     // Owner-side and hosted-here by design: the queue belongs to the group, which belongs to this instance.
-    const listed = await env.runtime.call('a2a_group_requests', { groupId: env.groupId }, { sessionId: env.sessionId });
+    const listed = await env.runtime.call('a2a_group_approvals', { groupId: env.groupId }, { sessionId: env.sessionId });
     assert.ok(Array.isArray(listed.requests));
   } finally {
     env.cleanup();
   }
 });
 
-test('a2a_group_requests refuses a group hosted elsewhere', async () => {
+test('a2a_group_approvals refuses a group hosted elsewhere', async () => {
   const env = harness();
   try {
     // Only the owning host holds the queue, so this must be a clear refusal rather than an empty list that reads as
     // "nobody applied".
     await assert.rejects(
-      () => env.runtime.call('a2a_group_requests', { groupId: env.remoteGroupId }, { sessionId: env.sessionId }),
+      () => env.runtime.call('a2a_group_approvals', { groupId: env.remoteGroupId }, { sessionId: env.sessionId }),
       (error) => error.code === 'not_hosted_here',
     );
   } finally {
@@ -451,7 +451,7 @@ test('a2a_group_rename changes the name for everyone', async () => {
   }
 });
 
-test('a2a_group_remove drops a member but keeps their messages', async () => {
+test('a2a_group_kick drops a member but keeps their messages', async () => {
   const env = harness();
   try {
     const invite = env.store.invite({ groupId: env.groupId, ownerKey: env.ownerKey });
@@ -462,7 +462,7 @@ test('a2a_group_remove drops a member but keeps their messages', async () => {
       text: '我说过一句话',
     });
 
-    const removed = await env.runtime.call('a2a_group_remove', {
+    const removed = await env.runtime.call('a2a_group_kick', {
       groupId: env.groupId,
       targetPersonId: joined.member.personId,
     }, { sessionId: env.sessionId });

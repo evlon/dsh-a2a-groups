@@ -3,7 +3,7 @@
  *
  * THE BUG, AS REPORTED FROM A LIVE RUN
  *
- * A member saw `a2a_groups` say "0 member(s)" for their group while `a2a_group_info` said 2 people online, and
+ * A member saw `a2a_groups` say "0 member(s)" for their group while `a2a_group_summary` said 2 people online, and
  * reasonably read that as data corruption. It was not: the count came only from `safeList`, which covers groups
  * hosted by THIS instance. For a remote group that lookup is empty, and the expression fell back to 0.
  *

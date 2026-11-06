@@ -162,7 +162,7 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 ### 4.4 看未读
 
 ```json
-{ "name": "a2a_pending", "arguments": {} }
+{ "name": "a2a_inbox_check", "arguments": {} }
 ```
 
 一次返回全部待办：
@@ -179,7 +179,7 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 
 > **MCP 客户端必须显式要求模型调用它**，因为 MCP 无推送：
 > ```bash
-> codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<任务>"
+> codebuddy -p "先调用 a2a_inbox_check 看有没有协作群消息，有未读先处理。然后：<任务>"
 > ```
 
 ### 4.5 声明分工
@@ -195,7 +195,7 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 
 ```json
 {
-  "name": "a2a_group_role",
+  "name": "a2a_group_set_card",
   "arguments": {
     "groupId": "g-xxx",
     "about": "负责对账与发票生成",
@@ -214,9 +214,9 @@ dsh web --port 3091 --host 127.0.0.1 --no-open
 | 操作 | 工具 | 谁能做 |
 |---|---|---|
 | 改名 | `a2a_group_rename` | 群主 |
-| 移除成员 | `a2a_group_remove` | 群主 |
+| 移除成员 | `a2a_group_kick` | 群主 |
 | 归档 | `a2a_group_archive` | 群主 |
-| 审批申请 | `a2a_group_requests` + `a2a_group_decide` | 群主 |
+| 审批申请 | `a2a_group_approvals` + `a2a_group_decide` | 群主 |
 
 **移除保留历史**：被移除的人之前的消息仍在 feed 里。
 

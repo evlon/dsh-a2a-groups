@@ -502,7 +502,7 @@ const PANEL_FEED_TAIL = 8;
           // the snapshot contain every group twice and is why the group list looked wrong.
           canRejoinAs: true,
           knownAs: typeof record.groupName === 'string' ? record.groupName : '',
-          // The roster a Session cached earlier, via a2a_group_info / a2a_group_members.
+          // The roster a Session cached earlier, via a2a_group_summary / a2a_group_members.
           // Nothing is fetched at render time — this page is built before any Session
           // exists and holds no credential — so an absent roster means "not fetched yet"
           // and `rosterCachedAt` says how old a present one is.
@@ -912,7 +912,7 @@ const PANEL_FEED_TAIL = 8;
           // And refresh the roster when what we hold has gone stale.
           //
           // `group/touch` proves the instance is alive; it does not tell us who else is. Without this the member list
-          // and every presence dot came from the last explicit `a2a_group_info`, which could be hours old — reported
+          // and every presence dot came from the last explicit `a2a_group_summary`, which could be hours old — reported
           // as "every member shows offline" while the host reported all three online. Refreshing only when already
           // stale keeps the cost to roughly one extra call per group per staleness window, not per tick.
           const rosterAge = Number.isFinite(record.rosterCachedAt) ? clock() - record.rosterCachedAt : Infinity;

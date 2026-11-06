@@ -324,7 +324,7 @@ agent-a2a://group?v=1&gw=<网关基址>&agent=<网关里的 agent 名>&g=<groupI
 | 工具 | 作用 |
 |---|---|
 | `a2a_group_create` / `invite` / `join` / `post` / `read` | 基本操作 |
-| `a2a_group_info` / `role` / `leave` | 元数据与层 A 角色 |
+| `a2a_group_summary` / `role` / `leave` | 元数据与层 A 角色 |
 | `a2a_group_directory` | 浏览宿主上的群（无凭证） |
 | `a2a_group_request` / `requests` / `decide` / `claim` | 申请审批四步 |
 | `a2a_groups` / `a2a_group_inbox` | 本会话的群列表与静音 |
@@ -364,7 +364,7 @@ createMembershipLedger({ home, logger, clock })
    不猜测归属——猜错会把别人的群消息投进这个会话。
 4. `memberKey` 以明文存于 `0600` 文件。必须如此：插件每次调用都要出示它，本地加密的
    密钥只能放在同一台机器上，对"本机另一个进程"这个真实威胁毫无作用。
-5. 缓存的群视图（`groupName` / `memberCount` / `feed` 等）由 `a2a_group_info` 填充。
+5. 缓存的群视图（`groupName` / `memberCount` / `feed` 等）由 `a2a_group_summary` 填充。
    面板从账本渲染而非从网络取数，没有缓存就只能显示裸 id 和"0 人"。
 
 ### 2.7c `lib/dsh/inbox.js` 的投递路由

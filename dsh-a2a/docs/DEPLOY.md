@@ -324,7 +324,7 @@ DSH 成员   → 网关 /a2a/agent-group-host → 群宿主
 MCP 没有能让模型被唤醒的推送。**同事必须明确要求助手去查**：
 
 ```bash
-codebuddy -p "先调用 a2a_pending 看有没有协作群消息，有未读先处理。然后：<任务>"
+codebuddy -p "先调用 a2a_inbox_check 看有没有协作群消息，有未读先处理。然后：<任务>"
 ```
 
 不这么说，模型不会主动查，群消息就一直躺着。

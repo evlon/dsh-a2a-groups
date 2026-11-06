@@ -95,7 +95,7 @@ async function refuses(promise, hint) {
 test('group tools refuse a missing groupId', async () => {
   const env = harness();
   try {
-    for (const tool of ['a2a_group_info', 'a2a_group_read', 'a2a_group_post', 'a2a_group_role', 'a2a_group_invite', 'a2a_group_rename', 'a2a_group_archive']) {
+    for (const tool of ['a2a_group_summary', 'a2a_group_read', 'a2a_group_post', 'a2a_group_set_card', 'a2a_group_invite', 'a2a_group_rename', 'a2a_group_archive']) {
       await refuses(env.runtime.call(tool, {}, { sessionId: env.sessionId }), `${tool} must need a groupId`);
     }
   } finally {
@@ -103,12 +103,12 @@ test('group tools refuse a missing groupId', async () => {
   }
 });
 
-test('a2a_group_remove refuses a missing targetPersonId', async () => {
+test('a2a_group_kick refuses a missing targetPersonId', async () => {
   const env = harness();
   try {
     // Removing "somebody" with nobody named would either remove the caller or pick arbitrarily.
     await refuses(
-      env.runtime.call('a2a_group_remove', { groupId: env.groupId }, { sessionId: env.sessionId }),
+      env.runtime.call('a2a_group_kick', { groupId: env.groupId }, { sessionId: env.sessionId }),
       'a remove needs a target',
     );
   } finally {

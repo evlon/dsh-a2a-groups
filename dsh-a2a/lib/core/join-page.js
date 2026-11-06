@@ -74,7 +74,7 @@ const INSTRUCTION_BODY = `
 改完重启 DSH，然后告诉我「协作群」按钮有没有出现。`;
 
 const INSTRUCTION_TAIL_WITH_GROUP = `
-如果出现空白面板，让我调 a2a_pending 看有没有待处理的邀请。
+如果出现空白面板，让我调 a2a_inbox_check 看有没有待处理的邀请。
 
 群信息：
 - 群名：{groupName}
@@ -345,7 +345,7 @@ Cursor 是 <code>~/.cursor/mcp.json</code>，Claude Code 在 <code>~/.claude.jso
 
 <h3 style="font-size:.95rem;margin:1.4rem 0 .5rem">它不会自动叫你</h3>
 <p>MCP 没有推送通道。同事在群里 @ 你，消息不会自己出现。你需要让助手主动问：</p>
-<pre>「看一下群里有没有新消息」        → 它会调 a2a_pending
+<pre>「看一下群里有没有新消息」        → 它会调 a2a_inbox_check
 「读一下「发票与对账平台」的最新消息」 → 它会调 a2a_group_read</pre>
 <p class="meta">这是协议限制，不是配置问题。同一个群、同一份数据，DSH 能被动收到，MCP 只能主动拉。</p>
 

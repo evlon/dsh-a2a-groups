@@ -388,7 +388,7 @@ test('the host skill forwards personKey, not only personId', () => {
 /**
  * REGRESSION: right after joining, `a2a_groups` reported 0 members.
  *
- * ROOT CAUSE: `join` did not record `memberCount`, although the host returns it. Until some later `a2a_group_info`
+ * ROOT CAUSE: `join` did not record `memberCount`, although the host returns it. Until some later `a2a_group_summary`
  * happened to fill it in, every list showed 「0 member(s)」 — which reads as an empty or broken group, not as a count
  * that has not been fetched yet.
  *
