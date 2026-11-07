@@ -234,18 +234,6 @@ export function normalizeConfig(raw) {
 }
 
 /**
- * The directory that owns this plugin's durable state.
- *
- * `<DSH_HOME>/a2a` by default: a plugin's state belongs beside the Sessions it
- * belongs to, so a profile copied to another machine carries its groups with it.
- * A configured `groups.home` wins so a deployment can put the state on a shared
- * volume.
- *
- * @param {object} settings - normalized config.
- * @param {NodeJS.ProcessEnv} [env] - environment to read `DSH_HOME` from.
- * @returns {string} the state directory.
- */
-/**
  * Resolve this plugin's state directory: `<DSH home>/a2a`.
  *
  * The precedence MIRRORS the Harness's own rule instead of inventing one. `@deepseek-ai/dsh-home-paths`
@@ -260,24 +248,44 @@ export function normalizeConfig(raw) {
  * plugins. Two state roots, one of them invisible in the UI, is a data-loss shape: start from a
  * different directory and the plugin reads an empty ledger and reports that every group is gone.
  *
- * `contextPath` is the Harness's own resolver (`ctx.dshHomePath`), used first when available
- * because it also honours a configured home that never reaches `process.env`.
+ * `contextPath` is the Harness's own resolver (`ctx.dshHomePath`). It outranks `$DSH_HOME` because
+ * it also honours a configured home that never reaches `process.env`.
+ *
+ * WHEN A FALLBACK IS LEGITIMATE, and when it is not:
+ *
+ *   user-supplied data          fall back — a blank `groups.home` means "use the default", and the
+ *                               person is not expected to know our precedence
+ *   code we do not control      fall back — a host resolver that is missing or throws is outside
+ *                               this plugin's contract; refusing to mount over it would be worse
+ *   our own code                DO NOT fall back — a bug here is a bug, and a silent second attempt
+ *                               hides it. Fail, or report it where a human will see it.
+ *
+ * So the host-resolver branch below reports what went wrong through `log` instead of swallowing it:
+ * degrading is fine, degrading invisibly is how a wrong state directory stays wrong for weeks.
  *
  * @param {object} settings - normalized config.
  * @param {NodeJS.ProcessEnv} [env] - environment to read `DSH_HOME` from.
  * @param {(...segments: string[]) => string} [contextPath] - `ctx.dshHomePath`, when the host has it.
+ * @param {(message: string) => void} [log] - receives one line when the host resolver misbehaves.
  * @returns {string} directory holding the plugin's durable files.
  */
-export function resolveHome(settings, env = process.env, contextPath) {
+export function resolveHome(settings, env = process.env, contextPath, log) {
   const configured = settings?.groups?.home ?? '';
   if (configured !== '') return configured;
+
+  const say = (message) => {
+    if (typeof log === 'function') log(message);
+  };
 
   if (typeof contextPath === 'function') {
     try {
       const fromHost = contextPath('a2a');
       if (typeof fromHost === 'string' && fromHost !== '') return fromHost;
-    } catch {
-      // A host whose resolver throws must not stop the plugin from mounting; fall through to env.
+      say('ctx.dshHomePath returned ' + String(fromHost) + ' instead of a path; falling back to $DSH_HOME');
+    } catch (error) {
+      // The host is code we do not control, so degrade — but say so, because the fallback may put
+      // state in a different directory than the rest of the Harness.
+      say('ctx.dshHomePath threw (' + String(error instanceof Error ? error.message : error) + '); falling back to $DSH_HOME');
     }
   }
 
@@ -296,61 +304,75 @@ export function resolveHome(settings, env = process.env, contextPath) {
  * Runs only when the canonical directory has no ledger yet, never overwrites, and leaves a marker
  * behind so the old location explains itself instead of looking like a deletion.
  *
+ * NO BLANKET CATCH. This is our own code, so a failure here is a bug — and the one failure that
+ * matters (leaving state behind) is exactly the symptom this function exists to prevent. The
+ * previous version wrapped everything in `try { ... } catch { return undefined }`, which meant a
+ * failed migration produced an empty ledger and no explanation. Errors propagate; the caller
+ * decides how loud to be.
+ *
+ * The one genuine fallback left is `rename` -> `copy` + `unlink`, because a cross-device rename is
+ * an operating-system condition we do not control, not a mistake of ours. If BOTH fail the file is
+ * reported in `failed` — never silently skipped.
+ *
  * @param {string} target - canonical directory (from {@link resolveHome}).
  * @param {NodeJS.ProcessEnv} [env] - environment; `DSH_CWD` overrides `process.cwd()` for tests.
  * @param {(message: string) => void} [log] - receives one line when a migration happens.
- * @returns {{moved: string[], from: string}|undefined} what was moved, when something was.
+ * @returns {{moved: string[], failed: Array<{name: string, reason: string}>, from: string}|undefined}
+ *   what happened, when there was something to migrate.
+ * @throws when the directory cannot be read or created — callers must surface this.
  */
 export function migrateLegacyHome(target, env = process.env, log) {
-  try {
-    if (existsSync(join(target, 'memberships.json'))) return undefined;
-    const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
-    const legacy = `${String(cwd).trim().replace(/[\\/]+$/, '')}/a2a`;
-    if (legacy === target) return undefined;
-    if (!existsSync(join(legacy, 'memberships.json'))) return undefined;
+  if (existsSync(join(target, 'memberships.json'))) return undefined;
+  const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
+  const legacy = `${String(cwd).trim().replace(/[\\/]+$/, '')}/a2a`;
+  if (legacy === target) return undefined;
+  if (!existsSync(join(legacy, 'memberships.json'))) return undefined;
 
-    mkdirSync(target, { recursive: true });
-    const moved = [];
-    for (const name of readdirSync(legacy)) {
-      const from = join(legacy, name);
-      const to = join(target, name);
-      if (existsSync(to)) continue; // never overwrite the canonical copy
+  mkdirSync(target, { recursive: true });
+  const moved = [];
+  const failed = [];
+  for (const name of readdirSync(legacy)) {
+    const from = join(legacy, name);
+    const to = join(target, name);
+    if (existsSync(to)) continue; // never overwrite the canonical copy
+    try {
+      renameSync(from, to);
+      moved.push(name);
+    } catch (renameError) {
+      // Cross-device rename is an OS condition, so copying is a legitimate second attempt.
       try {
-        renameSync(from, to);
+        copyFileSync(from, to);
+        unlinkSync(from);
         moved.push(name);
-      } catch {
-        // Different volume: fall back to copy + unlink.
-        try {
-          copyFileSync(from, to);
-          unlinkSync(from);
-          moved.push(name);
-        } catch {
-          // Leave it where it is; a partial migration is still better than a lost file.
-        }
+      } catch (copyError) {
+        // Both paths failed: report it rather than pretending the file does not matter.
+        failed.push({
+          name,
+          reason: String(copyError instanceof Error ? copyError.message : copyError),
+        });
+        void renameError;
       }
     }
-    try {
-      writeFileSync(
-        join(legacy, 'MOVED-TO.txt'),
-        `This plugin's state moved to:
+  }
+
+  writeFileSync(
+    join(legacy, 'MOVED-TO.txt'),
+    `This plugin's state moved to:
   ${target}
 
 Reason: the old build resolved its state directory from the current working
 directory, which put it outside the Harness home. See dsh-a2a docs/RUNBOOK.md.
 `,
-        'utf8',
-      );
-    } catch {
-      // The marker is a courtesy; failing to write it must not undo the move.
+    'utf8',
+  );
+
+  if (typeof log === 'function') {
+    if (moved.length > 0) log(`a2a state migrated from ${legacy} to ${target} (${moved.join(', ')})`);
+    if (failed.length > 0) {
+      log(`a2a state migration INCOMPLETE from ${legacy}: ${failed.map((item) => `${item.name} (${item.reason})`).join(', ')}`);
     }
-    if (typeof log === 'function' && moved.length > 0) {
-      log(`a2a state migrated from ${legacy} to ${target} (${moved.join(', ')})`);
-    }
-    return { moved, from: legacy };
-  } catch {
-    // A migration that throws must leave the plugin mounting against the canonical path.
-    return undefined;
   }
+  return { moved, failed, from: legacy };
 }
 /** Coerce to a boolean, falling back when absent. */
 function bool(value, fallback) {

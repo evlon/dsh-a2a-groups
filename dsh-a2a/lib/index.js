@@ -101,14 +101,30 @@ export function apply(ctx, config) {
   const logger = ctx.logger;
   // Resolve against the HARNESS's own home, not the shell's working directory.
   //
-  // ctx.dshHomePath is the Harness's resolver (declared on the Cordis Context by
-  // @deepseek-ai/dsh-app-boot). Preferring it means this plugin lands beside profiles and sessions
-  // even when the process was started from an unrelated directory — the exact case that once put
-  // the live ledger in `E:\a2a` while everything else was under `~/.dsh`.
-  const home = resolveHome(settings, process.env, ctx.dshHomePath);
+  // ctx.dshHomePath is the Harness's resolver (provided by @deepseek-ai/dsh-app-boot). Preferring it
+  // means this plugin lands beside profiles and sessions even when the process was started from an
+  // unrelated directory — the exact case that once put the live ledger in `E:\a2a` while everything
+  // else was under `~/.dsh`.
+  const home = resolveHome(settings, process.env, ctx.dshHomePath, (line) => warn(ctx, line));
   // One-time adoption of state an older build left in `<cwd>/a2a`, so upgrading does not look like
   // "every group disappeared".
-  migrateLegacyHome(home, process.env, (line) => info(ctx, line));
+  //
+  // A failure here is OUR bug, not a hostile input, so it is reported at error level and the
+  // original exception is kept in the message. Mounting continues: a plugin that refuses to load
+  // because it could not tidy an old directory helps nobody, but the operator must be able to see
+  // that state was left behind.
+  try {
+    const migrated = migrateLegacyHome(home, process.env, (line) => info(ctx, line));
+    if (migrated !== undefined && migrated.failed.length > 0) {
+      warn(
+        ctx,
+        'a2a state migration left ' + migrated.failed.length + ' file(s) in ' + migrated.from +
+          '; the plugin will read ' + home + ' and those files were NOT adopted',
+      );
+    }
+  } catch (error) {
+    warn(ctx, 'a2a state migration FAILED (' + describe(error) + '); continuing against ' + home + ' — check ' + process.cwd() + ' for leftover state');
+  }
   const clock = () => Date.now();
 
   // --- durable state -------------------------------------------------------
@@ -502,10 +518,21 @@ const PANEL_FEED_TAIL = 8;
           try {
             identities.upsert({ sessionId: record.sessionId, groupId, conventions });
             if (typeof identities.flush === 'function') await identities.flush();
-          } catch {
-            // A stale panel is better than a failed save.
+          } catch (cacheError) {
+            // The save itself succeeded, so this must not turn into a failed save — but a ledger
+            // that cannot be written is a real problem the operator needs to hear about, not a
+            // cosmetic one. Reporting it in the response keeps the failure where the person who
+            // pressed 保存 can see it.
+            warn(ctx, 'a2a conventions saved but the ledger cache could not be written: ' + describe(cacheError));
+            return {
+              ok: true,
+              conventions,
+              changed: result?.changed === true,
+              cached: false,
+              detail: describe(cacheError),
+            };
           }
-          return { ok: true, conventions, changed: result?.changed === true };
+          return { ok: true, conventions, changed: result?.changed === true, cached: true };
         } catch (error) {
           const code = typeof error?.code === 'string' ? error.code : 'panel_failed';
           // A refusal from the host is a real answer (only the owner may edit), so it keeps its own
@@ -1147,8 +1174,11 @@ const setPanelInvite = async (payload) => {
             ...(goal === undefined ? {} : { goal }),
             ...(conventions === undefined ? {} : { conventions }),
           });
-        } catch {
-          // Deliberately silent: see the doc comment above.
+        } catch (error) {
+          // Degrade without failing the refresh — a roster without a goal still answers "who is in
+          // this group". But say it: an old host lacking the skill and a bug in our own call path
+          // look identical from here, and silence would leave that ambiguity forever.
+          warn(ctx, 'a2a panel could not refresh the goal cache for ' + groupId + ': ' + describe(error));
         }
       };
 
@@ -1404,6 +1434,10 @@ const setPanelInvite = async (payload) => {
   // The tick is 50s against a 120s window, so a single missed tick does not flicker anybody offline. It touches only
   // remote groups: a hosted group is this instance's own store and needs no network to stay fresh.
   const PRESENCE_TICK_MS = 50_000;
+  // Groups whose roster refresh has already failed once during the current outage. The timer fires
+  // every 50s; without this, one unreachable host would emit a line every tick and bury the reason
+  // it is unreachable. Cleared on the next success.
+  const rosterFailureLogged = new Set();
   let presenceTimer;
   const presenceHeartbeat = () => {
     if (settings.groups.enabled !== true) return;
@@ -1490,9 +1524,17 @@ const setPanelInvite = async (payload) => {
                   rosterCachedAt: clock(),
                 });
                 void identities.flush?.();
+                // Recovered: the next outage deserves its own line.
+                rosterFailureLogged.delete(record.groupId);
               }
-            } catch {
-              // A failed refresh leaves the old roster in place and the age keeps the panel honest about it.
+            } catch (error) {
+              // Keep the old roster — a stale list beats an empty one — but do not keep the failure
+              // to ourselves. Logged once per group per outage: a poll runs on a timer, and one line
+              // per tick would drown the log it is trying to inform.
+              if (rosterFailureLogged.has(record.groupId) !== true) {
+                rosterFailureLogged.add(record.groupId);
+                warn(ctx, 'a2a roster refresh failed for ' + record.groupId + ' (' + describe(error) + '); keeping the last known roster');
+              }
             }
           }
         })
@@ -1556,8 +1598,10 @@ const setPanelInvite = async (payload) => {
     for (const dispose of disposers) {
       try {
         dispose();
-      } catch {
-        // A failing disposer must not stop the rest of the unload.
+      } catch (error) {
+        // One disposer failing must not stop the rest of the unload — but a resource that never got
+        // released is worth a line, because the symptom shows up much later as a leak.
+        console.error('[a2a] a disposer threw during unload: ' + describe(error));
       }
     }
     void Promise.allSettled([groups.flush(), registry.flush(), identities.flush(), tasks.flush()]);
@@ -1581,8 +1625,13 @@ function pluginVersion() {
     // change while the process runs, and `ping` is called in hot paths.
     const url = new URL('../package.json', import.meta.url);
     const manifest = JSON.parse(readFileSync(url, 'utf8'));
-    return typeof manifest.version === 'string' ? manifest.version : '0.0.0';
-  } catch {
+    if (typeof manifest.version === 'string' && manifest.version !== '') return manifest.version;
+    console.error('[a2a] package.json has no usable version field; reporting 0.0.0');
+    return '0.0.0';
+  } catch (error) {
+    // Our own manifest, so an unreadable one is a packaging bug, not a hostile input. Report it: a
+    // silent 0.0.0 makes every version-skew diagnosis start from a false premise.
+    console.error('[a2a] could not read its own package.json version: ' + describe(error));
     return '0.0.0';
   }
 }

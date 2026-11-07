@@ -64,6 +64,7 @@ test('legacy state in the current directory is adopted, not abandoned', () => {
 
     assert.ok(result !== undefined, 'expected a migration');
     assert.deepEqual(result.moved.sort(), ['memberships.json', 'session-settings.json']);
+    assert.deepEqual(result.failed, [], 'nothing should fail here');
     assert.ok(existsSync(join(target, 'a2a', 'memberships.json')), 'ledger must exist at the canonical path');
     // The old location explains itself rather than looking like a deletion.
     assert.match(readFileSync(join(cwd, 'a2a', 'MOVED-TO.txt'), 'utf8'), /state moved to/u);
@@ -71,6 +72,24 @@ test('legacy state in the current directory is adopted, not abandoned', () => {
   } finally {
     rmSync(cwd, { recursive: true, force: true });
     rmSync(target, { recursive: true, force: true });
+  }
+});
+
+test('a migration that cannot read the legacy directory throws instead of pretending success', () => {
+  // This is our own code, so a failure is a bug and must reach the caller. The earlier version
+  // wrapped everything in `catch { return undefined }`, which turned a broken migration into an
+  // empty ledger with no explanation — precisely the "all my groups are gone" symptom the migration
+  // exists to prevent.
+  const cwd = mkdtempSync(join(tmpdir(), 'a2a-broken-'));
+  try {
+    mkdirSync(join(cwd, 'a2a'), { recursive: true });
+    writeFileSync(join(cwd, 'a2a', 'memberships.json'), '{"version":1,"memberships":[]}', 'utf8');
+    // A target that cannot be created: a regular file sits where the directory must go.
+    const blocked = join(cwd, 'blocked');
+    writeFileSync(blocked, 'not a directory', 'utf8');
+    assert.throws(() => migrateLegacyHome(join(blocked, 'a2a'), { DSH_CWD: cwd }));
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 

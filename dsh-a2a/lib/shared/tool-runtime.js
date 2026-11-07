@@ -40,15 +40,30 @@ import { ownEndpointFromConfig } from '../core/endpoint.js';
    * The panel reads the ledger, not the network, and it renders before any Session exists. So a
    * change made by a tool stays invisible in the UI until something caches it. Caching only on
    * goal-status meant: I just published a goal, and the panel still says there is none.
+   *
+   * Failures are REPORTED, not swallowed. The old version ended in a bare `catch {}` explained as
+   * "a stale panel is better than a failed call" — but a stale panel is exactly the bug this
+   * function exists to prevent, and the silence is what made it look like a missing feature rather
+   * than a broken write. The tool call still succeeds; the operator gets a line.
+   *
+   * @param {object} identities - membership ledger.
+   * @param {string} sessionId - Session whose record to update.
+   * @param {string} groupId - group the goal belongs to.
+   * @param {object} goal - goal snapshot to cache.
+   * @param {object} [logger] - receives one warning when the cache cannot be written.
    */
-  function cacheGoal(identities, sessionId, groupId, goal) {
+  function cacheGoal(identities, sessionId, groupId, goal, logger) {
     if (goal === undefined || goal === null) return;
     try {
       if (identities === undefined || identities === null || typeof identities.upsert !== 'function') return;
       identities.upsert({ sessionId, groupId, goal });
-      if (typeof identities.flush === 'function') Promise.resolve(identities.flush()).catch(() => {});
-    } catch {
-      // A stale panel is better than a failed call.
+      if (typeof identities.flush === 'function') {
+        Promise.resolve(identities.flush()).catch((error) => {
+          logger?.warn?.('a2a: goal cached in memory but the ledger could not be flushed (' + describeError(error) + ')');
+        });
+      }
+    } catch (error) {
+      logger?.warn?.('a2a: could not cache the goal for the panel (' + describeError(error) + '); the panel will not show it until the next successful read');
     }
   }
 
@@ -377,6 +392,19 @@ function listEntries(registry) {
 
 /** Swallow a diagnostic-only failure; the caller already has a fallback. */
 function loggerless() {}
+
+/**
+ * One-line description of a thrown value, without a stack.
+ *
+ * Exists so that a failure we choose to survive still leaves a sentence behind. A bare `catch {}`
+ * is the difference between "this degraded" and "this silently did the wrong thing".
+ *
+ * @param {unknown} error - whatever was thrown.
+ * @returns {string} the message, or the stringified value.
+ */
+function describeError(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** A one-line summary of the last message in a group summary. */
 function lastMessageOf(summary, record) {
@@ -1982,7 +2010,7 @@ function requireSession(sessionId, tool) {
         strictness: args.strictness,
       });
       await store.flush();
-      cacheGoal(identities, sessionId, groupId, result.goal);
+      cacheGoal(identities, sessionId, groupId, result.goal, logger);
       return { groupId, goal: result.goal };
     }
     const result = await bridge.send(targetOf(membership, config), {
@@ -2004,7 +2032,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const result = store.closeGoal({ groupId, member, reason: args.reason });
       await store.flush();
-      cacheGoal(identities, sessionId, groupId, result.goal);
+      cacheGoal(identities, sessionId, groupId, result.goal, logger);
       return { groupId, goal: result.goal };
     }
     const result = await bridge.send(targetOf(membership, config), {
@@ -2027,7 +2055,11 @@ function requireSession(sessionId, tool) {
      * The panel cannot call a tool — it renders before any Session exists and holds no member
      * credential — so it reads the ledger. For a REMOTE group there is no local snapshot at all,
      * which means this cache is the only way the right-hand pane can ever say what the group is
-     * for. Best-effort: a failed cache write must not fail the read the caller asked for.
+     * for.
+     *
+     * The read the caller asked for still succeeds when the cache write fails; the difference is
+     * that it now SAYS SO. A bare `catch {}` here is what turned "the cache write is broken" into
+     * "the panel has never heard of this group's goal", which reads as a missing feature.
      */
     const remember = (status) => {
       try {
@@ -2038,9 +2070,13 @@ function requireSession(sessionId, tool) {
           goal: status?.goal,
           conventions: typeof status?.conventions === 'string' ? status.conventions : undefined,
         });
-        if (typeof identities.flush === 'function') Promise.resolve(identities.flush()).catch(() => {});
-      } catch {
-        // A stale panel is better than a failed call.
+        if (typeof identities.flush === 'function') {
+          Promise.resolve(identities.flush()).catch((error) => {
+            logger?.warn?.('a2a: goal read fine but the ledger could not be flushed (' + describeError(error) + ')');
+          });
+        }
+      } catch (error) {
+        logger?.warn?.('a2a: could not cache the goal for the panel (' + describeError(error) + '); the panel will not show it until the next successful read');
       }
       return status;
     };
@@ -2088,7 +2124,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const result = store.emergencyGoal({ groupId, member, reason: args.reason });
       await store.flush();
-      cacheGoal(identities, sessionId, groupId, result.goal);
+      cacheGoal(identities, sessionId, groupId, result.goal, logger);
       return { groupId, goal: result.goal };
     }
     const result = await bridge.send(targetOf(membership, config), {

@@ -128,6 +128,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { join as joinPath } from 'node:path';
+import { resolveHome } from './config.js';
 import { createFileStore, isFileId, MAX_FILE_BYTES } from './file-store.js';
 
 import { buildLink, buildPrompt, randomToken } from './invite.js';
@@ -3907,13 +3908,16 @@ function bestEffortChmod(path, mode) {
   }
 }
 
-/** Resolve the state directory from config, mirroring `config.resolveHome`. */
+/**
+ * Resolve the state directory from config.
+ *
+ * Delegates to `config.resolveHome` on purpose. This function used to be a COPY of that logic
+ * ("mirroring config.resolveHome"), and the copy is exactly how the two drifted apart: the copy
+ * kept falling back to `process.cwd()` after the original stopped, so the host store could still
+ * put state outside the Harness home. One rule, one implementation.
+ */
 function resolveDirectory(raw) {
-  const source = isPlainObject(raw?.groups) ? raw.groups : isPlainObject(raw) ? raw : {};
-  if (typeof source.home === 'string' && source.home !== '') return source.home;
-  const env = process.env;
-  const base = typeof env.DSH_HOME === 'string' && env.DSH_HOME !== '' ? env.DSH_HOME : process.cwd();
-  return `${base.replace(/[\\/]+$/u, '')}/a2a`;
+  return resolveHome(isPlainObject(raw) ? raw : { groups: raw });
 }
 
 /** A logger that tolerates a missing or partially-shaped one. */
