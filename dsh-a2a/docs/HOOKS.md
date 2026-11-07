@@ -58,15 +58,22 @@
 hooks.register('before-send', async (ctx) => verdict);
 hooks.register('receive', async (ctx) => verdict);
 
-// verdict 三种
-{ proceed: true }                          // 放行
+// verdict 四种（每种意图一个独立形状）
+{ proceed: true }                          // 放行给当前 session
 { proceed: false, reason: '...', notify?: string }  // 拒绝（reason 告知发送方，notify 可选回帖文案）
 { modify: { ... } }                        // 改写（如改写消息内容）
+{ forward: { toSessionId: string, note?: string } } // 转发给指定 session（D-02 预留，MVP 未实现）
 ```
 
 - `ctx` 携带阶段上下文：`{ phase, toolName, args, exec, groupId, sender, ... }`。
 - handler 按注册顺序 waterfall 执行：任一返回 `proceed:false` 即终止后续 handler，整个动作被否决。
 - 每个阶段独立开关（配置化），默认全关（向后兼容 0.1.x 现有行为）。
+
+**`forward` 第四态（D-02 留接口，MVP 不实现）**：
+
+- 前三种（`proceed:true` / `proceed:false` / `modify`）各自一个独立字段，`forward` 也应有自己的字段——「每种意图一个独立形状」是这个结构已有的组织方式。
+- **不能**复用 `proceed:true + forward`（会变成「一值两义」，和 `streaming` 的 `!== false` 同源），也不能用 `proceed:false + reason:'forwarded'`（拒绝和转发是相反意图）。
+- **MVP 行为：handler 返回 `forward` 时抛错「该 verdict 类型尚未实现」**，不是静默降级成放行。理由：「留了接口但静默降级」比「没留接口」危险——将来注册 handler 的人会以为转发生效，实际消息还是给了本人（和 `loaded:0` 混淆、`inviteId` 恒空同一族：看起来支持，实际没生效）。
 
 ### 3.3 「拒绝带理由」的实现
 
