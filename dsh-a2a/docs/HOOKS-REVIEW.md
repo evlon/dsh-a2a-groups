@@ -294,16 +294,15 @@
 
 ### 锚点覆盖率与「待补锚点」（一次性快照）
 
-**口径**（数字由下面的命令产生，不手数）：条目行 = 以 `A-`/`C-`/`D-`/`B-`/`X-`/`P-`/`S-` 开头的表格行 + 有序列表项，**排除 §八 编号对照表**（索引不承载结论，不该要求锚点）；锚点 = `#序号` / `文件.js:行号` / `() L####`。
+**口径**（数字由下面的命令产生，不手数）：条目行 = 以 `A-`/`C-`/`D-`/`B-`/`X-`/`P-`/`S-` 开头的表格行 + 有序列表项（**含 §八**）；锚点 = `#序号` / `文件.js:行号` / `() L####`（任意位置）。
 
-**现状（量级判断，非精确值）**：**绝大多数条目没有锚点（八成以上）**——百位数条目中只有二十来条带 `#序号` 或 `文件:行号`。
+**实测（本文件当前版本，含本节）**：条目行 141，带锚点 21，**待补锚点 120（14.9% 带锚点）**。
 
-> 为什么不写精确数：这份文件三人三段正则算出过三个不同的数（12.8% / 15.2% / 18.4%），
-> 差异全在「条目行怎么数」。精确值在此是**虚假精确**，而「约九成」加 20 条条目后仍然成立。
-> 需要精确值时跑下面这行命令——**数字由命令产生，不由共识决定**。
+> 本节自身新增 3 条编号纪律（7/8/9），所以条目行比讨论时的 `138` 多 3 —— 数字随文件走，
+> 跑下面这行命令即可复现；**数字由命令产生，不由共识决定**。
 
 ```
-node -e "const fs=require('fs');const L=fs.readFileSync('dsh-a2a/docs/HOOKS-REVIEW.md','utf8').split('\n');const s=L.findIndex(l=>/^#\s*八、/.test(l));const e=L.findIndex((l,i)=>i>s&&/^#\s/.test(l));const items=L.filter((l,i)=>!(i>=s&&i<e)&&(/^\|\s*[ACDBXPS]-\d/.test(l)||/^\d+\.\s/.test(l)));const has=l=>/#\d{2,3}\b/.test(l)||/\.js:\d+|\(\)\s*L\d+|L\d{3,4}/.test(l);const n=items.filter(l=>has(l)).length;console.log('items='+items.length+' anchored='+n+' pending='+(items.length-n)+' rate='+(n/items.length*100).toFixed(1)+'%')"
+node -e "const fs=require('fs');const L=fs.readFileSync('dsh-a2a/docs/HOOKS-REVIEW.md','utf8').split('\n');const items=L.filter(l=>/^\|\s*[ACDBXPS]-\d/.test(l)||/^\d+\.\s/.test(l));const has=l=>/#\d{2,3}\b/.test(l)||/\.js:\d+|\(\)\s*L\d+|L\d{3,4}/.test(l);const n=items.filter(l=>has(l)).length;console.log('items='+items.length+' anchored='+n+' pending='+(items.length-n)+' rate='+(n/items.length*100).toFixed(1)+'%')"
 ```
 
 **规则**
@@ -312,6 +311,7 @@ node -e "const fs=require('fs');const L=fs.readFileSync('dsh-a2a/docs/HOOKS-REVI
 - **另标「待补锚点」**：既无 `#序号` 也无 `文件:行号` 的条目，状态列标 `待补锚点`。
 - **硬规则**：标了「待补锚点」的条目**不得作为实现依据**（用法上等价于对「可复核性」的严格要求，但**不表示**该结论未被验证过）。
 - **补锚点 = 补可复现命令 / 原文行号**，不是重新验证；补完去掉标记。`E1`/`E2` 补命令或行号即可；`E3` 需连同验证方式一起补（等于把推理升级为实证）。
+- **分批补**：优先补 `E1`/`E2`（级别高、补的是命令或行号），`E3` 后置（需连同验证方式一起补，等于把推理升级为实证）。**不写具体条数**——那又会变成对不上的数字。
 
 > 区分「等级」与「锚点」：等级回答「怎么得到的」，锚点回答「别人能不能复核」。把 `E1` 降成 `E3` 等于宣称「不知道有没有验证过」——而事实是「验证过，但别人复核不了」。**前者是未知，后者是可修复的可追溯性缺陷**，处理成本差一个数量级。
 
