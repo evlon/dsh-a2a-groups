@@ -374,7 +374,47 @@ curl -s https://registry.npmjs.org/dsh-a2a-groups/0.1.30 | jq -r .dist.shasum
 > bash /e/ai-works/k8s/scripts/publish-internal.sh dsh-a2a-groups 0.1.30
 > ```
 
-### 7.3 发版完成的判据（可机器化）
+### 7.3 依赖树也要推（`publish-internal.mjs`）
+
+**大部分同事不能访问外网**（公司防火墙），内网源对他们不是便利，是唯一途径。
+
+而内网 Verdaccio 没有 uplink，所以「把我们的包推上去」远远不够：`dsh plugin add <pkg> --registry=<内网>`
+会让 pnpm 拿**整棵依赖树**去内网解析，缺一个传递依赖就变成
+
+```
+ERR_PNPM_FETCH_404  GET http://registry.ict.cmcc/dsh-plugin: Not Found
+```
+
+——报错里的包名，发版的人根本没听过。
+
+```bash
+# 一个包 + 它的依赖树
+node scripts/publish-internal.mjs dsh-a2a-groups@0.1.31
+
+# 审计某个 profile 缺什么（只读）
+node scripts/publish-internal.mjs --profile "$DSH_HOME/profiles/web"
+
+# 补齐它（把缺的包全部推上去）
+node scripts/publish-internal.mjs --profile "$DSH_HOME/profiles/web" --fix
+```
+
+脚本用 `npm install --package-lock-only` 让 **npm 自己**解析精确版本，不自己实现 semver；
+按版本自动选 dist-tag（预发布 → `rc` 之类，低于现有版本 → `legacy-<版本>`），不会污染 `latest`；
+已存在的包直接跳过，可重复运行。
+
+三个踩过的坑，脚本里已处理：
+
+| 坑 | 症状 | 处理 |
+|---|---|---|
+| `pack` 复用同一工作目录 | 拿上一个包的 tarball 去发布，报错里是错的文件名 | 每包一个独立子目录 |
+| 上游包带 `publishConfig.provenance` | `EUSAGE Automatic provenance generation not supported for provider: null` | 固定加 `--provenance=false` |
+| `process.exit()` 时子进程管道还在关 | Windows 上 libuv 断言，成功也返回 1 | 设 `process.exitCode` 让它自然退出 |
+
+> **根治办法是给 Verdaccio 配 uplink**（代理到 registry.npmjs.org、按需缓存），这样缺包自动补，
+> 不用手工推。前提是**那台机器自己能出外网**——如果它也不能，就只能在能出外网的机器上补推。
+
+### 7.4 发版完成的判据（可机器化）
+
 
 ```
 完成 = 官方 latest == 内网 latest  且 两边的 tarball shasum 相同
@@ -382,7 +422,7 @@ curl -s https://registry.npmjs.org/dsh-a2a-groups/0.1.30 | jq -r .dist.shasum
 
 **任一项不相等，这次发版就还没完成。** 这条比「记得推一下」可靠——它不依赖任何人记性。
 
-### 7.4 五个坑（都踩过）
+### 7.5 五个坑（都踩过）
 
 | 坑 | 后果 | 对策 |
 |---|---|---|
