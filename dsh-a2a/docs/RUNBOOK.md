@@ -434,8 +434,61 @@ node scripts/publish-internal.mjs --profile "$DSH_HOME/profiles/web" --fix
 
 ---
 
-## 八、安全边界
+## 八、备份与恢复
 
+### 8.1 备份什么：整个数据目录，不是一个 json
+
+**这是实测踩出来的**（苏虎虎，0.1.33 附件测试期间发现）：附件落在
+`<数据目录>/files/<groupId>/`，和 `groups.json` **在同一个目录树里**。
+
+```
+/var/lib/agent-groups/          <- 整个目录才是要备份的东西
+├── groups.json                  群、成员、消息
+└── files/                       附件实体
+    ├── g-1fad9113/f-4d1c261d…
+    └── …
+```
+
+**只备份 `groups.json` 会得到一个「群记录还在、附件全丢」的备份**——
+而且直到有人去下载附件才会发现。
+
+```bash
+# 正确做法：整个数据目录
+kubectl -n a2a-groups exec deploy/agent-group-host -- \
+  tar czf - -C /var/lib/agent-groups . > a2a-data-$(date +%Y%m%d).tgz
+```
+
+### 8.2 恢复
+
+```bash
+# 先停宿主再解包。不要在线覆盖：宿主正在写 groups.json 时替换文件，
+# 下一次落盘会把旧内容写回去，看起来像恢复失败。
+kubectl -n a2a-groups scale deploy/agent-group-host --replicas=0
+kubectl -n a2a-groups exec deploy/agent-group-host -- tar xzf - -C /var/lib/agent-groups < a2a-data-YYYYMMDD.tgz
+kubectl -n a2a-groups scale deploy/agent-group-host --replicas=1
+```
+
+### 8.3 容量
+
+```
+单文件上限     10 MiB
+单群文件数     500
+单群配额       200 MiB
+实测           3 个测试文件共 892 KB；底层 2.0T 用 3%
+```
+
+按群配额算，19 个群最坏约 3.8 GB。**附件随 `retentionDays` 一起被清理**，
+所以备份频率不应低于保留窗口，否则删掉的东西连备份里都没有。
+
+### 8.4 上传是「先临时区、校验通过再转正」
+
+分块写在 `files/<groupId>/.staging/`，全部到齐且 sha256 校验通过后才原子改名成正式文件。
+意义是：**传输中断不会留下半截文件被当成完整文件读走**。
+实测确认 `.staging` 在上传完成后自动清空、无残留。
+
+---
+
+## 九、安全边界
 给同事讲清楚，避免误用：
 
 1. **没有群密码**：入群凭证只有邀请 token 或审批 claimKey，都能精确撤销
@@ -447,7 +500,7 @@ node scripts/publish-internal.mjs --profile "$DSH_HOME/profiles/web" --fix
 
 ---
 
-## 九、当前能力边界
+## 十、当前能力边界
 
 **已知不做**（不需要再提需求）：
 
