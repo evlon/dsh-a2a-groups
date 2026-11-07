@@ -243,6 +243,13 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
       // The roster a Session fetched with a member credential. Cached so the panel can
       // draw people without a network call, and stamped so a stale list is visibly stale.
       members: Array.isArray(input.members) ? input.members : previous.members,
+      // The group's current goal and standing rules, cached by a2a_goal_status.
+      //
+      // The panel renders from this ledger, not from the network, and a REMOTE group cannot be
+      // snapshotted locally at all — without this cache the right-hand pane can show who is in a
+      // group but never what the group is FOR, which is the whole point of the feature.
+      goal: input.goal === undefined ? previous.goal : input.goal,
+      conventions: input.conventions === undefined ? previous.conventions : input.conventions,
       rosterCachedAt: typeof input.rosterCachedAt === 'number' ? input.rosterCachedAt : previous.rosterCachedAt,
       // Set when the host answered as if this membership did not exist. NOT a deletion: the credential lives
       // only here, so dropping the row would make the group unreachable forever. Cleared by the next success.
@@ -368,6 +375,8 @@ export function createMembershipLedger({ home, logger, clock = () => Date.now() 
         isOwner: typeof entry.isOwner === 'boolean' ? entry.isOwner : undefined,
         feed: Array.isArray(entry.feed) ? entry.feed : undefined,
         members: Array.isArray(entry.members) ? entry.members : undefined,
+        goal: entry.goal !== null && typeof entry.goal === 'object' ? entry.goal : undefined,
+        conventions: typeof entry.conventions === 'string' ? entry.conventions : undefined,
         rosterCachedAt: Number.isFinite(entry.rosterCachedAt) ? entry.rosterCachedAt : undefined,
         addedAt: Number.isFinite(entry.addedAt) ? entry.addedAt : 0,
         // A stamp that only lived in memory would be lost on restart — exactly when a host is most likely to

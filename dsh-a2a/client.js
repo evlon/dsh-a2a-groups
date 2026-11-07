@@ -364,6 +364,38 @@ window.__ModuleLoader__.load({
 		}
 
 		/** One collaboration group plus its roster and feed. */
+		/**
+		 * One goal, in the shape the pane renders.
+		 *
+		 * Permissive on purpose: an older Host may send fewer fields, and a pane that renders a title
+		 * with no key results is more useful than one that throws on a missing array.
+		 */
+		function normalizeGoal(raw) {
+			if (raw === null || raw === undefined || typeof raw !== "object") return undefined;
+			const title = pickString(raw.title);
+			if (title === "") return undefined;
+			const krsRaw = Array.isArray(raw.krs) ? raw.krs : [];
+			const krs = [];
+			for (let i = 0; i < krsRaw.length; i += 1) {
+				const kr = krsRaw[i];
+				if (kr === null || typeof kr !== "object") continue;
+				const krText = pickString(kr.text);
+				if (krText === "") continue;
+				krs.push({ id: pickString(kr.id) || "kr" + String(i + 1), text: krText });
+			}
+			return {
+				title: title,
+				description: pickString(raw.description),
+				status: pickString(raw.status),
+				strictness: pickString(raw.strictness),
+				krs: krs,
+			};
+		}
+
+
+		/**
+		 * Normalize one group row from the Host snapshot.
+		 */
 		function normalizeGroup(raw, index) {
 			if (!raw || typeof raw !== "object") return undefined;
 			const id = pickString(firstDefined(raw, ["id", "groupId", "group"])) || "group-" + String(index);
@@ -483,6 +515,15 @@ window.__ModuleLoader__.load({
 				name: name,
 				// `topic` is the secondary line in groups.js; shown as the card tooltip.
 				topic: pickString(firstDefined(raw, ["topic", "description"])),
+				// What the group is FOR, and the standing rules it works under.
+				//
+				// EIGHTH field lost to this exact shape of bug: the Host publishes it, this whitelist
+				// mapper does not copy it, so every reader sees undefined. Here the consequence was that
+				// the organisation layer shipped with its whole content invisible in the UI — a person
+				// could see who is in a group but not what the group is for.
+				goal: normalizeGoal(raw.goal),
+				conventions: typeof raw.conventions === "string" ? raw.conventions : "",
+
 				memberCount: declaredMemberCount > 0 ? Math.round(declaredMemberCount) : members.length,
 				unreadCount: unreadCount,
 				// The group's message head.
@@ -3385,6 +3426,127 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 		}
 
 		/**
+		 * One collapsible section.
+		 *
+		 * The right pane had grown into a single tall column in which the least-used control (the
+		 * human-confirmation policy) took the most vertical space — it is set once and then never
+		 * touched, while the roster is read every time. Collapsing it is not hiding it: the header
+		 * still states what is in force, so a reader never has to open it to learn the answer.
+		 */
+		function Collapsible(props) {
+			const [open, setOpen] = react.useState(props.initiallyOpen === true);
+			const summary = typeof props.summary === "string" && props.summary !== "" ? props.summary : "";
+			return h(
+				"div",
+				{ style: { borderTop: "1px solid rgba(128,128,128,0.25)", marginTop: "8px", paddingTop: "6px" } },
+				h(
+					"button",
+					{
+						type: "button",
+						"data-role": props.role === undefined ? "collapsible" : props.role,
+						onClick: function () { setOpen(!open); },
+						style: {
+							display: "flex", alignItems: "center", gap: "6px", width: "100%",
+							padding: "2px 0", border: "none", background: "transparent",
+							color: "inherit", font: "inherit", fontSize: "11px",
+							fontWeight: 600, cursor: "pointer", textAlign: "left"
+						},
+						title: open ? "收起" : "展开"
+					},
+					h("span", { style: { opacity: 0.6 } }, open ? "▾" : "▸"),
+					h("span", null, props.title),
+					summary === "" ? null : h("span", { style: { marginLeft: "auto", fontWeight: 400, opacity: 0.65 } }, summary)
+				),
+				open ? h("div", { style: { marginTop: "4px" } }, props.children) : null
+			);
+		}
+
+		/**
+		 * The group's goal, key paths and standing rules.
+		 *
+		 * This is the reason the organisation layer exists, and it was invisible in the UI for exactly
+		 * the version that introduced it: the tool output carried the goal, the panel never rendered
+		 * it, so a person could see WHO is in a group but not WHAT the group is for. Rendered above the
+		 * roster because a reader opening this pane is asking "what is this group doing".
+		 */
+		function GoalSection(props) {
+			const group = props !== null && props !== undefined ? props.group : undefined;
+			if (group === undefined || group === null) return null;
+			const goal = group.goal;
+			const conventions = typeof group.conventions === "string" ? group.conventions : "";
+			if ((goal === undefined || goal === null) && conventions === "") {
+				// No goal yet: say so plainly rather than rendering an empty box. A blank area reads as
+				// a loading failure; a sentence reads as a state.
+				return h(
+					"p",
+					{ style: { margin: "6px 0 2px", fontSize: "11px", opacity: 0.6 } },
+					"这个群还没有主目标（群主可发布）"
+				);
+			}
+			const krs = goal !== undefined && goal !== null && Array.isArray(goal.krs) ? goal.krs : [];
+			const status = goal !== undefined && goal !== null && typeof goal.status === "string" ? goal.status : "";
+			const statusLabel = status === "active" ? "进行中"
+				: status === "suspended" ? "已挂起"
+					: status === "closed" ? "已结束" : status;
+			return h(
+				"div",
+				{ "data-role": "goal", style: { margin: "6px 0 4px" } },
+				goal === undefined || goal === null
+					? null
+					: h(
+						"div",
+						null,
+						h(
+							"div",
+							{ style: { display: "flex", alignItems: "baseline", gap: "6px" } },
+							h("span", { style: { fontSize: "11px", fontWeight: 600 } }, "群目标"),
+							status === "" ? null : h(
+								"span",
+								{
+									style: {
+										fontSize: "10px", padding: "0 5px", borderRadius: "999px",
+										border: "1px solid rgba(128,128,128,0.45)",
+										opacity: status === "active" ? 0.85 : 0.6
+									}
+								},
+								statusLabel
+							)
+						),
+						h("p", { style: { margin: "3px 0 0", fontSize: "12px", fontWeight: 600, lineHeight: 1.35 } }, String(goal.title ?? "")),
+						krs.length === 0 ? null : h(
+							"ul",
+							{ style: { margin: "4px 0 0", padding: "0 0 0 16px", fontSize: "11px", lineHeight: 1.5 } },
+							krs.map(function (kr) {
+								return h(
+									"li",
+									{ key: String(kr.id ?? kr.text ?? ""), title: String(kr.text ?? "") },
+									h("span", { style: { opacity: 0.55, marginRight: "4px" } }, String(kr.id ?? "")),
+									String(kr.text ?? "")
+								);
+							})
+						)
+					),
+				conventions === ""
+					? null
+					: h(
+						Collapsible,
+						{ title: "群约定", summary: conventions.split("\n").filter(function (line) { return line.trim() !== ""; }).length + " 行", role: "conventions" },
+						h(
+							"pre",
+							{
+								style: {
+									margin: 0, padding: "6px 8px", whiteSpace: "pre-wrap", wordBreak: "break-word",
+									fontSize: "11px", lineHeight: 1.5, fontFamily: "inherit",
+									background: "rgba(128,128,128,0.08)", borderRadius: "4px"
+								}
+							},
+							conventions
+						)
+					)
+			);
+		}
+
+		/**
 		 * Human-confirmation settings for this conversation.
 		 *
 		 * WHY THE INHERIT SWITCH IS FIRST AND PROMINENT
@@ -4019,6 +4181,9 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						),
 				),
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
+				// What this group is FOR, above WHO is in it: a reader who opens this pane is asking the
+				// first question far more often than the second.
+				h(GoalSection, { group: group }),
 				// A roster can be cached and simply old. Different from unreachable: we have no evidence anything
 				// is wrong, we only know the list may have changed since it was fetched. Saying so is cheaper than
 				// being confidently out of date.
@@ -4080,7 +4245,14 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 				inviteRow(),
 				// Confirmation policy lives with the roster because that is where the person already is when they think
 				// about how this group should behave.
-				h(ConfirmSettings, { sessionId: sessionId }),
+				// Set once, never touched again — and it used to take the most vertical space in the pane
+				// while the roster got the least. Collapsed by default: the roster is read every time,
+				// this policy is read when it is being changed.
+				h(
+					Collapsible,
+					{ title: "人工确认", role: "confirm-settings" },
+					h(ConfirmSettings, { sessionId: sessionId })
+				),
 				inviteOpen
 					? h(InviteDialog, {
 							candidates: invitable,

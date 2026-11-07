@@ -771,6 +771,18 @@ const PANEL_FEED_TAIL = 8;
           unreadCount: Math.max(0, lastSeq - (record.lastSeq ?? 0)),
           lastSeq,
           lastTime: summary?.lastPostAt ?? record.lastTime ?? 0,
+          // What the group is FOR, and the standing rules it operates under.
+          //
+          // Two sources, because the panel serves two kinds of group: a group hosted here has a
+          // live snapshot, while a remote group only ever has whatever the member's last
+          // a2a_goal_status cached in the ledger. Absent when neither has it — which is exactly
+          // what a group that never adopted the organisation layer should look like.
+          ...(summary?.goal === undefined && record.goal === undefined
+            ? {}
+            : { goal: summary?.goal ?? record.goal }),
+          ...(summary?.conventions === undefined && record.conventions === undefined
+            ? {}
+            : { conventions: summary?.conventions ?? record.conventions }),
           // Which conversation this membership belongs to. The panel renders on the
           // index page, before any Session exists, so it cannot filter by "the current
           // Session" — but it can say which one each group belongs to, which is what

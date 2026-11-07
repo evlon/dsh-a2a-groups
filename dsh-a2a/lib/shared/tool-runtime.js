@@ -34,6 +34,24 @@ import { ownEndpointFromConfig } from '../core/endpoint.js';
  * @param {object} deps - `{ config, registry, bridge, store, identities, server, sessions, logger, inbox }`.
  * @returns {{call: (name: string, args: object, caller?: object) => Promise<object>, has: (name: string) => boolean, names: () => string[]}} the runtime.
  */
+  /**
+   * Remember the group goal in the ledger after any call that returned one.
+   *
+   * The panel reads the ledger, not the network, and it renders before any Session exists. So a
+   * change made by a tool stays invisible in the UI until something caches it. Caching only on
+   * goal-status meant: I just published a goal, and the panel still says there is none.
+   */
+  function cacheGoal(identities, sessionId, groupId, goal) {
+    if (goal === undefined || goal === null) return;
+    try {
+      if (identities === undefined || identities === null || typeof identities.upsert !== 'function') return;
+      identities.upsert({ sessionId, groupId, goal });
+      if (typeof identities.flush === 'function') Promise.resolve(identities.flush()).catch(() => {});
+    } catch {
+      // A stale panel is better than a failed call.
+    }
+  }
+
 export function createToolRuntime(deps = {}) {
   const { config, registry, bridge, store, identities, server, sessions, logger, inbox } = deps;
 
@@ -1964,6 +1982,7 @@ function requireSession(sessionId, tool) {
         strictness: args.strictness,
       });
       await store.flush();
+      cacheGoal(identities, sessionId, groupId, result.goal);
       return { groupId, goal: result.goal };
     }
     const result = await bridge.send(targetOf(membership, config), {
@@ -1985,6 +2004,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const result = store.closeGoal({ groupId, member, reason: args.reason });
       await store.flush();
+      cacheGoal(identities, sessionId, groupId, result.goal);
       return { groupId, goal: result.goal };
     }
     const result = await bridge.send(targetOf(membership, config), {
@@ -2001,8 +2021,31 @@ function requireSession(sessionId, tool) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_goal_status');
     const membership = requireMembership(store, identities, groupId, sessionId);
     const member = { personId: membership.personId, personKey: membership.personKey };
+    /**
+     * Cache what was read into the ledger so the browser panel can render it.
+     *
+     * The panel cannot call a tool — it renders before any Session exists and holds no member
+     * credential — so it reads the ledger. For a REMOTE group there is no local snapshot at all,
+     * which means this cache is the only way the right-hand pane can ever say what the group is
+     * for. Best-effort: a failed cache write must not fail the read the caller asked for.
+     */
+    const remember = (status) => {
+      try {
+        if (identities === undefined || identities === null || typeof identities.upsert !== 'function') return status;
+        identities.upsert({
+          sessionId,
+          groupId,
+          goal: status?.goal,
+          conventions: typeof status?.conventions === 'string' ? status.conventions : undefined,
+        });
+        if (typeof identities.flush === 'function') Promise.resolve(identities.flush()).catch(() => {});
+      } catch {
+        // A stale panel is better than a failed call.
+      }
+      return status;
+    };
     if (membership.local === true) {
-      return store.goalStatus({ groupId, member });
+      return remember(store.goalStatus({ groupId, member }));
     }
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/goal-status',
@@ -2010,7 +2053,7 @@ function requireSession(sessionId, tool) {
       data: { groupId, ...member },
       timeoutMs: config.client.timeoutMs,
     });
-    return result.data ?? { groupId };
+    return remember(result.data ?? { groupId });
   },
 
   'a2a_goal_challenge': async function a2a_goal_challenge(args, exec) {
@@ -2045,6 +2088,7 @@ function requireSession(sessionId, tool) {
     if (membership.local === true) {
       const result = store.emergencyGoal({ groupId, member, reason: args.reason });
       await store.flush();
+      cacheGoal(identities, sessionId, groupId, result.goal);
       return { groupId, goal: result.goal };
     }
     const result = await bridge.send(targetOf(membership, config), {
