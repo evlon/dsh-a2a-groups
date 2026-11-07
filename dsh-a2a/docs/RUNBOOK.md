@@ -76,6 +76,27 @@ dsh plugin --profile web add dsh-a2a-groups@latest
 
 > 漏了这步，重启后 UI 里**什么都不会出现，也不报错**。`dsh plugin` 只负责装包，启用是另一件事。
 
+### 3.1b 升级插件：别在 DSH 运行时动 node_modules
+
+**踩坑实录（生产环境，同事实测）**：DSH 正在运行时，用 `pnpm add` 升级 profile 里的插件，会撞上文件锁：
+
+```
+ERR_PNPM_PACKAGE_MANAGER_REMOVE_MODULES_DIR
+Failed to remove modules directory contents: 拒绝访问 (os error 5)
+```
+
+结果 pnpm 中途失败，把 `node_modules` 删得只剩几项、丢了好几个依赖。只能用备份的 lockfile + `pnpm install --frozen-lockfile` 重建才恢复。
+
+**规则**：
+
+| 场景 | 正确做法 |
+|---|---|
+| 桌面应用（Electron 独占的 `desktop` profile） | **只用桌面应用的插件管理面板**更新。命令行 `dsh plugin --profile desktop` 会被拒：`profile "desktop" is managed exclusively by the Electron application` |
+| 命令行升级 `web` 等 profile | **先停掉 DSH 进程**，再 `dsh plugin --profile web add …`，最后重启 |
+| 想不重启就升级 | 做不到。profile 的 `node_modules` 和 `package.json` 只在启动时读 |
+
+> 这条和「重启后插件只加载一半」是同一类问题：**运行时改 node_modules / 路由注册，都会留下半加载状态**。改完必须干净地重启。
+
 ### 3.2 配置
 
 同一个 profile 的 `cordis.patch.yml`：

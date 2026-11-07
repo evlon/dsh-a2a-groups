@@ -19,6 +19,25 @@ Run every command from inside `dsh-a2a/`.
 - Package entry `lib/index.js`; MCP entry `lib/mcp-server.js`; host entry `bin/agent-groups.js`.
 - The bundle patch is `cordis.patch.yml` (wired via `package.json` → `dsh.bundle.patch`).
 
+## Branches
+
+Three long-lived branches, each with one job:
+
+| Branch | Job | When to commit here |
+|---|---|---|
+| `master` | main development line (ahead toward 0.2.x) | everyday work, fixes, small features |
+| `v0.1.x` | **bugfix-only** maintenance for the 0.1.x line | a fix for a shipped 0.1.x bug |
+| `v0.2.x` | **refactor + new features** toward 0.2.x | breaking changes, new capability |
+
+> **`v0.2.x` 尚未开工，勿用于生产。** 目前它只是提前建好的占位分支，代码和 v0.1.x 几乎一样（只有版本号/文档差异），没有任何 0.2.0 重构的实际内容。重构开工前，不要 checkout 它来构建或部署。
+
+Rules:
+
+- A **bug fix** goes to `v0.1.x` first (cherry-pick back), then forward to `master`.
+- A **refactor or new feature** goes to `v0.2.x` (or `master`), never to `v0.1.x`.
+- `v0.1.x` must stay releasable: no breaking changes, no new tools that change the contract.
+- A `v0.1.x` release is a patch/minor bump off that branch; a `v0.2.x` release comes from `master`/`v0.2.x`.
+
 ## Commands
 
 ```powershell
