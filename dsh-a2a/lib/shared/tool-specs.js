@@ -533,9 +533,39 @@ export const TOOL_SPECS = Object.freeze([
       schema: {
         type: 'object',
         additionalProperties: false,
-        properties: { seq: { type: 'integer' }, groupId: { type: 'string' } },
+        properties: {
+          seq: { type: 'integer' },
+          groupId: { type: 'string' },
+          groupName: { type: 'string' },
+          memberCount: { type: 'integer' },
+          wokeNames: { type: 'array', items: { type: 'string' } },
+          receipt: { type: 'string' },
+        },
       },
-      render: (args, value) => [{ type: 'text', text: `Posted to ${value.groupId} at seq ${value.seq}.` }],
+      /**
+       * Two parts, in this order, because of how a human reads a tool block.
+       *
+       * The collapsed block shows ONE line. That line used to be
+       * `Posted to g-1fad9113 at seq 712` — an internal id that leaves the reader asking "did that
+       * go to 苏虎虎 or to everyone?". The first part now answers it in words: the group's name,
+       * how many people can see it, and who was actually woken. `mentions` only decides who is
+       * pinged; the post itself is readable by every member, and that difference is the whole point.
+       *
+       * The second part carries the text that was sent, so expanding the block shows what went out
+       * without re-reading the arguments.
+       */
+      render: (args, value) => {
+        const first = typeof value?.receipt === 'string' && value.receipt !== ''
+          ? value.receipt
+          : `已发到「${value?.groupName ?? value?.groupId ?? '?'}」· #${value?.seq ?? 0}`;
+        const sent = typeof args?.message === 'string' ? args.message.trim() : '';
+        return sent === ''
+          ? [{ type: 'text', text: first }]
+          : [
+            { type: 'text', text: first },
+            { type: 'text', text: `正文：${sent}` },
+          ];
+      },
     },
   runtime: 'a2a_group_post',
   },

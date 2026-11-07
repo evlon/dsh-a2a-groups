@@ -406,6 +406,60 @@ function describeError(error) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Resolve `mentions` (person ids) to names a human recognises, using the cached roster.
+ *
+ * Falls back to the person id rather than hiding an unresolvable mention: a raw `m-3eabe369` is
+ * ugly but it says "somebody was woken", while an empty list would say "nobody was" — and that is
+ * the wrong answer, which is exactly the failure that made a post's wake-list invisible.
+ *
+ * @param {Array<object>} roster - cached members (`personId`, `displayName`).
+ * @param {string[]} mentions - person ids, or the literal `@all`.
+ * @returns {string[]} display names in the same order.
+ */
+function wakeNamesOf(roster, mentions) {
+  const members = Array.isArray(roster) ? roster : [];
+  return (Array.isArray(mentions) ? mentions : []).map((entry) => {
+    if (entry === '@all') return '全员';
+    const found = members.find((member) => member?.personId === entry);
+    const name = typeof found?.displayName === 'string' ? found.displayName.trim() : '';
+    return name === '' ? String(entry) : name;
+  });
+}
+
+/**
+ * The receipt for one outbound group post, in words a person can act on.
+ *
+ * Two separate facts have been collapsed into one sentence here on purpose:
+ *
+ *   audience  a group post is a BROADCAST — every member can read it
+ *   woken     `mentions` decides only who is actively pinged
+ *
+ * The tool block used to print `Posted to g-1fad9113 at seq 712`, which names an internal id and
+ * answers neither question. Someone reading the transcript then has to ask "did that go to 苏虎虎,
+ * or to everyone?", and there is no way to tell without opening the raw arguments.
+ *
+ * "全员" is reported instead of the full name list when the wake set covers every member: a group
+ * with fifteen people should not print fifteen names on one line, and `@all` reaches the reader as
+ * what it was in the arguments.
+ *
+ * @param {object} receipt - `{ groupName, groupId, memberCount, wokeNames, seq, text }`.
+ * @returns {string} one line, no internal ids unless the group name is unknown.
+ */
+function describePostReceipt(receipt) {
+  const name = typeof receipt.groupName === 'string' && receipt.groupName !== '' ? receipt.groupName : receipt.groupId;
+  const memberCount = Number.isFinite(receipt.memberCount) ? receipt.memberCount : 0;
+  const audience = memberCount > 0 ? `全群 ${memberCount} 人可见` : '全群可见';
+  const names = Array.isArray(receipt.wokeNames) ? receipt.wokeNames : [];
+  const woke = names.length === 0
+    ? '未唤醒任何人'
+    : memberCount > 0 && names.length >= memberCount
+      ? '唤醒 全群'
+      : `唤醒 ${names.join('、')}`;
+  const preview = truncate(String(receipt.text ?? ''), 40);
+  return `已发到「${name}」· ${audience} · ${woke} · #${receipt.seq}${preview === '' ? '' : ` · 「${preview}」`}`;
+}
+
 /** A one-line summary of the last message in a group summary. */
 function lastMessageOf(summary, record) {
   const entry = summary?.feedTail?.at?.(-1);
@@ -1152,9 +1206,22 @@ function requireSession(sessionId, tool) {
         replyTo: args.replyTo,
       });
       await store.flush();
+      const localWoke = wakeNamesOf(membership.members, posted.mentions);
       return {
         seq: posted.seq,
         groupId,
+        // Human-facing facts, so the collapsed tool block can say what happened in words.
+        groupName: typeof membership.groupName === 'string' ? membership.groupName : groupId,
+        memberCount: Number.isFinite(membership.memberCount) ? membership.memberCount : undefined,
+        wokeNames: localWoke,
+        receipt: describePostReceipt({
+          groupName: membership.groupName,
+          groupId,
+          memberCount: membership.memberCount,
+          wokeNames: localWoke,
+          seq: posted.seq,
+          text: message,
+        }),
         mentions: posted.mentions ?? [],
         replyTo: posted.replyTo,
         // The thread this message belongs to. Reported alongside `replyTo` because they answer different questions:
@@ -1176,15 +1243,25 @@ function requireSession(sessionId, tool) {
       },
       timeoutMs: config.client.timeoutMs,
     });
-    // Same shape as the local branch.
-    //
-    // The remote branch used to return only `{ seq, groupId }` while the local one returned `mentions` and `replyTo`.
-    // A caller therefore could not report who its message woke, or which message it answered, purely because the
-    // group happened to be hosted elsewhere — the same asymmetry that hid a waking bug earlier in this file.
+    // Same shape as the local branch, including the human-facing receipt: without it the collapsed
+    // tool block reports an internal group id and leaves "who was woken" unanswerable.
+    const remoteMentions = Array.isArray(result.data?.mentions) ? result.data.mentions : [];
+    const remoteWoke = wakeNamesOf(membership.members, remoteMentions);
     return {
       seq: result.data?.seq ?? 0,
       groupId,
-      mentions: Array.isArray(result.data?.mentions) ? result.data.mentions : [],
+      groupName: typeof membership.groupName === 'string' ? membership.groupName : groupId,
+      memberCount: Number.isFinite(membership.memberCount) ? membership.memberCount : undefined,
+      wokeNames: remoteWoke,
+      receipt: describePostReceipt({
+        groupName: membership.groupName,
+        groupId,
+        memberCount: membership.memberCount,
+        wokeNames: remoteWoke,
+        seq: result.data?.seq ?? 0,
+        text: message,
+      }),
+      mentions: remoteMentions,
       replyTo: Number.isInteger(result.data?.replyTo) ? result.data.replyTo : undefined,
       rootSeq: Number.isInteger(result.data?.rootSeq) ? result.data.rootSeq : undefined,
     };
