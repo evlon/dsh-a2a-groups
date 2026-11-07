@@ -301,6 +301,48 @@ const rootCtx = ctx.root ?? (typeof ctx.get === "function" ? ctx.get("root") : u
 
 `03code/待修复-协作群面板刷新失败-2026-11-07/`（问题记录.md + 截图），由赵雷维护。
 
+#### 新增证据（2026-11-07，赵雷，只补记录）
+
+```
+客户端   0.1.35（磁盘 0.1.35；进程确认为 0.1.35——新工具 a2a_group_file_list 可用，返回 3 个附件）
+DSH      已完整重启（GUI 端口 51446 → 53769）
+用户侧   「读取设置失败：transport failure for /a2a-panel/confirm-settings: HTTP 405」
+
+探针     POST /api/ping                   → 401   路由存在
+         POST /a2a-panel/ping             → 405   通道未注册
+         POST /a2a-panel/confirm-settings → 405   通道未注册
+```
+
+**这两条把两个假设直接排除了：**
+
+| 假设 | 结论 |
+|---|---|
+| 与插件版本相关 | **否**。0.1.25 与 0.1.35 都复现 |
+| 「重启不解决」只是时序问题 | **否**。完整重启（端口都变了）后仍 405 |
+
+**同时它给出了一个新的对照点**：同一份代码在**开发机上注册成功**——
+`[a2a-panel] registered /a2a-panel` 在 dev1/dev2/dev3 三个实例上都有，且面板 RPC 实测能返回数据
+（2026-11-07 用 `POST /a2a-panel/refresh` 取回过目标与约定）。
+
+所以问题范围从「通道从来不注册」收窄为：**同一插件在不同机器上，注册行为不一致**。
+这不再是「一直坏 vs 升级后坏」的问题（两者都不是），而是**环境差异**。
+
+#### 因此下一步只剩一件事：拿到那 3 行日志
+
+前文「日志四选一」仍然有效，且现在是唯一的阻塞项。需要赵雷那台机器启动时的：
+
+```
+[a2a-panel] registered /a2a-panel          → 注册成功，问题在 rpc 传输层
+[a2a-panel] register failed: <reason>      → reason 即根因
+[a2a-panel] no connection.rpc available    → ctx.get("connection") 拿不到
+（三行都没有）                              → 插件未 mount，另一条线
+```
+
+取法：完整重启 DSH，抓启动输出里的 `[a2a-panel]` 行。**同时请附上 DSH 版本**——
+开发机能注册、他那台不能，最可能的差异是 DSH 版本或 connection 服务的加载时序。
+
+**在这条拿到之前仍然不动代码**：四种状态对应四条不同的修法，猜错就是白改。
+
 ---
 
 ### 6.2 面板不显示群目标与约定（功能缺口，不是缺陷）
