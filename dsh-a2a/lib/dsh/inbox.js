@@ -25,6 +25,9 @@
  * @module dsh-a2a/inbox
  */
 
+import { confirmationPolicy } from './human-confirm.js';
+import { pendingStubText } from './pending-inbound.js';
+
 /** How long one subscription waits for a heartbeat before considering the link dead. */
 const DEFAULT_IDLE_MS = 120000;
 
@@ -80,7 +83,7 @@ export function gradeOf(post, membership, muted) {
  * @param {object} deps - `{ ctx, logger, config, clock, groups, identities, registry, bridge, deliverer, sessions }`.
  * @returns {object} `{ enable, disable, enabled, state, resume, stop }`.
  */
-export function createInbox({ ctx, logger, config, clock = () => Date.now(), groups, identities, registry, bridge, deliverer, sessions }) {
+export function createInbox({ ctx, logger, config, clock = () => Date.now(), groups, identities, registry, bridge, deliverer, sessions, pendingInbound, panelSettings }) {
   /** groupId → { controller, attempt, timer, lastSeq, active } */
   const subscriptions = new Map();
   /** groupIds the operator turned off explicitly, so resume() does not fight them. */
@@ -475,8 +478,39 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
       : '（收到一条消息）';
   }
 
-  async function deliverPost(groupId, openingMembership, post) {
-    /**
+  /**
+   * Whether this post's TEXT must wait for the person's approval before the Session sees it.
+   *
+   * Reuses the same policy the reply gate uses (`confirmationPolicy`), so 「被@时」 and 「总是」 mean
+   * the same thing in both places instead of drifting into two vocabularies for one decision. The
+   * per-Session override is resolved here because a person can turn confirmation on for one
+   * conversation only, and reading the profile default instead was a bug the reply gate already had
+   * once.
+   *
+   * Returns the reason as well as the verdict, because 「why was my message not delivered」 has to be
+   * answerable from a log line.
+   *
+   * @param {string} sessionId - Session being woken.
+   * @param {string} groupId - group the post belongs to.
+   * @param {object} post - the feed entry.
+   * @param {string} grade - `mention` | `notice` | `ambient`.
+   * @returns {{hold: boolean, reason: string, length: number}} the decision.
+   */
+  function shouldWithholdContent(sessionId, groupId, post, grade) {
+    const body = typeof post?.text === 'string' ? post.text : '';
+    if (pendingInbound === undefined || pendingInbound === null) return { hold: false, reason: 'no-store', length: 0 };
+    const profileDefault = config?.groups?.humanConfirm ?? {};
+    const effective = panelSettings !== undefined && panelSettings !== null && typeof panelSettings.effectiveFor === 'function'
+      ? panelSettings.effectiveFor(sessionId, profileDefault)
+      : profileDefault;
+    const decision = confirmationPolicy({ settings: { groups: { humanConfirm: effective } }, post, grade });
+    if (decision.ask !== true) return { hold: false, reason: decision.reason, length: body.length };
+    if (body.trim() === '') return { hold: false, reason: 'empty-body', length: 0 };
+    void groupId;
+    return { hold: true, reason: decision.reason, length: body.length };
+  }
+
+  async function deliverPost(groupId, openingMembership, post) {    /**
      * Every Session of this instance that belongs to this group, each delivered to
      * on its own behalf.
      *
@@ -537,10 +571,44 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
       else if (isPaused) mode = 'inbox';
       else if (post.priority === 'urgent') mode = 'steer';
       else mode = grade === 'mention' || (grade === 'notice' && wakeMembers !== false) ? 'queue' : 'inbox';
+      /**
+       * Hold the CONTENT back when this person asked to be consulted first.
+       *
+       * The reply gate lives in the tool layer, so it can only stop what the Session SAYS. What a
+       * woken turn DOES is decided before any tool result comes back — which means a message asking
+       * for a command to be run is already in the model's context by then. Asking the human is
+       * impossible here (the seam needs a live agent, and delivery happens outside any turn), so
+       * what crosses the boundary is not the text but a stub that names the sender and the size.
+       *
+       * The body then travels through `a2a_confirm_inbound`, a tool call, where a prompt is possible.
+       * Until that is approved the text exists nowhere the model can reach — `a2a_group_read` redacts
+       * it too, so "just read it from the feed instead" is not a way around the gate.
+       */
+      const withhold = shouldWithholdContent(sessionId, groupId, post, grade);
+      const text = withhold.hold
+        ? pendingStubText({
+          groupName: membership.groupName ?? groupId,
+          sender: post.from?.displayName ?? '',
+          groupId,
+          seq: post.seq,
+          length: withhold.length,
+          waiting: (pendingInbound?.countForSession(sessionId) ?? 0) + 1,
+        })
+        : renderPost(membership.groupName ?? groupId, post, addressedMe);
+      if (withhold.hold && pendingInbound !== undefined && pendingInbound !== null) {
+        pendingInbound.put({
+          sessionId,
+          groupId,
+          seq: post.seq,
+          groupName: membership.groupName ?? groupId,
+          sender: post.from?.displayName ?? '',
+          text: typeof post.text === 'string' ? post.text : '',
+        });
+      }
       try {
         await deliverer.deliver({
           sessionId,
-          text: renderPost(membership.groupName ?? groupId, post, addressedMe),
+          text,
           messageId: post.msgId,
           // See `mode` above for the full precedence; this used to be a single ternary.
           mode,

@@ -51,6 +51,7 @@ import { buildProfile } from './dsh/profile.js';
 import { createPingSkill, createSessionAskSkill } from './core/skills-session.js';
 import { createGroupSkills } from './core/skills-group.js';
 import { createInbox } from './dsh/inbox.js';
+import { createPendingInbound } from './dsh/pending-inbound.js';
 import { registerTools } from './dsh/tools.js';
 import { PROMPT_SECTION, PROMPT_SECTION_NAME, PROMPT_SECTION_ORDER } from './dsh/prompt.js';
 import { TaskStore } from './core/wire.js';
@@ -125,6 +126,26 @@ export function apply(ctx, config) {
   } catch (error) {
     warn(ctx, 'a2a state migration FAILED (' + describe(error) + '); continuing against ' + home + ' — check ' + process.cwd() + ' for leftover state');
   }
+  /**
+   * Say out loud when a group can drive this Session with nobody watching.
+   *
+   * A group message wakes a turn. That turn has the Session's full tool set — whatever the
+   * permission preset allows — and it can act without ever replying, which means without ever
+   * triggering the reply gate. The content gate (`humanConfirm`) is the layer this plugin owns;
+   * the other layer is the Harness's own approval policy, which this plugin cannot inspect from
+   * here. So the contract is stated once, at mount, where an operator will see it: if group
+   * messages can wake turns, either turn confirmation on, or make sure the approval policy asks
+   * before risky tools.
+   */
+  if (settings.groups.enabled === true && settings.groups.humanConfirm?.enabled !== true) {
+    warn(
+      ctx,
+      'a2a: group messages can wake this session and act with its current permissions, and human '
+        + 'confirmation is OFF — a message asking for a command to be run will be acted on without '
+        + 'anyone approving it. Either enable groups.humanConfirm, or make sure this profile\'s '
+        + 'approval policy asks before risky tools. See docs/RUNBOOK.md §安全边界.',
+    );
+  }
   const clock = () => Date.now();
 
   // --- durable state -------------------------------------------------------
@@ -179,9 +200,14 @@ export function apply(ctx, config) {
   });
 
   // --- group inbox (subscription → Session delivery) -----------------------
+  // Held-back message text lives here: the inbox fills it, the confirm tool drains it. Shared
+  // between the two so an approval can hand over exactly what was withheld.
+  const pendingInbound = createPendingInbound({ clock });
   const inbox = createInbox({
     ctx, logger, config: settings, clock,
     groups, identities, registry, bridge, deliverer, sessions,
+    pendingInbound,
+    panelSettings,
   });
 
   const disposers = [];
@@ -213,6 +239,9 @@ export function apply(ctx, config) {
       // The tool gate needs per-Session settings, not just the profile default: a person who enabled confirmation for
       // one conversation must have it honoured for that conversation.
       panelSettings,
+      // Same queue the inbox filled: `a2a_confirm_inbound` is the only way a withheld body becomes
+      // reachable, and it runs inside a turn, where the human can be asked.
+      pendingInbound,
     });
   }
 

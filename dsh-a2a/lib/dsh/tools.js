@@ -23,6 +23,7 @@ import {
   confirmationPolicy,
   confirmationQuestion,
   decideFromAnswer,
+  inboundQuestion,
   noticeFor,
 } from './human-confirm.js';
 
@@ -224,6 +225,56 @@ export function registerTools(ctx, deps) {
   }
 
   const registered = [];
+  /**
+   * Hand a held-back message over, but only after this Session's human says yes.
+   *
+   * This is the other half of the content gate. Delivery replaced the body with a stub because the
+   * seam that asks a human needs a LIVE AGENT and delivery happens outside any turn. Here there IS a
+   * turn, so the question can be asked properly — and until it is answered, the body stays in the
+   * queue rather than in the model's context.
+   *
+   * A refusal keeps the entry: 「稍后处理」 means later, and the post is still in the group. The TTL
+   * in the queue is what eventually forgets it.
+   *
+   * @param {object} input - `{ groupId, seq, sessionId, agent }`.
+   * @returns {Promise<object>} `{ approved, text?, sender?, seq, reason? }`.
+   */
+  async function confirmInbound(input) {
+    const queue = deps.pendingInbound;
+    if (queue === undefined || queue === null) {
+      return { approved: false, seq: input.seq, reason: 'no-queue' };
+    }
+    const entry = queue.get(input.sessionId, input.groupId, input.seq);
+    if (entry === undefined) {
+      // Nothing waiting: either already handed over, or this Session was never the one holding it.
+      // Reporting that plainly beats returning an empty body the model might read as 「empty message」.
+      return { approved: false, seq: input.seq, reason: 'nothing-pending' };
+    }
+    const sessionId = input.sessionId;
+    const profileDefault = deps.config?.groups?.humanConfirm ?? {};
+    const resolved = deps.panelSettings !== undefined && deps.panelSettings !== null && sessionId !== ''
+      ? deps.panelSettings.effectiveFor(sessionId, profileDefault)
+      : { inherit: true, effective: profileDefault };
+    const effective = resolved.effective ?? profileDefault;
+    const decision = decideFromAnswer(await askHuman({
+      seam: questionSeam,
+      agent: input.agent,
+      question: inboundQuestion({
+        groupName: entry.groupName,
+        sender: entry.sender,
+        text: entry.text,
+        seq: entry.seq,
+      }),
+      onTimeout: effective.onTimeout ?? 'deny',
+      timeoutMs: Number.isFinite(effective.timeoutMs) ? effective.timeoutMs : 300000,
+    }));
+    if (decision.proceed !== true) {
+      return { approved: false, seq: entry.seq, reason: decision.reason ?? 'denied' };
+    }
+    queue.remove(sessionId, input.groupId, input.seq);
+    return { approved: true, text: entry.text, sender: entry.sender, seq: entry.seq };
+  }
+
   for (const spec of allSpecs()) {
     ctx.tools.register(defineTool({
       name: spec.name,
@@ -241,6 +292,17 @@ export function registerTools(ctx, deps) {
           error.code = 'human_confirm_refused';
           error.data = { reason: refusal.reason };
           throw error;
+        }
+        // This tool IS the gate, so it runs here rather than in the shared runtime: asking a human is a
+        // host capability (`ctx.userQuestions`), and the MCP adapter has nobody to ask.
+        if (spec.name === 'a2a_confirm_inbound') {
+          const sessionId = typeof exec?.agent?.id === 'string' ? exec.agent.id : '';
+          return confirmInbound({
+            groupId: String(args?.groupId ?? ''),
+            seq: Number(args?.seq ?? 0),
+            sessionId,
+            agent: exec?.agent,
+          });
         }
         return runtime.call(spec.name, args, callerOf(exec));
       },

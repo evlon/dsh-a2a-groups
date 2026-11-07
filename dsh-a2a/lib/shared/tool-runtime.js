@@ -68,7 +68,7 @@ import { ownEndpointFromConfig } from '../core/endpoint.js';
   }
 
 export function createToolRuntime(deps = {}) {
-  const { config, registry, bridge, store, identities, server, sessions, logger, inbox } = deps;
+  const { config, registry, bridge, store, identities, server, sessions, logger, inbox, pendingInbound } = deps;
 
 /** A non-empty string argument, or a coded error. */
 function requireText(value, name) {
@@ -1518,12 +1518,41 @@ function requireSession(sessionId, tool) {
       entries: Array.isArray(meta.entries) ? meta.entries : [],
     };
   },
+  /**
+   * The DSH adapter replaces this with a version that can ask its human. Reaching this one means the
+   * host has no question channel (MCP), and the honest answer is 「no」 — returning the body because
+   * nobody could be asked would silently remove the protection the person turned on.
+   */
+  'a2a_confirm_inbound': async function a2a_confirm_inbound(args) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const seq = Number(args.seq);
+    if (!Number.isInteger(seq)) throw coded('invalid_arguments', '"seq" must be an integer');
+    void groupId;
+    return { approved: false, seq, reason: 'no-confirmation-channel' };
+  },
   'a2a_group_read': async function a2a_group_read(args, exec) {
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_set_card');
     const groupId = requireText(args.groupId, 'groupId');
     const sinceSeq = args.sinceSeq ?? 0;
     const limit = args.limit ?? 50;
     const membership = requireMembership(store, identities, groupId, sessionId);
+    /**
+     * Keep held-back posts held back.
+     *
+     * Withholding the body at delivery is worthless if the same text can be read straight out of the
+     * feed afterwards — 「just look it up in the history」 would be a trivial way around the gate the
+     * person asked for. A redacted entry still tells the reader the message exists and how to
+     * unseal it, so nothing looks lost.
+     */
+    const redact = (entry) => {
+      if (pendingInbound === undefined || pendingInbound === null) return entry;
+      if (typeof pendingInbound.isPending !== 'function') return entry;
+      if (pendingInbound.isPending(sessionId, groupId, entry.seq) !== true) return entry;
+      return {
+        ...entry,
+        text: '（这条消息待本人确认，正文未交给本会话。调用 a2a_confirm_inbound 取得同意后再读。）',
+      };
+    };
     if (membership.local === true) {
       const page = store.read({
         groupId,
@@ -1533,7 +1562,7 @@ function requireSession(sessionId, tool) {
       });
       return {
         lastSeq: page.lastSeq,
-        entries: page.entries.map((entry) => ({
+        entries: page.entries.map((entry) => redact({
           seq: entry.seq,
           from: entry.from.displayName,
           text: entry.text,
@@ -1558,7 +1587,7 @@ function requireSession(sessionId, tool) {
         from: typeof entry.from === 'string' ? entry.from : (entry.from?.displayName ?? ''),
         text: entry.text,
         at: entry.atIso ?? entry.at,
-      })),
+      })).map((entry) => redact(entry)),
     };
   },
   'a2a_group_directory': async function a2a_group_directory(args, exec) {

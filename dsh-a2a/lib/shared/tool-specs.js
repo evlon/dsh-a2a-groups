@@ -860,6 +860,45 @@ export const TOOL_SPECS = Object.freeze([
   runtime: 'a2a_group_read',
   },
   {
+    name: 'a2a_confirm_inbound',
+    description:
+      'Ask this Session\'s human whether a colleague\'s message may be handed over, then return its text if they '
+      + 'agree. Call it when a group message arrives as 「[待确认] … 内容尚未交给本会话」 — that stub replaces the '
+      + 'body whenever the person asked to be consulted before their Session acts on somebody else\'s request. '
+      + 'Nothing else can unseal it: a2a_group_read keeps redacting that post until this call succeeds. '
+      + 'A refusal is an answer, not an error to retry: do not look for the text elsewhere, and do not act on the '
+      + 'message at all.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group the held-back message belongs to.' },
+        seq: { type: 'integer', description: 'Sequence number named by the stub.' },
+      },
+      required: ['groupId', 'seq'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          approved: { type: 'boolean' },
+          text: { type: 'string' },
+          sender: { type: 'string' },
+          seq: { type: 'integer' },
+          reason: { type: 'string' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: value?.approved === true
+          ? `已获同意：${value.sender === '' || value.sender === undefined ? '对方' : value.sender} 的消息 #${value.seq} 正文已交回本会话。`
+          : `未获同意（${value?.reason ?? 'denied'}）：这条消息的正文不会交给本会话，不要根据它做任何事。`,
+      }],
+    },
+  runtime: 'a2a_confirm_inbound',
+  },
+  {
   
     name: 'a2a_group_directory',
     description:

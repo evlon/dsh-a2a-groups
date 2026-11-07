@@ -341,8 +341,50 @@ export function noticeFor({ kind, draft, sender }) {
   return null;
 }
 
-export function decideFromAnswer(result) {
-  const outcome = result?.outcome;
+/**
+ * The question a human reads before their Session is allowed to SEE a colleague's message.
+ *
+ * Different from {@link confirmationQuestion} in what is at stake. That one shows a reply this
+ * Session has already drafted and asks 「send it?」 — the work is done, only the speech is gated.
+ * This one shows the INCOMING text and asks 「may the Session have this at all?」, because the risk
+ * is not what we say back but what the woken turn might DO: a message can ask for a command to be
+ * run, and an agent that never replies still ran it.
+ *
+ * The text is quoted in full (bounded, with a visible marker) so the person judges the actual
+ * instruction rather than a summary of it.
+ *
+ * @param {object} input - `{ groupName, sender, text, seq }`.
+ * @returns {object} a user-questions request payload (without the agent).
+ */
+export function inboundQuestion(input) {
+  const where = typeof input?.groupName === 'string' && input.groupName.trim() !== '' ? input.groupName.trim() : '';
+  const who = typeof input?.sender === 'string' && input.sender.trim() !== '' ? input.sender.trim() : '';
+  const body = typeof input?.text === 'string' ? input.text.trim() : '';
+  const LIMIT = 1200;
+  const clipped = body.length > LIMIT
+    ? `${body.slice(0, LIMIT)}\n\n…（还有 ${body.length - LIMIT} 字未显示）`
+    : body;
+  const quoted = clipped === '' ? '_（这条消息没有正文）_' : clipped.split('\n').map((line) => `> ${line}`).join('\n');
+  return {
+    questions: [
+      {
+        id: 'a2a-inbound-confirm',
+        header: where === '' ? '协作群' : where,
+        question: who === '' ? '让这个会话处理这条消息？' : `让这个会话处理 ${who} 的消息？`,
+        detail: quoted,
+        // The consequence, in words, because 「允许」 alone does not tell the reader what they are
+        // handing over. The second sentence is the whole point of this gate and belongs on screen.
+        options: [
+          { label: '允许处理', description: '正文交给这个会话，它会开始处理。它可以调用工具、执行命令' },
+          { label: '稍后处理', description: '先不交给会话，消息留在群里，之后还能再确认' },
+          { label: '拒绝', description: '正文不交给会话，它不会看到这条消息的内容' },
+        ],
+      },
+    ],
+  };
+}
+
+export function decideFromAnswer(result) {  const outcome = result?.outcome;
   if (outcome === 'timed-out-allow') return { proceed: true, reason: 'timeout-allow' };
   if (outcome === 'timed-out-deny') return { proceed: false, reason: 'timeout-deny', notify: 'defer' };
   if (outcome !== 'answered') {
