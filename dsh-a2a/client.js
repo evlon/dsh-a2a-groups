@@ -1851,6 +1851,31 @@ window.__ModuleLoader__.load({
 		}
 
 		/**
+		 * Save the a2a config from the 「设置」 tab, through the Host's configEditor.
+		 *
+		 * Same shape as `saveProfile`: resolve to `{ ok, message }` rather than throw, because the caller is a button
+		 * handler and a rejected promise surfaces as silence.
+		 *
+		 * @param {object} input - flat fields: `gatewayBase`, `agentName`, `apiKey`, `publicUrl`, `token`.
+		 * @returns {Promise<{ok: boolean, message: string}>}
+		 */
+		async function saveConfig(input) {
+			if (panelRpcCaller === undefined) {
+				return { ok: false, message: "面板写入通道不可用（" + (panelRpcError === "" ? "未安装" : panelRpcError) + "）" };
+			}
+			try {
+				const result = await panelRpcCaller("/a2a-panel", "set-config", input);
+				if (result !== null && result !== undefined && result.ok === true) {
+					return { ok: true, message: "已保存，配置即将生效" };
+				}
+				const message = result && result.error ? result.error.message : (result && result.error ? result.error.code : "unknown");
+				return { ok: false, message: "保存失败：" + String(message) };
+			} catch (error) {
+				return { ok: false, message: "保存失败：" + String((error && error.message) || error) };
+			}
+		}
+
+		/**
 		 * Call the Host's `ping` endpoint and report what came back.
 		 *
 		 * Uses the same client as `saveProfile`, on purpose: a probe that takes a different path proves
@@ -4164,6 +4189,95 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 			);
 		}
 
+		/**
+		 * The 「设置」 tab's editable form.
+		 *
+		 * Three labelled inputs cover what a newcomer needs to wire up (gateway, agent name, key); the server-side
+		 * fields live behind a collapsed "advanced" toggle so they do not intimidate someone who only wants to join
+		 * groups. Saving goes through the Host's configEditor, which validates and hot-reloads.
+		 */
+		function SettingsForm(props) {
+			const fields = props.fields !== null && props.fields !== undefined && typeof props.fields === "object" ? props.fields : {};
+			const [gatewayBase, setGatewayBase] = react.useState(typeof fields.gatewayBase === "string" ? fields.gatewayBase : "");
+			const [agentName, setAgentName] = react.useState(typeof fields.agentName === "string" ? fields.agentName : "");
+			const [apiKey, setApiKey] = react.useState(typeof fields.apiKey === "string" ? fields.apiKey : "");
+			const [publicUrl, setPublicUrl] = react.useState(typeof fields.publicUrl === "string" ? fields.publicUrl : "");
+			const [token, setToken] = react.useState(typeof fields.token === "string" ? fields.token : "");
+			const [showAdvanced, setShowAdvanced] = react.useState(false);
+			const [state, setState] = react.useState("idle");
+			const [message, setMessage] = react.useState("");
+
+			function save() {
+				setState("saving");
+				setMessage("");
+				saveConfig({
+					gatewayBase: String(gatewayBase ?? "").trim(),
+					agentName: String(agentName ?? "").trim(),
+					apiKey: String(apiKey ?? "").trim(),
+					publicUrl: String(publicUrl ?? "").trim(),
+					token: String(token ?? ""),
+				}).then(function (result) {
+					setState(result.ok ? "done" : "failed");
+					setMessage(result.message);
+				});
+			}
+
+			const inputStyle = {
+				display: "block",
+				width: "100%",
+				boxSizing: "border-box",
+				padding: "5px 8px",
+				border: "1px solid rgba(128, 128, 128, 0.4)",
+				borderRadius: "4px",
+				background: "transparent",
+				color: "inherit",
+				font: "inherit",
+				fontSize: "12px"
+			};
+			const labelStyle = { fontSize: "11px", opacity: 0.7, marginBottom: "2px", display: "block" };
+			const field = function (label, value, setter, placeholder) {
+				return h("label", { style: { display: "block", marginBottom: "8px" } },
+					h("span", { style: labelStyle }, label),
+					h("input", {
+						type: "text",
+						value: value,
+						placeholder: placeholder || "",
+						style: inputStyle,
+						onChange: function (event) {
+							setter(event !== null && event !== undefined && event.target !== undefined ? event.target.value : "");
+						}
+					})
+				);
+			};
+
+			return h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+				h("p", { style: S.emptyBody }, "接入协作群只需下面三项。填好点保存，改完即生效。"),
+				field("网关地址 gatewayBase", gatewayBase, setGatewayBase, "http://a2a.ai.ict.cmcc/a2a"),
+				field("你在网关里的名字 agentName", agentName, setAgentName, "agent-group-host"),
+				field("网关密钥 apiKey", apiKey, setApiKey, "sk-…"),
+				h("button", {
+					type: "button",
+					style: { cursor: "pointer", padding: "4px 8px", border: "1px solid currentColor", borderRadius: "4px", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px" },
+					title: "显示或收起高级字段（对外地址 / 令牌）",
+					onClick: function () { setShowAdvanced(!showAdvanced); }
+				}, showAdvanced ? "收起高级" : "高级（对外地址 / 令牌）"),
+				showAdvanced
+					? h("div", { style: { display: "flex", flexDirection: "column" } },
+						field("对外地址 publicUrl", publicUrl, setPublicUrl, "http://<你的机器>:3091/a2a"),
+						field("令牌 token（留空则不设）", token, setToken, "<留空>"),
+						h("p", { style: { fontSize: "10px", opacity: 0.55 } }, "只有需要「让同事直接调你」时才需要填对外地址和令牌；只是加入群、收发消息不用。")
+					)
+					: null,
+				h("button", {
+					type: "button",
+					disabled: state === "saving",
+					style: { cursor: state === "saving" ? "default" : "pointer", padding: "5px 10px", border: "1px solid currentColor", borderRadius: "4px", background: "transparent", color: "inherit", font: "inherit", fontSize: "12px" },
+					onClick: save
+				}, state === "saving" ? "保存中…" : "保存"),
+				message === "" ? null : h("p", { style: { fontSize: "11px", opacity: 0.8, color: state === "failed" ? "#d29922" : "inherit" } }, message)
+			);
+		}
+
 		function GroupsPanel(props) {
 			const snapshot = useSnapshot();
 			const [expanded, toggle] = useExpanded();
@@ -4286,44 +4400,15 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 								)
 					);
 
-			// The wiring tab: show the exact config section this instance is running with, so a colleague can copy it
-			// without finding a file. The YAML carries a MASKED key; the fields below show the masked key too, so no
-			// path here can leak the secret into a screenshot or a pasted copy.
+			// The wiring tab: a form, not a YAML wall. A newcomer fills three labelled boxes and saves; the Host's
+			// configEditor validates and hot-reloads. No knowledge of file paths or YAML indentation required.
 			const settingsData = snapshot.settings !== null && snapshot.settings !== undefined && typeof snapshot.settings === "object"
 				? snapshot.settings
 				: { yaml: "", fields: {} };
 			const settingsFields = settingsData.fields !== null && settingsData.fields !== undefined && typeof settingsData.fields === "object"
 				? settingsData.fields
 				: {};
-			const settingsBody = h(
-				"div",
-				{ style: { display: "flex", flexDirection: "column", gap: "10px" } },
-				h("p", { style: S.emptyBody }, "这里是你这台机器接入协作群的配置。复制下面这段，贴到 profile 的 cordis.patch.yml 里（或让助手帮你改）。"),
-				h(
-					"div",
-					{ style: { display: "flex", flexDirection: "column", gap: "6px" } },
-					h("span", { style: { fontSize: "11px", opacity: 0.7 } }, "网关：" + (settingsFields.gatewayBase || "（未配置）")),
-					h("span", { style: { fontSize: "11px", opacity: 0.7 } }, "你在网关里的名字：" + (settingsFields.agentName || "（未配置）")),
-					h("span", { style: { fontSize: "11px", opacity: 0.7 } }, "插件版本：" + (settingsFields.version || "未知"))
-				),
-				h("pre", { style: { ...S.emptyBody, textAlign: "left", overflowX: "auto", padding: "8px", border: "1px solid rgba(128,128,128,0.3)", borderRadius: "6px" } }, settingsData.yaml || "（配置节尚未生成）"),
-				h(
-					"button",
-					{
-						type: "button",
-						style: { ...S.emptyBody, cursor: "pointer", padding: "4px 8px", border: "1px solid currentColor", borderRadius: "4px" },
-						title: "把配置节复制到剪贴板（密钥已脱敏）",
-						onClick: function () {
-							if (typeof navigator !== "undefined" && navigator !== null && typeof navigator.clipboard === "object"
-								&& typeof navigator.clipboard.writeText === "function") {
-								navigator.clipboard.writeText(settingsData.yaml || "").catch(function () {});
-							}
-						}
-					},
-					"复制配置"
-				),
-				h("p", { style: { fontSize: "10px", opacity: 0.55 } }, "密钥已脱敏，复制不会泄漏。要改配置，把这段贴给助手让它改 cordis.patch.yml。")
-			);
+			const settingsBody = h(SettingsForm, { fields: settingsFields, version: settingsFields.version ?? "" });
 
 			const tabs = PANEL_TABS.map(function (def) {
 				return { id: def.id, label: def.label, icon: def.icon, count: counts[def.id] };
