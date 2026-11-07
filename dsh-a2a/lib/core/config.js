@@ -13,7 +13,7 @@
  * @module dsh-a2a/config
  */
 
-import { existsSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -246,50 +246,111 @@ export function normalizeConfig(raw) {
  * @returns {string} the state directory.
  */
 /**
- * Resolve the state directory: `<base>/a2a`.
+ * Resolve this plugin's state directory: `<DSH home>/a2a`.
  *
- * Precedence is deliberately: configured home → `DSH_HOME` → the stable `~/.dsh` → (only for
- * installs that already have state there) `cwd`.
+ * The precedence MIRRORS the Harness's own rule instead of inventing one. `@deepseek-ai/dsh-home-paths`
+ * documents it as: explicit configured home, then `$DSH_HOME`, then `~/.dsh` — and states that a
+ * blank `DSH_HOME` is treated as unset "so a blank override never resolves the home to the current
+ * working directory".
  *
- * The old implementation fell back to `process.cwd()` before `~/.dsh`, and that is a data-loss
- * bug in disguise: a DSH started WITHOUT `DSH_HOME` in its environment resolves its ledger to
- * whatever directory it happened to be launched from. Restarting from another directory then
- * looks like "all my groups disappeared" — the plugin is not broken, it is reading a different,
- * empty file, and nothing in the UI says so. Measured on a real instance: the live ledger was at
- * `E:\a2a\memberships.json` because that DSH was launched from `E:\`.
+ * This module used to fall back to `process.cwd()`. That was not a harmless default: it split the
+ * plugin's state away from the Harness's state. Measured on a real machine, the live ledger sat at
+ * `E:\a2a\memberships.json` while profiles, sessions and every other file lived under
+ * `~/.dsh` — because that DSH had been launched from `E:\` without `DSH_HOME` exported to
+ * plugins. Two state roots, one of them invisible in the UI, is a data-loss shape: start from a
+ * different directory and the plugin reads an empty ledger and reports that every group is gone.
  *
- * cwd remains a fallback, but only when a ledger already exists there — upgrading the plugin must
- * never orphan the state an existing install is using.
+ * `contextPath` is the Harness's own resolver (`ctx.dshHomePath`), used first when available
+ * because it also honours a configured home that never reaches `process.env`.
  *
  * @param {object} settings - normalized config.
  * @param {NodeJS.ProcessEnv} [env] - environment to read `DSH_HOME` from.
- * @returns {string} absolute-ish directory holding the plugin's durable files.
+ * @param {(...segments: string[]) => string} [contextPath] - `ctx.dshHomePath`, when the host has it.
+ * @returns {string} directory holding the plugin's durable files.
  */
-export function resolveHome(settings, env = process.env) {
+export function resolveHome(settings, env = process.env, contextPath) {
   const configured = settings?.groups?.home ?? '';
   if (configured !== '') return configured;
 
-  const strip = (value) => String(value).replace(/[\\/]+$/, '');
-  const explicit = typeof env.DSH_HOME === 'string' && env.DSH_HOME !== '' ? env.DSH_HOME : undefined;
-  if (explicit !== undefined) return `${strip(explicit)}/a2a`;
+  if (typeof contextPath === 'function') {
+    try {
+      const fromHost = contextPath('a2a');
+      if (typeof fromHost === 'string' && fromHost !== '') return fromHost;
+    } catch {
+      // A host whose resolver throws must not stop the plugin from mounting; fall through to env.
+    }
+  }
 
-  // Legacy installs: an earlier build resolved to `${cwd}/a2a`. Keep finding that state rather
-  // than silently presenting an empty ledger after an upgrade.
-  const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
-  const legacy = `${strip(cwd)}/a2a`;
-  if (existsSync(join(legacy, 'memberships.json'))) return legacy;
+  const strip = (value) => String(value).trim().replace(/[\\/]+$/, '');
+  const explicit = typeof env.DSH_HOME === 'string' ? env.DSH_HOME.trim() : '';
+  if (explicit !== '') return `${strip(explicit)}/a2a`;
 
   return `${strip(homedir())}/.dsh/a2a`;
 }
 
-/** Whether the resolved home came from an unstable source (cwd) and should be pinned in config. */
-export function isHomeUnstable(settings, env = process.env) {
-  const configured = settings?.groups?.home ?? '';
-  if (configured !== '') return false;
-  const explicit = typeof env.DSH_HOME === 'string' && env.DSH_HOME !== '' ? env.DSH_HOME : undefined;
-  if (explicit !== undefined) return false;
-  const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
-  return existsSync(join(`${String(cwd).replace(/[\\/]+$/, '')}/a2a`, 'memberships.json'));
+/**
+ * Move state an older build left in `<cwd>/a2a` into the canonical directory.
+ *
+ * Backward compatibility, not a preference: the old cwd fallback put real credentials in the wrong
+ * place on real machines, and simply changing the default would look like "all my groups vanished".
+ * Runs only when the canonical directory has no ledger yet, never overwrites, and leaves a marker
+ * behind so the old location explains itself instead of looking like a deletion.
+ *
+ * @param {string} target - canonical directory (from {@link resolveHome}).
+ * @param {NodeJS.ProcessEnv} [env] - environment; `DSH_CWD` overrides `process.cwd()` for tests.
+ * @param {(message: string) => void} [log] - receives one line when a migration happens.
+ * @returns {{moved: string[], from: string}|undefined} what was moved, when something was.
+ */
+export function migrateLegacyHome(target, env = process.env, log) {
+  try {
+    if (existsSync(join(target, 'memberships.json'))) return undefined;
+    const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
+    const legacy = `${String(cwd).trim().replace(/[\\/]+$/, '')}/a2a`;
+    if (legacy === target) return undefined;
+    if (!existsSync(join(legacy, 'memberships.json'))) return undefined;
+
+    mkdirSync(target, { recursive: true });
+    const moved = [];
+    for (const name of readdirSync(legacy)) {
+      const from = join(legacy, name);
+      const to = join(target, name);
+      if (existsSync(to)) continue; // never overwrite the canonical copy
+      try {
+        renameSync(from, to);
+        moved.push(name);
+      } catch {
+        // Different volume: fall back to copy + unlink.
+        try {
+          copyFileSync(from, to);
+          unlinkSync(from);
+          moved.push(name);
+        } catch {
+          // Leave it where it is; a partial migration is still better than a lost file.
+        }
+      }
+    }
+    try {
+      writeFileSync(
+        join(legacy, 'MOVED-TO.txt'),
+        `This plugin's state moved to:
+  ${target}
+
+Reason: the old build resolved its state directory from the current working
+directory, which put it outside the Harness home. See dsh-a2a docs/RUNBOOK.md.
+`,
+        'utf8',
+      );
+    } catch {
+      // The marker is a courtesy; failing to write it must not undo the move.
+    }
+    if (typeof log === 'function' && moved.length > 0) {
+      log(`a2a state migrated from ${legacy} to ${target} (${moved.join(', ')})`);
+    }
+    return { moved, from: legacy };
+  } catch {
+    // A migration that throws must leave the plugin mounting against the canonical path.
+    return undefined;
+  }
 }
 /** Coerce to a boolean, falling back when absent. */
 function bool(value, fallback) {

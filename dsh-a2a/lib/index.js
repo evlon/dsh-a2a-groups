@@ -37,7 +37,7 @@ import { readFileSync } from 'node:fs';
  */
 const PANEL_RPC_CHANNEL = '/a2a-panel';
 
-import { DEFAULT_CONFIG, isHomeUnstable, normalizeConfig, resolveHome } from './core/config.js';
+import { DEFAULT_CONFIG, migrateLegacyHome, normalizeConfig, resolveHome } from './core/config.js';
 import { createServer } from './core/server.js';
 import { createBridge } from './core/bridge.js';
 import { createRegistry } from './core/registry.js';
@@ -99,18 +99,16 @@ export function apply(ctx, config) {
   }
 
   const logger = ctx.logger;
-  const home = resolveHome(settings);
-  // Say it out loud when the state directory came from cwd: an operator who restarts DSH from
-  // another directory would otherwise see every group vanish, with nothing to connect the two
-  // facts. The fix is one config line, so name it.
-  if (isHomeUnstable(settings)) {
-    warn(
-      ctx,
-      'a2a state directory resolved from the current working directory (' + home + '); ' +
-        'set groups.home in the profile config to pin it, or starting DSH from another directory will ' +
-        'look like every group disappeared',
-    );
-  }
+  // Resolve against the HARNESS's own home, not the shell's working directory.
+  //
+  // ctx.dshHomePath is the Harness's resolver (declared on the Cordis Context by
+  // @deepseek-ai/dsh-app-boot). Preferring it means this plugin lands beside profiles and sessions
+  // even when the process was started from an unrelated directory — the exact case that once put
+  // the live ledger in `E:\a2a` while everything else was under `~/.dsh`.
+  const home = resolveHome(settings, process.env, ctx.dshHomePath);
+  // One-time adoption of state an older build left in `<cwd>/a2a`, so upgrading does not look like
+  // "every group disappeared".
+  migrateLegacyHome(home, process.env, (line) => info(ctx, line));
   const clock = () => Date.now();
 
   // --- durable state -------------------------------------------------------

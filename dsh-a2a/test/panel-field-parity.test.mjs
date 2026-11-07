@@ -155,10 +155,13 @@ test('群目标可以折叠，且面板刷新会自愈目标缓存', () => {
   assert.ok(HOST_CODE.includes("skill: 'group/goal-status'"), '自愈必须真的去问宿主');
 });
 
-test('状态目录不依赖启动目录', () => {
+test('状态目录跟随宿主 home，而不是启动目录', () => {
   const CONFIG = readFileSync('lib/core/config.js', 'utf8');
-  // process.cwd() may only be a BACKWARD-COMPATIBILITY fallback for installs that already have a
-  // ledger there; it must never be the default for a fresh install.
-  assert.ok(CONFIG.includes('isHomeUnstable'), '必须能报告 home 来源不稳定');
+  const HOST_CODE = readFileSync('lib/index.js', 'utf8');
+  // The Harness rule is configured -> $DSH_HOME -> ~/.dsh. A plugin that invents its own fallback
+  // splits state across two roots; on the machine where this was found the ledger sat in E:\a2a
+  // while every other file was under ~/.dsh.
   assert.ok(CONFIG.includes('homedir()'), '默认应落在 ~/.dsh 而不是当前目录');
+  assert.ok(CONFIG.includes('migrateLegacyHome'), '旧位置的状态必须被接收，不能让升级看起来像群消失了');
+  assert.ok(HOST_CODE.includes('ctx.dshHomePath'), '应优先使用宿主自己的 home 解析器');
 });
