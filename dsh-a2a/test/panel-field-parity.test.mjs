@@ -143,3 +143,22 @@ test('群约定可以在面板里编辑（RPC 与按钮都得在）', () => {
   }
   assert.ok(CLIENT.includes('"set-conventions"'), '客户端必须调用 set-conventions');
 });
+
+test('群目标可以折叠，且面板刷新会自愈目标缓存', () => {
+  // The failure these guard was seen in a live panel: a group WITH an active goal rendered "这个群
+  // 还没有主目标", because the panel reads the ledger and the ledger only learned about a goal when
+  // somebody happened to call a goal tool. Wrong, not missing — the worst kind.
+  assert.ok(CLIENT.includes('role: "goal"'), '群目标必须走可折叠容器');
+  assert.ok(CLIENT.includes('title: "群目标"'), '折叠头部必须写明是群目标');
+  const HOST_CODE = readFileSync('lib/index.js', 'utf8');
+  assert.ok(HOST_CODE.includes('refreshGoalCache'), '面板刷新必须补拉目标');
+  assert.ok(HOST_CODE.includes("skill: 'group/goal-status'"), '自愈必须真的去问宿主');
+});
+
+test('状态目录不依赖启动目录', () => {
+  const CONFIG = readFileSync('lib/core/config.js', 'utf8');
+  // process.cwd() may only be a BACKWARD-COMPATIBILITY fallback for installs that already have a
+  // ledger there; it must never be the default for a fresh install.
+  assert.ok(CONFIG.includes('isHomeUnstable'), '必须能报告 home 来源不稳定');
+  assert.ok(CONFIG.includes('homedir()'), '默认应落在 ~/.dsh 而不是当前目录');
+});

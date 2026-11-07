@@ -13,6 +13,10 @@
  * @module dsh-a2a/config
  */
 
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
 /** Delivery presentations: how an inbound A2A message shows up in a Session. */
 export const PRESENTATIONS = Object.freeze(['notice', 'bubble']);
 
@@ -241,14 +245,52 @@ export function normalizeConfig(raw) {
  * @param {NodeJS.ProcessEnv} [env] - environment to read `DSH_HOME` from.
  * @returns {string} the state directory.
  */
+/**
+ * Resolve the state directory: `<base>/a2a`.
+ *
+ * Precedence is deliberately: configured home → `DSH_HOME` → the stable `~/.dsh` → (only for
+ * installs that already have state there) `cwd`.
+ *
+ * The old implementation fell back to `process.cwd()` before `~/.dsh`, and that is a data-loss
+ * bug in disguise: a DSH started WITHOUT `DSH_HOME` in its environment resolves its ledger to
+ * whatever directory it happened to be launched from. Restarting from another directory then
+ * looks like "all my groups disappeared" — the plugin is not broken, it is reading a different,
+ * empty file, and nothing in the UI says so. Measured on a real instance: the live ledger was at
+ * `E:\a2a\memberships.json` because that DSH was launched from `E:\`.
+ *
+ * cwd remains a fallback, but only when a ledger already exists there — upgrading the plugin must
+ * never orphan the state an existing install is using.
+ *
+ * @param {object} settings - normalized config.
+ * @param {NodeJS.ProcessEnv} [env] - environment to read `DSH_HOME` from.
+ * @returns {string} absolute-ish directory holding the plugin's durable files.
+ */
 export function resolveHome(settings, env = process.env) {
   const configured = settings?.groups?.home ?? '';
   if (configured !== '') return configured;
-  const home = typeof env.DSH_HOME === 'string' && env.DSH_HOME !== '' ? env.DSH_HOME : undefined;
-  const base = home ?? process.cwd();
-  return `${base.replace(/[\\/]+$/, '')}/a2a`;
+
+  const strip = (value) => String(value).replace(/[\\/]+$/, '');
+  const explicit = typeof env.DSH_HOME === 'string' && env.DSH_HOME !== '' ? env.DSH_HOME : undefined;
+  if (explicit !== undefined) return `${strip(explicit)}/a2a`;
+
+  // Legacy installs: an earlier build resolved to `${cwd}/a2a`. Keep finding that state rather
+  // than silently presenting an empty ledger after an upgrade.
+  const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
+  const legacy = `${strip(cwd)}/a2a`;
+  if (existsSync(join(legacy, 'memberships.json'))) return legacy;
+
+  return `${strip(homedir())}/.dsh/a2a`;
 }
 
+/** Whether the resolved home came from an unstable source (cwd) and should be pinned in config. */
+export function isHomeUnstable(settings, env = process.env) {
+  const configured = settings?.groups?.home ?? '';
+  if (configured !== '') return false;
+  const explicit = typeof env.DSH_HOME === 'string' && env.DSH_HOME !== '' ? env.DSH_HOME : undefined;
+  if (explicit !== undefined) return false;
+  const cwd = typeof env.DSH_CWD === 'string' && env.DSH_CWD !== '' ? env.DSH_CWD : process.cwd();
+  return existsSync(join(`${String(cwd).replace(/[\\/]+$/, '')}/a2a`, 'memberships.json'));
+}
 /** Coerce to a boolean, falling back when absent. */
 function bool(value, fallback) {
   return typeof value === 'boolean' ? value : fallback;

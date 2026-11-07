@@ -3561,36 +3561,41 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 				goal === undefined || goal === null
 					? null
 					: h(
-						"div",
-						null,
+						// Collapsible like everything else in this pane: four key paths plus a title is
+						// enough to push the roster off screen, and the roster is what most visits are
+						// for. Open by default — what a group is FOR is the first thing worth reading —
+						// but with a header that survives being collapsed, so the title stays visible.
+						Collapsible,
+						{
+							title: "群目标",
+							summary: [
+								statusLabel,
+								krs.length === 0 ? "" : krs.length + " 条关键路径"
+							].filter(function (part) { return part !== ""; }).join(" · "),
+							role: "goal",
+							initiallyOpen: true
+						},
 						h(
 							"div",
-							{ style: { display: "flex", alignItems: "baseline", gap: "6px" } },
-							h("span", { style: { fontSize: "11px", fontWeight: 600 } }, "群目标"),
-							status === "" ? null : h(
-								"span",
-								{
-									style: {
-										fontSize: "10px", padding: "0 5px", borderRadius: "999px",
-										border: "1px solid rgba(128,128,128,0.45)",
-										opacity: status === "active" ? 0.85 : 0.6
-									}
-								},
-								statusLabel
+							null,
+							h("p", { style: { margin: 0, fontSize: "12px", fontWeight: 600, lineHeight: 1.35 } }, String(goal.title ?? "")),
+							krs.length === 0 ? null : h(
+								"ul",
+								{ style: { margin: "4px 0 0", padding: "0 0 0 16px", fontSize: "11px", lineHeight: 1.5 } },
+								krs.map(function (kr) {
+									return h(
+										"li",
+										{ key: String(kr.id ?? kr.text ?? ""), title: String(kr.text ?? "") },
+										h("span", { style: { opacity: 0.55, marginRight: "4px" } }, String(kr.id ?? "")),
+										String(kr.text ?? "")
+									);
+								})
+							),
+							goal.why === undefined ? null : h(
+								"p",
+								{ style: { margin: "6px 0 0", fontSize: "10px", lineHeight: 1.5, opacity: 0.65 } },
+								String(goal.why)
 							)
-						),
-						h("p", { style: { margin: "3px 0 0", fontSize: "12px", fontWeight: 600, lineHeight: 1.35 } }, String(goal.title ?? "")),
-						krs.length === 0 ? null : h(
-							"ul",
-							{ style: { margin: "4px 0 0", padding: "0 0 0 16px", fontSize: "11px", lineHeight: 1.5 } },
-							krs.map(function (kr) {
-								return h(
-									"li",
-									{ key: String(kr.id ?? kr.text ?? ""), title: String(kr.text ?? "") },
-									h("span", { style: { opacity: 0.55, marginRight: "4px" } }, String(kr.id ?? "")),
-									String(kr.text ?? "")
-								);
-							})
 						)
 					),
 				conventionsText === "" && savedText === null

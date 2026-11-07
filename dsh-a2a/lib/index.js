@@ -37,7 +37,7 @@ import { readFileSync } from 'node:fs';
  */
 const PANEL_RPC_CHANNEL = '/a2a-panel';
 
-import { DEFAULT_CONFIG, normalizeConfig, resolveHome } from './core/config.js';
+import { DEFAULT_CONFIG, isHomeUnstable, normalizeConfig, resolveHome } from './core/config.js';
 import { createServer } from './core/server.js';
 import { createBridge } from './core/bridge.js';
 import { createRegistry } from './core/registry.js';
@@ -100,6 +100,17 @@ export function apply(ctx, config) {
 
   const logger = ctx.logger;
   const home = resolveHome(settings);
+  // Say it out loud when the state directory came from cwd: an operator who restarts DSH from
+  // another directory would otherwise see every group vanish, with nothing to connect the two
+  // facts. The fix is one config line, so name it.
+  if (isHomeUnstable(settings)) {
+    warn(
+      ctx,
+      'a2a state directory resolved from the current working directory (' + home + '); ' +
+        'set groups.home in the profile config to pin it, or starting DSH from another directory will ' +
+        'look like every group disappeared',
+    );
+  }
   const clock = () => Date.now();
 
   // --- durable state -------------------------------------------------------
@@ -1094,6 +1105,55 @@ const setPanelInvite = async (payload) => {
        * @param {object} payload - `{ groupId, sessionId }`.
        * @returns {Promise<object>} the Connection RPC envelope.
        */
+      /**
+       * Fill the ledger's goal cache from the host, when it has none.
+       *
+       * Best effort on purpose: a panel that renders the roster but not the goal is far better than
+       * a refresh that fails outright because one optional skill is unavailable (an older host, a
+       * group that never adopted the organisation layer, a transient network error). So failures
+       * are swallowed here and the caller keeps its successful roster update.
+       *
+       * @param {object} record - ledger entry holding the credential.
+       * @param {string} groupId - group whose goal to fetch.
+       */
+      const refreshGoalCache = async (record, groupId) => {
+        if (record.goal !== undefined) return;
+        try {
+          let state;
+          if (record.local === true) {
+            state = groups.goalStatus({ groupId, member: { personId: record.personId, personKey: record.personKey } });
+          } else {
+            const answer = await bridge.send(
+              {
+                baseUrl: record.baseUrl,
+                apiKey: record.apiKey ?? settings.client.apiKey,
+                forwardProto: settings.client.forwardProto,
+                protocolVersion: settings.client.protocolVersion,
+              },
+              {
+                skill: 'group/goal-status',
+                text: 'goal',
+                data: { groupId, personId: record.personId, personKey: record.personKey },
+                timeoutMs: settings.client.timeoutMs,
+              },
+            );
+            state = answer?.data ?? undefined;
+          }
+          if (state === undefined || state === null) return;
+          const goal = typeof state.goal === 'object' && state.goal !== null ? state.goal : undefined;
+          const conventions = typeof state.conventions === 'string' ? state.conventions : undefined;
+          if (goal === undefined && conventions === undefined) return;
+          identities.upsert({
+            sessionId: record.sessionId,
+            groupId,
+            ...(goal === undefined ? {} : { goal }),
+            ...(conventions === undefined ? {} : { conventions }),
+          });
+        } catch {
+          // Deliberately silent: see the doc comment above.
+        }
+      };
+
       const refreshGroupRoster = async (payload) => {
         const body = payload !== null && typeof payload === 'object' ? payload : {};
         const groupId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
@@ -1167,6 +1227,14 @@ const setPanelInvite = async (payload) => {
             rosterCachedAt: clock(),
             reachable: true,
           });
+
+          // The panel's goal block reads the ledger, and the ledger only used to learn about a goal
+          // when somebody happened to call a goal tool. So a group WITH a goal rendered as "还没有
+          // 主目标" — the worst kind of wrong, because it looks like the feature was never built.
+          // Fetching here makes a refresh self-healing, and only costs a round trip when the answer
+          // is genuinely absent.
+          await refreshGoalCache(record, groupId);
+
           if (typeof identities.flush === 'function') await identities.flush();
 
           return {
@@ -1524,6 +1592,12 @@ function pluginVersion() {
 /** Log one informational line without depending on a particular logger shape. */
 function info(ctx, message) {
   if (typeof ctx.logger?.info === 'function') ctx.logger.info(message);
+}
+
+/** Log one warning line without depending on a particular logger shape. */
+function warn(ctx, message) {
+  if (typeof ctx.logger?.warn === 'function') ctx.logger.warn(message);
+  else if (typeof ctx.logger?.info === 'function') ctx.logger.info(message);
 }
 
 /** One line about an error, without a stack. */
