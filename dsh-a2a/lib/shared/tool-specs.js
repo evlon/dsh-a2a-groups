@@ -513,7 +513,10 @@ export const TOOL_SPECS = Object.freeze([
             'Omit for an ordinary post: it waits for the reader\'s next turn. `urgent` inserts into a turn that is '
             + 'already running, so use it only when waiting for that turn to finish would defeat the message — a '
             + 'correction the reader is about to act on wrongly, a stop order, a changed constraint. It costs the '
-            + 'reader an interrupted step, so an `urgent` that could have waited teaches the group to ignore the level.',
+            + 'reader an interrupted step, so an `urgent` that could have waited teaches the group to ignore the level. '
+            + 'A message that SUPERSEDES an earlier instruction belongs here: without it the older message is the one '
+            + 'they act on first. `urgent` reaches every member\'s running turn regardless of `mentions`, so add '
+            + '`mentions` when you also want specific people named as the ones who must act.',
         },
         replyTo: {
           type: 'integer',

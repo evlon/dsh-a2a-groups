@@ -451,11 +451,23 @@ function describePostReceipt(receipt) {
   const memberCount = Number.isFinite(receipt.memberCount) ? receipt.memberCount : 0;
   const audience = memberCount > 0 ? `全群 ${memberCount} 人可见` : '全群可见';
   const names = Array.isArray(receipt.wokeNames) ? receipt.wokeNames : [];
-  const woke = names.length === 0
-    ? '未唤醒任何人'
-    : memberCount > 0 && names.length >= memberCount
-      ? '唤醒 全群'
-      : `唤醒 ${names.join('、')}`;
+  const allMembers = memberCount > 0 && names.length >= memberCount;
+  /**
+   * `urgent` is a delivery mode, not a mention.
+   *
+   * It steers the post into every member's running turn (`inbox.js`), whether or not anybody was
+   * mentioned — so a receipt that only counts `mentions` reports 「未唤醒任何人」 for a message that
+   * in fact cut in front of everyone. That is the same class of wrong the receipt exists to fix,
+   * so the urgent case gets its own wording rather than being folded into the mention count.
+   */
+  const urgent = receipt.priority === 'urgent';
+  const woke = urgent
+    ? (names.length === 0 ? '插队到全群' : allMembers ? '插队唤醒 全群' : `插队唤醒 ${names.join('、')}`)
+    : names.length === 0
+      ? '未唤醒任何人'
+      : allMembers
+        ? '唤醒 全群'
+        : `唤醒 ${names.join('、')}`;
   const preview = truncate(String(receipt.text ?? ''), 40);
   return `已发到「${name}」· ${audience} · ${woke} · #${receipt.seq}${preview === '' ? '' : ` · 「${preview}」`}`;
 }
@@ -1203,6 +1215,11 @@ function requireSession(sessionId, tool) {
         // Both of these were missing here while the remote branch sent them, so mentioning somebody in a group this
         // instance HOSTS never woke them. The live group is remote, which is why nobody hit it.
         mentions: args.mentions,
+        // `priority` was accepted by the tool schema and then dropped on the floor: the store supports it,
+        // the skill accepts it, and only this line was missing. A caller asking for `urgent` got an
+        // ordinary post and no error — the worst shape a bug can take. Found when a message meant to
+        // supersede an earlier instruction was posted and silently queued behind it.
+        priority: args.priority,
         replyTo: args.replyTo,
       });
       await store.flush();
@@ -1219,6 +1236,7 @@ function requireSession(sessionId, tool) {
           groupId,
           memberCount: membership.memberCount,
           wokeNames: localWoke,
+          priority: args.priority,
           seq: posted.seq,
           text: message,
         }),
@@ -1238,6 +1256,8 @@ function requireSession(sessionId, tool) {
         personKey: membership.personKey,
         text: message,
         mentions: args.mentions,
+        // Same dropped-parameter bug as the local branch above: the skill has always accepted this.
+        priority: args.priority,
         // Resolved on the host, which owns the feed: only it can map a seq to an author.
         replyTo: args.replyTo,
       },
@@ -1258,6 +1278,7 @@ function requireSession(sessionId, tool) {
         groupId,
         memberCount: membership.memberCount,
         wokeNames: remoteWoke,
+        priority: args.priority,
         seq: result.data?.seq ?? 0,
         text: message,
       }),

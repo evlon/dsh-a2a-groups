@@ -81,7 +81,7 @@ function harness(options = {}) {
     bridge: { send: () => { throw new Error('local membership must not reach the bridge'); } },
     logger: { info() {}, warn() {}, error() {} },
   });
-  return { runtime, groupId, ownerId, record, caller: { sessionId: record.sessionId } };
+  return { runtime, store, groupId, ownerId, ownerKey: created.ownerKey, record, caller: { sessionId: record.sessionId } };
 }
 
 test('发群消息的收据说清「哪个群、谁能看见、唤醒了谁」', async () => {
@@ -137,4 +137,30 @@ test('工具块的可见行就是那句收据，且附上正文', async () => {
   const parts = spec.output.render(args, value);
   assert.equal(parts[0].text, value.receipt, '折叠块的第一行必须就是收据');
   assert.ok(parts.some((part) => part.text.includes('正文会出现在第二段')), '展开后要能看到发出去的正文');
+});
+
+test('priority 必须真的送到 store，不能只写在 schema 里', async () => {
+  // Dropped-parameter bug: the schema accepted `urgent`, the store supported it, and the runtime
+  // forwarded neither — so a message meant to supersede an earlier instruction queued politely
+  // behind it and the caller had no way to tell.
+  const { runtime, store, groupId, ownerId, ownerKey } = harness();
+  const value = await runtime.call(
+    'a2a_group_post',
+    { groupId, message: '覆盖前指令', priority: 'urgent' },
+    { sessionId: 's-owner' },
+  );
+  assert.ok(value.receipt.includes('插队'), `urgent 的收据必须说明插队，实际：${value.receipt}`);
+
+  // And the store must have recorded it, not just the receipt.
+  const snapshot = store.snapshot({ groupId, member: { personId: ownerId, personKey: ownerKey } });
+  const mine = (snapshot.feedTail ?? []).find((entry) => entry.text === '覆盖前指令');
+  assert.ok(mine !== undefined, '刚发的消息必须在 feed 里');
+  assert.equal(mine.priority, 'urgent', '落盘的条目必须带 priority');
+});
+
+test('urgent 且未点名时，收据写「插队到全群」而不是「未唤醒任何人」', async () => {
+  const { runtime, groupId } = harness();
+  const value = await runtime.call('a2a_group_post', { groupId, message: '通知', priority: 'urgent' }, { sessionId: 's-owner' });
+  assert.ok(!value.receipt.includes('未唤醒任何人'), `不能把插队说成没唤醒，实际：${value.receipt}`);
+  assert.ok(value.receipt.includes('插队到全群'), `实际：${value.receipt}`);
 });
