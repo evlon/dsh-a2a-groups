@@ -3491,6 +3491,102 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 		}
 
 		/**
+		 * A horizontal row of section tabs with one body visible at a time.
+		 *
+		 * Replaces a vertical stack of collapsibles. Three stacked headers cost ~60px even fully
+		 * collapsed, and opening the long one pushed the other two out of reach — so the pane scrolled
+		 * for reasons that had nothing to do with what the reader came for.
+		 *
+		 * Why tabs and NOT three side-by-side columns: the pane is 580px in a 1280 window, so a third
+		 * of it is ~190px. The longest standing rule is a single 90-character Chinese sentence, which
+		 * would wrap to roughly twenty lines in a 190px column — one rule filling half the pane. Tabs
+		 * keep full width for the one body that is open.
+		 *
+		 * Only one body renders at a time (this is an accordion, not a checkbox set): the cost is that
+		 * two sections cannot be read side by side, and the benefit is that no section pushes another
+		 * off screen.
+		 *
+		 * @param {object} props - `{ tabs: Array<{ id, title, hint?, content }>, initial?: string }`.
+		 */
+		function SectionTabs(props) {
+			const tabs = Array.isArray(props?.tabs) ? props.tabs : [];
+			const [active, setActive] = react.useState(typeof props?.initial === "string" ? props.initial : (tabs[0]?.id ?? ""));
+			if (tabs.length === 0) return null;
+			// An empty `initial` means "no body open", which matters for a group with neither a goal nor
+			// conventions: rendering the confirmation form there would put a settings form above the
+			// roster, the most-read part of this pane.
+			const requested = tabs.find(function (tab) { return tab.id === active; });
+			// A selected tab can disappear between renders (a goal closed, conventions cleared). When
+			// that happens fall back to the first tab rather than dropping the body entirely; an
+			// explicit "nothing open" stays nothing open.
+			const current = requested ?? (active === "" ? undefined : tabs[0]);
+			return h(
+				"div",
+				{
+					"data-role": "section-tabs",
+					// The bottom rule separates this block from the roster below it. Without it the goal's
+					// key-results list ran straight into "@ 所有人" and read as if those rows were members.
+					// The top margin is what marks the tab bar as NAVIGATION for the group above it
+					// rather than as another line of that group's text.
+					style: { margin: "12px 0 6px", paddingBottom: "8px", borderBottom: "1px solid rgba(128,128,128,0.18)" }
+				},
+				h(
+					"div",
+					{
+						role: "tablist",
+						style: {
+							display: "flex", gap: "6px", borderBottom: "1px solid rgba(128,128,128,0.25)"
+						}
+					},
+					tabs.map(function (tab) {
+						const selected = current !== undefined && tab.id === current.id;
+						return h(
+							"button",
+							{
+								key: tab.id,
+								type: "button",
+								role: "tab",
+								"aria-selected": selected ? "true" : "false",
+								"data-role": "tab-" + tab.id,
+								title: typeof tab.hint === "string" ? tab.hint : undefined,
+								// Clicking the open tab does nothing. An earlier version treated it as
+								// "collapse", which left three grey labels over empty space — it reads as a
+								// rendering failure, not as a state. The single-tab case starts closed via
+								// `initial: ""`; once opened it stays open.
+								onClick: function () { if (!selected) setActive(tab.id); },
+								style: {
+									padding: "5px 10px", border: "none", background: "transparent",
+									color: "inherit", font: "inherit", fontSize: "11px",
+									// Bold + a 2px underline is enough to say "this is the open view". A tinted
+									// background was tried first and read as a tag/badge rather than a tab.
+									fontWeight: selected ? 600 : 400,
+									opacity: selected ? 1 : 0.6, cursor: "pointer",
+									// The underline is the whole selected-state affordance; a background
+									// swap reads as a hover on some themes.
+									borderBottom: selected ? "2px solid currentColor" : "2px solid transparent",
+									marginBottom: "-1px"
+								}
+							},
+							tab.title
+						);
+					})
+				),
+				current === undefined
+					? null
+					: h(
+						"div",
+						{
+							role: "tabpanel",
+							// A little inset so the body reads as belonging to the selected tab rather than
+							// as a sibling of the group name above it.
+							style: { marginTop: "8px", padding: "0 2px" }
+						},
+						current.content
+					)
+			);
+		}
+
+		/**
 		 * The group's goal, key paths and standing rules.
 		 *
 		 * This is the reason the organisation layer exists, and it was invisible in the UI for exactly
@@ -3541,115 +3637,116 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					setNote(result.message);
 				}
 			};
-			if ((goal === undefined || goal === null) && conventions === "") {
-				// No goal yet: say so plainly rather than rendering an empty box. A blank area reads as
-				// a loading failure; a sentence reads as a state.
-				return h(
-					"p",
-					{ style: { margin: "6px 0 2px", fontSize: "11px", opacity: 0.6 } },
-					"这个群还没有主目标（群主可发布）"
-				);
-			}
 			const krs = goal !== undefined && goal !== null && Array.isArray(goal.krs) ? goal.krs : [];
 			const status = goal !== undefined && goal !== null && typeof goal.status === "string" ? goal.status : "";
 			const statusLabel = status === "active" ? "进行中"
 				: status === "suspended" ? "已挂起"
 					: status === "closed" ? "已结束" : status;
-			return h(
+
+			// One body per tab, assembled here so the tab bar can be built from what actually exists
+			// instead of rendering an empty tab for a section this group never adopted. Built lazily —
+			// a group with no goal still renders this pane, and reading `goal.title` unconditionally
+			// threw for exactly that case.
+			const goalBody = goal === undefined || goal === null ? null : h(
 				"div",
-				{ "data-role": "goal", style: { margin: "6px 0 4px" } },
-				goal === undefined || goal === null
-					? null
-					: h(
-						// Collapsible like everything else in this pane: four key paths plus a title is
-						// enough to push the roster off screen, and the roster is what most visits are
-						// for. Open by default — what a group is FOR is the first thing worth reading —
-						// but with a header that survives being collapsed, so the title stays visible.
-						Collapsible,
-						{
-							title: "群目标",
-							summary: [
-								statusLabel,
-								krs.length === 0 ? "" : krs.length + " 条关键路径"
-							].filter(function (part) { return part !== ""; }).join(" · "),
-							role: "goal",
-							initiallyOpen: true
-						},
-						h(
-							"div",
-							null,
-							h("p", { style: { margin: 0, fontSize: "12px", fontWeight: 600, lineHeight: 1.35 } }, String(goal.title ?? "")),
-							krs.length === 0 ? null : h(
-								"ul",
-								{ style: { margin: "4px 0 0", padding: "0 0 0 16px", fontSize: "11px", lineHeight: 1.5 } },
-								krs.map(function (kr) {
-									return h(
-										"li",
-										{ key: String(kr.id ?? kr.text ?? ""), title: String(kr.text ?? "") },
-										h("span", { style: { opacity: 0.55, marginRight: "4px" } }, String(kr.id ?? "")),
-										String(kr.text ?? "")
-									);
-								})
-							),
-							goal.why === undefined ? null : h(
-								"p",
-								{ style: { margin: "6px 0 0", fontSize: "10px", lineHeight: 1.5, opacity: 0.65 } },
-								String(goal.why)
-							)
-						)
-					),
-				conventionsText === "" && savedText === null
-					? null
-					: h(
-						Collapsible,
-						{
-							title: "群约定",
-							summary: conventionsText.split("\n").filter(function (line) { return line.trim() !== ""; }).length + " 行",
-							role: "conventions"
-						},
-						editing
-							? h(
-								"div",
-								{ "data-role": "conventions-editor" },
-								h("textarea", {
-									value: draft,
-									rows: 10,
-									"aria-label": "群约定正文",
-									onInput: function (event) { setDraft(event.target.value); },
-									style: {
-										width: "100%", boxSizing: "border-box", padding: "6px 8px",
-										font: "inherit", fontSize: "11px", lineHeight: 1.5,
-										border: "1px solid rgba(128,128,128,0.4)", borderRadius: "4px",
-										background: "transparent", color: "inherit", colorScheme: "light dark"
-									}
-								}),
-								h(
-									"div",
-									{ style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } },
-									h("button", { type: "button", "data-role": "conventions-save", disabled: saving, onClick: onSave, style: actionStyle }, saving ? "保存中…" : "保存"),
-									h("button", { type: "button", "data-role": "conventions-reset", disabled: saving, onClick: onReset, style: actionStyle }, "恢复默认"),
-									h("button", { type: "button", "data-role": "conventions-cancel", disabled: saving, onClick: function () { setEditing(false); setNote(""); }, style: actionStyle }, "取消")
-								),
-								h("p", { style: { margin: "6px 0 0", fontSize: "10px", opacity: 0.6 } }, "保存后成为本群自定义版本，不再跟随默认规则的后续更新。要回到内置规则点「恢复默认」。"),
-								note === "" ? null : h("p", { style: { margin: "4px 0 0", fontSize: "10px", opacity: 0.8 } }, note)
-								)
-							: h(
-								"div",
-								null,
-								h("pre", {
-									style: {
-										margin: 0, padding: "6px 8px", whiteSpace: "pre-wrap", wordBreak: "break-word",
-										fontSize: "11px", lineHeight: 1.5, fontFamily: "inherit",
-										background: "rgba(128,128,128,0.08)", borderRadius: "4px"
-									}
-								}, conventionsText),
-								h("div", { style: { display: "flex", gap: "6px", marginTop: "6px", alignItems: "center" } },
-									h("button", { type: "button", "data-role": "conventions-edit", onClick: onStartEdit, style: actionStyle }, "编辑"),
-									note === "" ? null : h("span", { style: { fontSize: "10px", opacity: 0.8 } }, note)
-								)
-								)
-							)
+				null,
+				h("p", { style: { margin: 0, fontSize: "12px", fontWeight: 600, lineHeight: 1.35 } }, String(goal.title ?? "")),
+				krs.length === 0 ? null : h(
+					"ul",
+					{ style: { margin: "4px 0 0", padding: "0 0 0 16px", fontSize: "11px", lineHeight: 1.5 } },
+					krs.map(function (kr) {
+						return h(
+							"li",
+							{ key: String(kr.id ?? kr.text ?? ""), title: String(kr.text ?? "") },
+							h("span", { style: { opacity: 0.55, marginRight: "4px" } }, String(kr.id ?? "")),
+							String(kr.text ?? "")
+						);
+					})
+				),
+				goal.why === undefined ? null : h(
+					"p",
+					{ style: { margin: "6px 0 0", fontSize: "10px", lineHeight: 1.5, opacity: 0.65 } },
+					String(goal.why)
+				)
 			);
+
+			const conventionsBody = editing
+				? h(
+					"div",
+					{ "data-role": "conventions-editor" },
+					h("textarea", {
+						value: draft,
+						rows: 10,
+						"aria-label": "群约定正文",
+						onInput: function (event) { setDraft(event.target.value); },
+						style: {
+							width: "100%", boxSizing: "border-box", padding: "6px 8px",
+							font: "inherit", fontSize: "11px", lineHeight: 1.5,
+							border: "1px solid rgba(128,128,128,0.4)", borderRadius: "4px",
+							background: "transparent", color: "inherit", colorScheme: "light dark"
+						}
+					}),
+					h(
+						"div",
+						{ style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } },
+						h("button", { type: "button", "data-role": "conventions-save", disabled: saving, onClick: onSave, style: actionStyle }, saving ? "保存中…" : "保存"),
+						h("button", { type: "button", "data-role": "conventions-reset", disabled: saving, onClick: onReset, style: actionStyle }, "恢复默认"),
+						h("button", { type: "button", "data-role": "conventions-cancel", disabled: saving, onClick: function () { setEditing(false); setNote(""); }, style: actionStyle }, "取消")
+					),
+					h("p", { style: { margin: "6px 0 0", fontSize: "10px", opacity: 0.6 } }, "保存后成为本群自定义版本，不再跟随默认规则的后续更新。要回到内置规则点「恢复默认」。"),
+					note === "" ? null : h("p", { style: { margin: "4px 0 0", fontSize: "10px", opacity: 0.8 } }, note)
+				)
+				: h(
+					"div",
+					null,
+					h("pre", {
+						style: {
+							margin: 0, padding: "6px 8px", whiteSpace: "pre-wrap", wordBreak: "break-word",
+							fontSize: "11px", lineHeight: 1.5, fontFamily: "inherit",
+							background: "rgba(128,128,128,0.08)", borderRadius: "4px"
+						}
+					}, conventionsText),
+					h("div", { style: { display: "flex", gap: "6px", marginTop: "6px", alignItems: "center" } },
+						h("button", { type: "button", "data-role": "conventions-edit", onClick: onStartEdit, style: actionStyle }, "编辑"),
+						note === "" ? null : h("span", { style: { fontSize: "10px", opacity: 0.8 } }, note)
+					)
+				);
+
+			const tabs = [];
+			if (goal !== undefined && goal !== null) {
+				tabs.push({
+					id: "goal",
+					title: "群目标",
+					hint: [statusLabel, krs.length === 0 ? "" : krs.length + " 条关键路径"]
+						.filter(function (part) { return part !== ""; }).join(" · "),
+					content: goalBody
+				});
+			}
+			if (conventionsText !== "" || savedText !== null) {
+				tabs.push({
+					id: "conventions",
+					title: "群约定",
+					hint: conventionsText.split("\n").filter(function (line) { return line.trim() !== ""; }).length + " 行",
+					content: conventionsBody
+				});
+			}
+			// Confirmation policy lives here rather than beside the roster: it is the third thing about
+			// a group's terms of engagement, and set once. It used to take the most vertical space in
+			// the pane while the roster got the least.
+			tabs.push({ id: "confirm", title: "人工确认", content: h(ConfirmSettings, { sessionId: sessionId }) });
+
+			if (tabs.length === 1) {
+				// Neither a goal nor conventions: say so plainly. The remaining tab is the confirmation
+				// policy, and it opens CLOSED — a settings form rendered by default here would sit above
+				// the roster, which is the part of this pane people actually read.
+				return h(
+					"div",
+					{ "data-role": "goal", style: { margin: "6px 0 2px" } },
+					h("p", { style: { margin: "0 0 4px", fontSize: "11px", opacity: 0.6 } }, "这个群还没有主目标（群主可发布）"),
+					h(SectionTabs, { tabs: tabs, initial: "" })
+				);
+			}
+			return h("div", { "data-role": "goal" }, h(SectionTabs, { tabs: tabs, initial: tabs[0].id }));
 		}
 
 		/**
@@ -4349,16 +4446,6 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 					})
 					: null,
 				inviteRow(),
-				// Confirmation policy lives with the roster because that is where the person already is when they think
-				// about how this group should behave.
-				// Set once, never touched again — and it used to take the most vertical space in the pane
-				// while the roster got the least. Collapsed by default: the roster is read every time,
-				// this policy is read when it is being changed.
-				h(
-					Collapsible,
-					{ title: "人工确认", role: "confirm-settings" },
-					h(ConfirmSettings, { sessionId: sessionId })
-				),
 				inviteOpen
 					? h(InviteDialog, {
 							candidates: invitable,

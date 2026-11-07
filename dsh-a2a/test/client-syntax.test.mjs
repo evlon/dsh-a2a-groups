@@ -210,10 +210,13 @@ function findAll(node, sink = []) {
 
 /** Every `<button>` in a stub tree, in document order. */
 function buttonsOf(tree) {
-	// Roster rows only. The refresh control is also a <button> but it is not a member, and folding it in made every
-	// ordering assertion read one row too many.
+	// Roster rows only. Three other kinds of <button> live in this pane and none is a member: the
+	// refresh control, the section tabs (群目标 / 群约定 / 人工确认), and the conventions
+	// edit/save/reset actions. Folding any of them in made every ordering assertion read rows that
+	// are not people.
+	const decoys = new Set(["refresh", "tab-goal", "tab-conventions", "tab-confirm", "conventions-edit", "conventions-save", "conventions-reset", "conventions-cancel"]);
 	const buttons = findAll(tree).filter(
-		(element) => element.type === "button" && element.props["data-role"] !== "refresh",
+		(element) => element.type === "button" && !decoys.has(element.props["data-role"]),
 	);
 	// The tree above is flattened depth-first, which is document order for this renderer.
 	return buttons;

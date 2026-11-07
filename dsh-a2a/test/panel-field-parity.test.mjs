@@ -144,12 +144,18 @@ test('群约定可以在面板里编辑（RPC 与按钮都得在）', () => {
   assert.ok(CLIENT.includes('"set-conventions"'), '客户端必须调用 set-conventions');
 });
 
-test('群目标可以折叠，且面板刷新会自愈目标缓存', () => {
+test('群目标可切换查看，且面板刷新会自愈目标缓存', () => {
   // The failure these guard was seen in a live panel: a group WITH an active goal rendered "这个群
   // 还没有主目标", because the panel reads the ledger and the ledger only learned about a goal when
   // somebody happened to call a goal tool. Wrong, not missing — the worst kind.
-  assert.ok(CLIENT.includes('role: "goal"'), '群目标必须走可折叠容器');
-  assert.ok(CLIENT.includes('title: "群目标"'), '折叠头部必须写明是群目标');
+  //
+  // The three sections moved from stacked collapsibles to one horizontal tab bar: stacked headers
+  // cost ~60px even collapsed, and the long one pushed the others out of reach. Side-by-side columns
+  // were rejected — the pane is 580px, so a third of it cannot hold a 90-character Chinese rule.
+  assert.ok(CLIENT.includes('function SectionTabs('), '三段必须走横向 tab 容器');
+  assert.ok(CLIENT.includes('title: "群目标"'), '标签必须写明是群目标');
+  assert.ok(CLIENT.includes('title: "群约定"'), '标签必须写明是群约定');
+  assert.ok(CLIENT.includes('title: "人工确认"'), '标签必须写明是人工确认');
   const HOST_CODE = readFileSync('lib/index.js', 'utf8');
   assert.ok(HOST_CODE.includes('refreshGoalCache'), '面板刷新必须补拉目标');
   assert.ok(HOST_CODE.includes("skill: 'group/goal-status'"), '自愈必须真的去问宿主');
