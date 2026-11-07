@@ -555,6 +555,65 @@ const PANEL_FEED_TAIL = 8;
     }
   };
 
+  /**
+   * The a2a config section, rendered as paste-ready YAML for the panel's 「设置」 tab.
+   *
+   * A colleague who has the plugin installed but not wired up does not know where the cordis.patch.yml file is; asking
+   * them to find it is homework. The tab shows the exact section for THIS instance, so they can copy it, or read the
+   * three fields a human actually cares about (gateway, agent name, key) without opening any file.
+   *
+   * The API key is a secret, so it is masked in the YAML text — a full copy must never leak it by accident. The
+   * structured `fields` below carries the real values the panel decides how to display (masked or not).
+   */
+  const renderConfigSection = () => {
+    const groups = settings.groups ?? {};
+    const client = settings.client ?? {};
+    const server = settings.server ?? {};
+    // The section a colleague pastes into cordis.patch.yml. Deliberately matches the /setup page's shape so the two
+    // entry points cannot drift apart.
+    const yaml = [
+      '- id: a2a',
+      '  name: dsh-a2a-groups',
+      '  config:',
+      '    groups:',
+      '      enabled: true',
+      '      gatewayBase: ' + (groups.gatewayBase ?? ''),
+      '      agentName: ' + (groups.agentName ?? ''),
+      '    client:',
+      '      enabled: true',
+      // The key is masked here; the real value is in `fields.apiKey` and shown masked in the UI too.
+      '      apiKey: ' + maskSecret(client.apiKey ?? ''),
+      '      gatewayBase: ' + (client.gatewayBase ?? ''),
+      '      forwardProto: ' + (client.forwardProto === '' ? 'http' : client.forwardProto),
+      '    server:',
+      '      enabled: ' + (server.enabled !== false),
+      '      publicUrl: ' + (server.publicUrl ?? ''),
+      '      token: ' + (typeof server.token === 'string' && server.token !== '' ? '<已配置，不展示>' : ''),
+      '    tools: true',
+      '    promptSection: true',
+    ].join('\n');
+
+    return {
+      yaml,
+      fields: {
+        gatewayBase: groups.gatewayBase ?? '',
+        agentName: groups.agentName ?? '',
+        apiKey: client.apiKey ?? '',
+        home: groups.home ?? '',
+        serverEnabled: server.enabled !== false,
+        publicUrl: server.publicUrl ?? '',
+        version: pluginVersion(),
+      },
+    };
+  };
+
+  /** Mask a secret so a copy-paste of the config never leaks it. */
+  function maskSecret(value) {
+    if (typeof value !== 'string' || value === '') return '';
+    if (value.length <= 8) return '****';
+    return value.slice(0, 4) + '****' + value.slice(-4);
+  }
+
   const publishGroups = () => {
     try {
       const rows = [];
@@ -826,6 +885,9 @@ const PANEL_FEED_TAIL = 8;
           }
         })(),
         unreadTotal: rows.reduce((sum, row) => sum + row.unreadCount, 0),
+        // The paste-ready config section, for the 「设置」 tab. Rendered here so the page holds no plugin code, just
+        // the text it is allowed to show.
+        settings: renderConfigSection(),
       };
     } catch (error) {
       // A panel with no data shows its empty state; it must never be a mount
