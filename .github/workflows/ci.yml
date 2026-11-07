@@ -103,8 +103,30 @@ jobs:
 
       # `--access public` is required for a scoped package on first publish; publishConfig sets it too,
       # so this is belt-and-braces for the case where publishConfig is dropped by mistake.
+      #
+      # Provenance is attempted first, then dropped if the transparency log is unavailable. Reason: on
+      # 2026-11-07 sigstore's Rekor returned 500 for ~40 minutes, and `--provenance` turns that into a
+      # hard publish failure — the package is fully built and verified, yet nothing ships because a
+      # third-party service is down. The attestation is valuable but it is not worth blocking a release
+      # on someone else's outage, and a version number cannot be retried later.
+      #
+      # When the fallback is used the run is marked so the missing attestation is visible rather than
+      # silently accepted: the summary line and a `::warning::` both say so.
       - name: publish
-        run: npm publish --access public --provenance
+        run: |
+          set -o pipefail
+          if npm publish --access public --provenance 2>&1 | tee /tmp/publish.log; then
+            echo "published with provenance" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if grep -q 'TLOG_CREATE_ENTRY_ERROR\|transparency log' /tmp/publish.log; then
+            echo "::warning::sigstore transparency log unavailable — publishing WITHOUT provenance attestation"
+            echo "published WITHOUT provenance: sigstore Rekor was unavailable" >> "$GITHUB_STEP_SUMMARY"
+            npm publish --access public --provenance=false
+            exit 0
+          fi
+          echo "publish failed for a reason unrelated to the transparency log; not retrying" >&2
+          exit 1
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
