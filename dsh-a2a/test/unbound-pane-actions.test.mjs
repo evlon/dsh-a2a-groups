@@ -24,6 +24,7 @@ import { test } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 const CLIENT = readFileSync('client.js', 'utf8');
+const HOST = readFileSync('lib/index.js', 'utf8');
 
 test('the unbound pane has a 「新建一个群」 button that fills the composer', () => {
   // The button text is the visible label; the onClick must call replaceDraft with a2a_group_create.
@@ -56,4 +57,20 @@ test('the rejoin instruction no longer over-claims "no invite needed"', () => {
     !/不需要邀请链接/.test(body),
     'it must not claim no link is needed, because a fresh instance does need one',
   );
+});
+
+test('the panel has a 设置 tab and renders the config section', () => {
+  // A colleague with the plugin but no wiring cannot find cordis.patch.yml. The 设置 tab must exist and show the
+  // paste-ready config section, with a MASKED key (never the plaintext).
+  assert.match(CLIENT, /\{ id: "settings", label: "设置"/u, 'the 设置 tab must be defined');
+  assert.match(CLIENT, /tab === "settings" \? settingsBody/u, 'selecting 设置 must render its body');
+  assert.match(CLIENT, /settingsData\.yaml/u, 'the body must show the config YAML');
+  assert.match(CLIENT, /复制配置/u, 'a copy button must exist');
+});
+
+test('the Host renders the config section with a masked key', () => {
+  // The section travels into the snapshot as text, with the apiKey masked at the source — so even a stray
+  // screenshot of the panel cannot leak the secret.
+  assert.match(HOST, /maskSecret\(client\.apiKey/u, 'the Host must mask the key before publishing it');
+  assert.match(HOST, /settings: renderConfigSection\(\)/u, 'the section must be published with the snapshot');
 });
