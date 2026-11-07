@@ -618,6 +618,8 @@ return {
             // `urgent` is delivered into a running turn rather than queued behind it; `control`
             // is owner-only and pauses delivery. See MESSAGE-PRIORITY.md.
             priority: data.priority,
+            // Attachment references, already validated by the store against this group's published files.
+            attachments: data.attachments,
             // The recipient of a reply is derived from the message being answered, never reconstructed by the
             // replier. See `post` in groups.js.
             replyTo: data.replyTo,
@@ -703,6 +705,9 @@ return {
                 // field is not forwarded here, so a pause stored only there would never reach
                 // the members it is supposed to silence.
                 control: entry.control,
+                // The attachment references a message carries. Metadata only — the bytes are fetched with
+                // group/file-get, so a reader can render "附件：报告.pdf" without downloading anything.
+                attachments: Array.isArray(entry.attachments) ? entry.attachments.map((item) => ({ ...item })) : undefined,
                 kind: entry.kind,
                 text: entry.text,
               })),
@@ -1306,6 +1311,9 @@ return {
           rootSeq: Number.isInteger(entry.rootSeq) ? entry.rootSeq : undefined,
           priority: entry.priority,
           control: entry.control,
+          // The DELIVERY path uses this mapper (wait/subscribe). Attachment references must survive
+          // here too, or a message would carry them when read and lose them when pushed.
+          attachments: Array.isArray(entry.attachments) ? entry.attachments.map((item) => ({ ...item })) : undefined,
           kind: entry.kind,
           text: entry.text,
         });
@@ -1508,6 +1516,125 @@ return {
             reset: data.reset,
           });
           return { text: 'conventions updated', meta: result };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/file-put',
+      name: "Open an attachment upload",
+      description:
+        'Declare a file and get the chunk plan back. The caller must then send every chunk through '
+        + "group/file-chunk and call group/file-finish. Nothing is visible to other members until the digest is"
+        + ' verified, so a sender that dies halfway leaves no half-openable file.',
+      examples: ['Send this report to the group'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const opened = store.fileBegin({
+            groupId,
+            member,
+            name: data.name,
+            size: data.size,
+            sha256: data.sha256,
+            mime: data.mime,
+          });
+          return { text: 'upload opened', meta: opened };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/file-chunk',
+      name: 'Send one attachment chunk',
+      description:
+        'Send one slice of an open upload. Chunks may arrive in any order and a retry of the same index is '
+        + 'harmless: it overwrites itself rather than appending.',
+      examples: ['Send chunk 3'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.fileChunk({
+            groupId,
+            member,
+            fileId: data.fileId,
+            index: data.index,
+            data: data.data,
+          });
+          return { text: 'chunk received', meta: result };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/file-finish',
+      name: 'Finish and publish an attachment',
+      description:
+        'Assemble the chunks, verify the declared sha256, and publish. This is the moment the file becomes '
+        + 'readable by anyone in the group; before it, the parts are invisible.',
+      examples: ['Finish uploading the report'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = await store.fileFinish({ groupId, member, fileId: data.fileId });
+          return { text: 'attachment published', meta: result };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/file-get',
+      name: 'Download one attachment chunk',
+      description:
+        'Read a chunk of a published attachment. Any member of the group may read any of its files; a caller '
+        + 'outside the group cannot resolve the group at all.',
+      examples: ['Download the report'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const chunk = await store.fileRead({ groupId, member, fileId: data.fileId, index: data.index });
+          return { text: 'chunk', meta: chunk };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/file-list',
+      name: 'List the group attachments',
+      description: 'Every attachment this group still holds, plus how many bytes they occupy.',
+      examples: ['What files are in this group?'],
+      async run(input) {
+        const { groupId, member } = requireMember(input);
+        try {
+          const listing = store.fileList({ groupId, member });
+          return { text: `${listing.files.length} attachment(s)`, meta: listing };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/file-delete',
+      name: 'Delete an attachment',
+      description:
+        'Remove one attachment from the group. The uploader or the owner. Messages that cited it keep the '
+        + 'metadata, so they still read correctly and simply point at something no longer downloadable.',
+      examples: ['Delete that file, it had the wrong numbers'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.fileRemove({ groupId, member, fileId: data.fileId });
+          return { text: 'attachment deleted', meta: result };
         } catch (error) {
           refuse(error);
         }

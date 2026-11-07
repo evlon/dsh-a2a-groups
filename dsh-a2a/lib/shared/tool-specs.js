@@ -1607,6 +1607,128 @@ topic: ${value.topic}`),
     runtime: 'a2a_goal_emergency',
   },
   {
+    name: 'a2a_group_file_send',
+    description:
+      'Send ONE file from this machine into a group, and post a message that references it. The file is uploaded '
+      + 'to the group host in chunks, its sha256 is verified there, and only then does it become downloadable by the '
+      + 'other members — so a transfer that dies halfway leaves nothing anybody can open. Max 10 MiB per file, 200 MiB '
+      + 'per group; older files are pruned on the group\'s retention window, the same one the message feed uses. The '
+      + 'recipients get a reference (name, size, sha256), not the bytes: they call a2a_group_file_get to fetch it.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        path: { type: 'string', description: 'Absolute path of the local file to send. It is read, not modified.' },
+        message: { type: 'string', description: 'Text to post with the attachment. Omit to post just the file and its name.' },
+        mentions: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Who should ACT on this, same semantics as a2a_group_post. Omit for ordinary sharing.',
+        },
+      },
+      required: ['groupId', 'path'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          fileId: { type: 'string' },
+          name: { type: 'string' },
+          size: { type: 'integer' },
+          sha256: { type: 'string' },
+          seq: { type: 'integer' },
+          chunks: { type: 'integer' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `Sent «${value.name}» (${Math.max(1, Math.round((value.size ?? 0) / 1024))} KiB) to the group in ${value.chunks ?? 1} chunk(s).\n`
+          + `posted as seq ${value.seq}; fileId ${value.fileId}\n`
+          + 'This means the file is stored and the message is in the feed — NOT that anyone has opened it yet.',
+      }],
+    },
+    runtime: 'a2a_group_file_send',
+  },
+  {
+    name: 'a2a_group_file_get',
+    description:
+      'Download ONE attachment from a group to this machine. The host verifies nothing at this end, so this tool '
+      + 'recomputes the sha256 after assembling the chunks and REFUSES to write the file when it does not match — a '
+      + 'corrupted transfer that silently succeeds is worse than one that fails. Pass the fileId from the message that '
+      + 'references the attachment.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        fileId: { type: 'string', description: 'The attachment id from the attachments list of the message that references it.' },
+        path: { type: 'string', description: 'Where to write the file. An existing file is NOT overwritten unless overwrite is true.' },
+        overwrite: { type: 'boolean', description: 'Allow replacing an existing file at path. Defaults to false.' },
+      },
+      required: ['groupId', 'fileId', 'path'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          fileId: { type: 'string' },
+          path: { type: 'string' },
+          name: { type: 'string' },
+          size: { type: 'integer' },
+          sha256: { type: 'string' },
+          chunks: { type: 'integer' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `Saved «${value.name}» to ${value.path} (${Math.max(1, Math.round((value.size ?? 0) / 1024))} KiB, ${value.chunks ?? 1} chunk(s)).\n`
+          + 'sha256 verified against what the sender declared.',
+      }],
+    },
+    runtime: 'a2a_group_file_get',
+  },
+  {
+    name: 'a2a_group_file_list',
+    description:
+      'List the attachments a group still holds, with their sizes and how much of the quota is used. Use it before '
+      + 'sending something large, and to find the fileId of an attachment whose message has scrolled away.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          files: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          usedBytes: { type: 'integer' },
+        },
+      },
+      render: (args, value) => {
+        const files = Array.isArray(value.files) ? value.files : [];
+        if (files.length === 0) return [{ type: 'text', text: 'This group holds no attachments.' }];
+        const lines = files.map((file) => `  ${file.fileId}  ${Math.max(1, Math.round((file.size ?? 0) / 1024))} KiB  ${file.name}`);
+        return [{
+          type: 'text',
+          text: `${files.length} attachment(s), ${Math.max(1, Math.round((value.usedBytes ?? 0) / 1024))} KiB used:\n`
+            + lines.join('\n'),
+        }];
+      },
+    },
+    runtime: 'a2a_group_file_list',
+  },
+  {
     name: 'a2a_group_control',
     description:
       'Pause or resume THIS GROUP\'s delivery. Owner only. While paused, ordinary posts still go into the feed for anyone who looks, but they wake nobody — so the group goes quiet without anything being lost. This is a state, not a message, and that is the point: the failure it fixes is a "stop talking" post that everybody honoured, after which four later requests for input were silently swallowed because nobody remembered to lift it — including whoever set it. There is deliberately no auto-expiry: a group that believes it is paused while it is not is worse than one paused too long. Always read the returned state back; do not assume your call landed.',

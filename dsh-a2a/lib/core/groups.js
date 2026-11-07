@@ -128,6 +128,7 @@ import {
   writeSync,
 } from 'node:fs';
 import { join as joinPath } from 'node:path';
+import { createFileStore, isFileId, MAX_FILE_BYTES } from './file-store.js';
 
 import { buildLink, buildPrompt, randomToken } from './invite.js';
 
@@ -260,6 +261,9 @@ export const MAX_GOAL_REASON_CHARS = 500;
 
 /** How many closed goals are kept for reference. */
 export const MAX_GOAL_HISTORY = 10;
+
+/** Most attachment RECORDS one group may keep. The byte quota lives in file-store.js. */
+export const MAX_FILES_PER_GROUP = 500;
 
 /** How long an emergency exception lasts before it lapses on its own. */
 export const GOAL_EMERGENCY_MS = 24 * 60 * 60 * 1000;
@@ -425,6 +429,13 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   const settings = readGroupConfig(config);
   const directory = typeof home === 'string' && home !== '' ? home : resolveDirectory(config);
   const file = joinPath(directory, 'groups.json');
+
+  /**
+    * Attachments live OUTSIDE the group document on purpose. `groups.json` is rewritten in full on
+    * every post, so one 3 MiB image in it would tax every later message; the store itself only
+    * ever holds the small reference. See file-store.js for the rules about ids and names.
+    */
+  const attachments = createFileStore({ directory, logger: log, clock: now });
 
   /**
    * Objects that came out of `authenticate()`, mapped to the member id they were
@@ -939,6 +950,35 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // BigInt payload would otherwise throw from JSON.stringify inside persist()
     // and leave the feed grown in memory but the file unwritten.
     validatePayload(payload);
+    /**
+     * Attachment references. Each id must be a file THIS group has already published — a bare id
+     * from another group, or one still uploading, is refused rather than silently rendered as a
+     * broken link later.
+     */
+    const referencedFiles = [];
+    if (input.attachments !== undefined) {
+      if (!Array.isArray(input.attachments)) {
+        throw new GroupError('bad_argument', 'attachments 必须是 fileId 数组。', { field: 'attachments' });
+      }
+      if (input.attachments.length > 10) {
+        throw new GroupError('bad_argument', '一条消息最多带 10 个附件。', { count: input.attachments.length });
+      }
+      for (const raw of input.attachments) {
+        const fileId = typeof raw === 'string' ? raw : raw?.fileId;
+        const record = (group.files ?? []).find((entry) => entry.fileId === fileId);
+        if (record === undefined) {
+          throw new GroupError('file_unknown', `这条消息引用的附件不在本群：${String(fileId)}`, { fileId });
+        }
+        referencedFiles.push({
+          fileId: record.fileId,
+          name: record.name,
+          size: record.size,
+          sha256: record.sha256,
+          mime: record.mime,
+        });
+      }
+    }
+
 
     if (text.trim() === '' && payload === undefined) {
       throw new GroupError('empty_message', '发帖内容为空：请给 text 或 payload。');
@@ -1008,6 +1048,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // Absent unless the sender chose a level: an ordinary post must keep the exact record
       // shape it had before priority existed, and the delivery side treats absent as `normal`.
       ...(priority === undefined ? {} : { priority }),
+      // The metadata is copied into the entry so the message stays readable after the file is gone.
+      ...(referencedFiles.length === 0 ? {} : { attachments: referencedFiles }),
       // Kept so a reader can see the thread without scanning for adjacency, and so a later "is this closed?"
       // check has something to join on.
       ...(replyToEntry === undefined ? {} : { replyTo: replyToEntry.seq }),
@@ -2221,6 +2263,147 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     }
   }
 
+
+  // -------------------------------------------------------------------------
+  // Attachments: files a group has published
+  // -------------------------------------------------------------------------
+
+  /**
+   * Open an upload. Returns the chunk size the caller must use, so the limit is never guessed.
+   *
+   * The caller declares size and digest UP FRONT, and neither is trusted later: the digest is
+   * recomputed over the assembled bytes before the file becomes visible.
+   */
+  function fileBegin(input = {}) {
+    const group = requireGroup(input.groupId);
+    const member = resolveMember(group, input.member);
+    if (group.settings?.archived === true) {
+      throw new GroupError('group_archived', '这个群已归档，不能上传附件。');
+    }
+    const opened = attachments.beginUpload({
+      groupId: group.groupId,
+      name: input.name,
+      size: input.size,
+      sha256: input.sha256,
+      mime: input.mime,
+      uploadedBy: member.personId,
+    });
+    log.info('attachment opened', { groupId: group.groupId, fileId: opened.fileId, size: input.size });
+    return { groupId: group.groupId, ...opened };
+  }
+
+  /** Accept one chunk of an open upload. */
+  function fileChunk(input = {}) {
+    const group = requireGroup(input.groupId);
+    resolveMember(group, input.member);
+    return attachments.putChunk({
+      fileId: input.fileId,
+      index: input.index,
+      data: input.data,
+    });
+  }
+
+  /**
+   * Finish an upload and publish it.
+   *
+   * Publishing is the ONLY moment the reference becomes usable, and it happens after the digest
+   * has been recomputed. A sender that dies halfway leaves parts in `.staging`, which the sweep
+   * collects — never a half-file somebody can open.
+   */
+  async function fileFinish(input = {}) {
+    const group = requireGroup(input.groupId);
+    const member = resolveMember(group, input.member);
+    const published = await attachments.finishUpload({ fileId: input.fileId });
+    const record = {
+      fileId: published.fileId,
+      name: published.name,
+      size: published.size,
+      sha256: published.sha256,
+      mime: published.mime,
+      uploadedBy: member.personId,
+      at: published.at,
+    };
+    group.files = [...(group.files ?? []), record].slice(-MAX_FILES_PER_GROUP);
+    appendSystem(group, `${member.displayName} 上传了附件「${record.name}」（${Math.max(1, Math.round(record.size / 1024))} KiB）`);
+    persist();
+    log.info('attachment published', { groupId: group.groupId, fileId: record.fileId, size: record.size });
+    return { groupId: group.groupId, file: record };
+  }
+
+  /** Read one chunk of a published file. Any member may read any attachment of their group. */
+  async function fileRead(input = {}) {
+    const group = requireGroup(input.groupId);
+    resolveMember(group, input.member);
+    const fileId = typeof input.fileId === 'string' ? input.fileId : '';
+    const record = (group.files ?? []).find((entry) => entry.fileId === fileId);
+    if (record === undefined) {
+      throw new GroupError('file_unknown', '这个附件不在本群，或已被清理。', { fileId });
+    }
+    const chunk = await attachments.readChunk({ groupId: group.groupId, fileId, index: input.index });
+    return { ...chunk, name: record.name, sha256: record.sha256, mime: record.mime };
+  }
+
+  /** Every attachment this group still holds, newest last. */
+  function fileList(input = {}) {
+    const group = requireGroup(input.groupId);
+    resolveMember(group, input.member);
+    return {
+      groupId: group.groupId,
+      files: (group.files ?? []).map((entry) => ({ ...entry })),
+      usedBytes: attachments.usage(group.groupId),
+    };
+  }
+
+  /**
+   * Delete one attachment. The uploader or the owner.
+   *
+   * The feed keeps the metadata, so a message that cited the file still reads correctly — it
+   * simply points at something no longer downloadable, which is the honest state.
+   */
+  function fileRemove(input = {}) {
+    const group = requireGroup(input.groupId);
+    const member = resolveMember(group, input.member);
+    const fileId = typeof input.fileId === 'string' ? input.fileId : '';
+    const record = (group.files ?? []).find((entry) => entry.fileId === fileId);
+    if (record === undefined) {
+      throw new GroupError('file_unknown', '这个附件不在本群。', { fileId });
+    }
+    const allowed = member.personId === group.ownerPersonId || member.personId === record.uploadedBy;
+    if (!allowed) {
+      throw new GroupError('not_owner', '只有上传者或群主可以删除附件。');
+    }
+    attachments.remove(group.groupId, fileId);
+    group.files = (group.files ?? []).filter((entry) => entry.fileId !== fileId);
+    persist();
+    log.info('attachment removed', { groupId: group.groupId, fileId });
+    return { groupId: group.groupId, removed: fileId };
+  }
+
+  /**
+   * Drop attachments older than the group's retention window, and any abandoned staging parts.
+   *
+   * Called from the same place that prunes the feed, so "how long this group keeps things" has one
+   * answer instead of two.
+   */
+  function pruneFiles(group, at) {
+    const retentionMs = group.settings.retentionDays * 86_400_000;
+    const cutoff = at - retentionMs;
+    const kept = [];
+    for (const record of group.files ?? []) {
+      if (record.at < cutoff) attachments.remove(group.groupId, record.fileId);
+      else kept.push(record);
+    }
+    if (kept.length !== (group.files ?? []).length) {
+      group.files = kept;
+      log.info('attachments pruned', { groupId: group.groupId, removed: (group.files ?? []).length - kept.length });
+    }
+    attachments.sweepStaging(cutoff);
+  }
+
+  function usageOf(groupId) {
+    return attachments.usage(groupId);
+  }
+
   // -------------------------------------------------------------------------
   // The organisation layer: one goal per group, plus the group's conventions
   // -------------------------------------------------------------------------
@@ -2701,6 +2884,14 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Delivery control: a pause that is a STATE, not a message. See `setControl` for why the
     // failure it fixes could not be fixed by sending a better worded post.
     setControl,
+    // Attachments: published files a group holds. See file-store.js for the id/name/digest rules.
+    fileBegin,
+    fileChunk,
+    fileFinish,
+    fileRead,
+    fileList,
+    fileRemove,
+    usageOf,
     leave,
     revokeInvite,
     subscribe,
@@ -2987,6 +3178,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
         group.feed = kept;
         dirty = true;
       }
+      // Attachments follow the SAME window as the feed. Two retention answers for one group would
+      // mean a file outliving every message that mentioned it, which reads as a leak.
+      const before = (group.files ?? []).length;
+      pruneFiles(group, at);
+      if ((group.files ?? []).length !== before) dirty = true;
     }
   }
 
@@ -3334,6 +3530,12 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Delivery reads priority from THIS view, so dropping it here would silently disable the
     // whole mechanism while every test of the store still passed.
     if (entry.priority === 'urgent' || entry.priority === 'control') view.priority = entry.priority;
+    // FIFTH field this mapper would have dropped: an attachment reference written to the record
+    // and invisible to every reader. The metadata is SNAPSHOT here rather than looked up, so a
+    // file deleted later still shows what the message was talking about.
+    if (Array.isArray(entry.attachments) && entry.attachments.length > 0) {
+      view.attachments = entry.attachments.map((item) => ({ ...item }));
+    }
     /**
      * The pause state, hoisted OUT of `payload` and into the entry itself.
      *
@@ -3474,6 +3676,20 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Dropped rather than repaired, same rule as a goal: a control record whose fields cannot
     // be trusted must not become "this group is stopped" (that would silence a group nobody
     // stopped) or "this group is fine" (that would un-mute one somebody did).
+    const fileRecords = Array.isArray(raw.files)
+      ? raw.files
+        .filter((entry) => isPlainObject(entry) && isFileId(entry.fileId) && typeof entry.name === 'string')
+        .map((entry) => ({
+          fileId: entry.fileId,
+          name: entry.name,
+          size: Number.isFinite(entry.size) ? entry.size : 0,
+          sha256: typeof entry.sha256 === 'string' ? entry.sha256 : '',
+          mime: typeof entry.mime === 'string' ? entry.mime : 'application/octet-stream',
+          uploadedBy: typeof entry.uploadedBy === 'string' ? entry.uploadedBy : '',
+          at: Number.isFinite(entry.at) ? entry.at : 0,
+        }))
+        .slice(-MAX_FILES_PER_GROUP)
+      : [];
     const controlRecord = isPlainObject(raw.control)
       && typeof raw.control.stopped === 'boolean'
       && Number.isFinite(raw.control.at)
@@ -3530,6 +3746,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // configuration a member chose once; this is a live operational state with a reason and
       // an author, and losing it on restart would silently un-mute a group someone stopped.
       ...(controlRecord === undefined ? {} : { control: controlRecord }),
+      ...(fileRecords.length === 0 ? {} : { files: fileRecords }),
     };
   }
 }

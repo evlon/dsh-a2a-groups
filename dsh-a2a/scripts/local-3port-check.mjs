@@ -23,7 +23,8 @@
  */
 
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -250,6 +251,63 @@ try {
   const afterUrgent = await call('group/read', { groupId, ...member, limit: 20 });
   const urgentEntries = (afterUrgent.entries ?? []).filter((entry) => entry.priority === 'urgent');
   check('urgent 优先级经 read 返回（白名单未吞掉）', urgentEntries.length === 1, urgentEntries.length);
+
+
+  // --- attachments over the wire -------------------------------------------
+  //
+  // A 600 KiB payload, so the chunk loop really runs: one-chunk round trips hide assembly bugs.
+  const original = Buffer.alloc(600 * 1024);
+  for (let index = 0; index < original.length; index += 1) original[index] = (index * 31) % 256;
+  const originalSha = createHash('sha256').update(original).digest('hex');
+  const localPath = join(dataDirectory, 'payload.bin');
+  writeFileSync(localPath, original);
+
+  const opened = await call('group/file-put', {
+    groupId, ...member, name: 'payload.bin', size: original.length, sha256: originalSha, mime: 'application/octet-stream',
+  });
+  check('附件上传会话已开，宿主给出分块计划', Number.isInteger(opened.chunks) && opened.chunks >= 3, opened);
+
+  for (let index = 0; index < opened.chunks; index += 1) {
+    const start = index * opened.chunkSize;
+    const slice = original.subarray(start, Math.min(original.length, start + opened.chunkSize));
+    await call('group/file-chunk', { groupId, ...member, fileId: opened.fileId, index, data: slice.toString('base64') });
+  }
+  const publishedFile = await call('group/file-finish', { groupId, ...member, fileId: opened.fileId });
+  check('附件发布后 sha256 与本地一致', publishedFile.file?.sha256 === originalSha, publishedFile.file);
+
+  const attachedPost = await call('group/post', {
+    groupId, ...member, text: '这是附件消息', attachments: [opened.fileId],
+  });
+  check('带附件的消息可以发布', typeof attachedPost.seq === 'number', attachedPost);
+
+  // `read` pages from sinceSeq forward, so a small limit returns the OLDEST entries; the attachment
+  // message is the newest and would fall outside it.
+  const withAttachment = (await call('group/read', { groupId, ...member, limit: 200 }))
+    .entries.filter((entry) => Array.isArray(entry.attachments) && entry.attachments.length > 0);
+  check('read 返回里携带附件引用（含 name/size/sha256）',
+    withAttachment.length === 1 && withAttachment[0].attachments[0].sha256 === originalSha,
+    withAttachment[0]?.attachments?.[0]);
+
+  // The OTHER member downloads it and gets the same bytes.
+  const firstChunk = await call('group/file-get', { groupId, ...owner, fileId: opened.fileId, index: 0 });
+  const parts = [Buffer.from(firstChunk.data, 'base64')];
+  for (let index = 1; index < firstChunk.chunks; index += 1) {
+    const chunk = await call('group/file-get', { groupId, ...owner, fileId: opened.fileId, index });
+    parts.push(Buffer.from(chunk.data, 'base64'));
+  }
+  const downloaded = Buffer.concat(parts);
+  check('另一成员下载后内容逐字节一致',
+    Buffer.compare(downloaded, original) === 0, { expected: original.length, actual: downloaded.length });
+  check('下载内容 sha256 与发送方声明一致',
+    createHash('sha256').update(downloaded).digest('hex') === originalSha);
+
+  const listing = await call('group/file-list', { groupId, ...member });
+  check('附件列表可读且统计了占用字节', listing.files?.length === 1 && listing.usedBytes >= original.length, listing);
+
+  // A group the caller does not belong to must not resolve at all.
+  // A group the caller does not belong to must not resolve at all: not an empty list, a refusal.
+  const stranger = await refusalOf('group/file-list', { groupId: 'g-doesnotexist', ...member });
+  check('不存在的群直接拒绝，而不是返回空列表', stranger !== 'NO_REFUSAL', stranger);
 
   // --- close the goal ------------------------------------------------------
   const closed = await call('group/goal-close', { groupId, ...owner, reason: '三条远端路径全部验证通过' });

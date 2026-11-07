@@ -18,6 +18,10 @@
  * @module dsh-a2a/tool-runtime
  */
 
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+
+import { MAX_CHUNK_BYTES } from '../core/file-store.js';
 import { parseInviteLink } from '../dsh/tools.js';
 import { probeReachability } from '../core/probe.js';
 // The member's own address, composed from the MEMBER's config — this file runs on the member's
@@ -2079,6 +2083,114 @@ function requireSession(sessionId, tool) {
     return result.data ?? { groupId };
   },
 
+  // --- Attachments ------------------------------------------------------------
+  //
+  // The chunk loop lives here rather than in the skill layer because the FILE is on this machine:
+  // the host never sees a path, only base64 slices, and it verifies the digest before publishing.
+  // A caller that gave up halfway leaves staging parts on the host, which the sweep collects.
+
+  'a2a_group_file_send': async function a2a_group_file_send(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const filePath = requireText(args.path, 'path');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_file_send');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (!existsSync(filePath)) throw coded('file_not_found', `本地文件不存在: ${filePath}`);
+    const buffer = readFileSync(filePath);
+    if (buffer.length === 0) throw coded('empty_file', '文件是空的，没有可发送的内容。');
+    const name = filePath.split(/[\\/]/u).pop() || 'file';
+    const sha256 = createHash('sha256').update(buffer).digest('hex');
+    const local = membership.local === true;
+    const remote = async (skill, data) => {
+      const result = await bridge.send(targetOf(membership, config), {
+        skill, text: skill, data: { groupId, ...member, ...data }, timeoutMs: config.client.timeoutMs,
+      });
+      return result.data ?? {};
+    };
+
+    const begun = local
+      ? store.fileBegin({ groupId, member, name, size: buffer.length, sha256, mime: args.mime })
+      : await remote('group/file-put', { name, size: buffer.length, sha256, mime: args.mime });
+    const chunkSize = Number.isInteger(begun.chunkSize) ? begun.chunkSize : MAX_CHUNK_BYTES;
+    const chunks = Number.isInteger(begun.chunks) ? begun.chunks : Math.max(1, Math.ceil(buffer.length / chunkSize));
+    for (let index = 0; index < chunks; index += 1) {
+      const slice = buffer.subarray(index * chunkSize, Math.min(buffer.length, (index + 1) * chunkSize));
+      const data = slice.toString('base64');
+      if (local) store.fileChunk({ groupId, member, fileId: begun.fileId, index, data });
+      else await remote('group/file-chunk', { fileId: begun.fileId, index, data });
+    }
+    const file = local
+      ? (await store.fileFinish({ groupId, member, fileId: begun.fileId })).file
+      : (await remote('group/file-finish', { fileId: begun.fileId })).file;
+    if (file === undefined) throw coded('upload_failed', '宿主没有返回发布结果，附件可能没有落盘。');
+
+    const text = typeof args.message === 'string' && args.message.trim() !== ''
+      ? args.message
+      : `附件：${file.name}`;
+    let seq;
+    if (local) {
+      seq = store.post({ groupId, member, text, mentions: args.mentions, attachments: [file.fileId] }).seq;
+      await store.flush();
+    } else {
+      seq = (await remote('group/post', { text, mentions: args.mentions, attachments: [file.fileId] })).seq;
+    }
+    return { groupId, fileId: file.fileId, name: file.name, size: file.size, sha256: file.sha256, seq, chunks };
+  },
+
+  'a2a_group_file_get': async function a2a_group_file_get(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const fileId = requireText(args.fileId, 'fileId');
+    const target = requireText(args.path, 'path');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_file_get');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (existsSync(target) && args.overwrite !== true) {
+      throw coded('file_exists', `目标文件已存在，不覆盖: ${target}。要覆盖请传 overwrite=true。`);
+    }
+    const local = membership.local === true;
+    const readOne = async (index) => (local
+      ? store.fileRead({ groupId, member, fileId, index })
+      : (await bridge.send(targetOf(membership, config), {
+        skill: 'group/file-get',
+        text: 'file get',
+        data: { groupId, ...member, fileId, index },
+        timeoutMs: config.client.timeoutMs,
+      })).data);
+
+    const first = await readOne(0);
+    if (first === undefined) throw coded('file_unknown', '宿主没有返回这个附件。');
+    const chunks = Number.isInteger(first.chunks) ? first.chunks : 1;
+    const parts = [Buffer.from(first.data, 'base64')];
+    for (let index = 1; index < chunks; index += 1) {
+      const chunk = await readOne(index);
+      parts.push(Buffer.from(chunk.data, 'base64'));
+    }
+    const buffer = Buffer.concat(parts);
+    // The host verified the digest when the file was UPLOADED; that says nothing about the bytes
+    // that just travelled back. Recomputing here is what turns a corrupted download into an error
+    // instead of a file that looks fine and is not.
+    const digest = createHash('sha256').update(buffer).digest('hex');
+    if (typeof first.sha256 === 'string' && first.sha256 !== '' && digest !== first.sha256) {
+      throw coded('digest_mismatch', `下载校验失败：期望 ${first.sha256}，实际 ${digest}`);
+    }
+    writeFileSync(target, buffer);
+    return { groupId, fileId, path: target, name: first.name, size: buffer.length, sha256: digest, chunks };
+  },
+
+  'a2a_group_file_list': async function a2a_group_file_list(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_file_list');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) return store.fileList({ groupId, member });
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/file-list',
+      text: 'file list',
+      data: { groupId, ...member },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return result.data ?? { groupId, files: [], usedBytes: 0 };
+  },
   'a2a_group_control': async function a2a_group_control(args, exec) {
     const groupId = requireText(args.groupId, 'groupId');
     const sessionId = requireSession(senderOf(exec).id, 'a2a_group_control');
