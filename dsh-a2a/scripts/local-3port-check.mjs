@@ -27,10 +27,23 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createServer as createProbeServer } from 'node:net';
 
 const HERE = fileURLToPath(new URL('..', import.meta.url));
-const PORT = 3091;
-const BASE = `http://127.0.0.1:${PORT}`;
+// 3091 is the documented port, but a developer machine usually has a dev instance bound to it.
+// `--port` exists so this check can run without stopping that instance; the flow is the contract,
+// not the number.
+// `--port 0` (the default) asks the OS for a free port and learns it from the host's own startup
+// line. A fixed port made this check fail on any machine that already had a dev instance bound
+// to it — which is most developer machines, including the one this was written on.
+const portFlag = process.argv.indexOf('--port');
+const REQUESTED_PORT = portFlag > -1 ? Number(process.argv[portFlag + 1]) : 0;
+if (!Number.isInteger(REQUESTED_PORT) || REQUESTED_PORT < 0 || REQUESTED_PORT > 65535) {
+  console.error('invalid --port');
+  process.exit(2);
+}
+let PORT = REQUESTED_PORT;
+let BASE = '';
 const TOKEN = 'local-3port-check';
 const HOST_AGENT = 'local-host';
 
@@ -96,6 +109,11 @@ async function refusalOf(skill, data) {
 async function waitForHost(timeoutMs = 15_000) {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
+    if (BASE === '') {
+      // Still waiting for the startup line that names the port.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continue;
+    }
     try {
       const response = await fetch(`${BASE}/a2a/.well-known/agent-card.json`);
       if (response.ok) return;
@@ -104,8 +122,22 @@ async function waitForHost(timeoutMs = 15_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 150));
   }
-  throw new Error(`host did not answer on ${BASE} within ${timeoutMs}ms`);
+  throw new Error(`host did not answer on ${BASE || '(no port announced)'} within ${timeoutMs}ms`);
 }
+
+// The gateway URL has to be known BEFORE the host starts (it is baked into invite links), so a
+// port announced later by the host is too late. Ask the OS for a free port up front instead.
+if (PORT === 0) {
+  PORT = await new Promise((resolve, reject) => {
+    const probe = createProbeServer();
+    probe.once('error', reject);
+    probe.listen(0, '127.0.0.1', () => {
+      const { port } = probe.address();
+      probe.close(() => resolve(port));
+    });
+  });
+}
+BASE = `http://127.0.0.1:${PORT}`;
 
 const dataDirectory = mkdtempSync(join(tmpdir(), 'a2a-3port-'));
 const host = spawn(
@@ -120,7 +152,14 @@ const host = spawn(
   ],
   { cwd: HERE, stdio: ['ignore', 'pipe', 'pipe'] },
 );
-host.stdout.on('data', () => {});
+host.stdout.on('data', (chunk) => {
+  // "agent-groups X listening on 127.0.0.1:3091 (data: …)"
+  const match = /listening on [^:]+:(\d+)/u.exec(String(chunk));
+  if (match !== null && BASE === '') {
+    PORT = Number(match[1]);
+    BASE = `http://127.0.0.1:${PORT}`;
+  }
+});
 host.stderr.on('data', (chunk) => process.stderr.write(`[host] ${chunk}`));
 
 try {
