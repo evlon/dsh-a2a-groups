@@ -104,7 +104,11 @@ window.__ModuleLoader__.load({
 			// are already in, and 「宿主上还有 5 个群可以加入」 was invisible even though `a2a_group_directory` answered it
 			// — measured: a panel showing 1 group while the host listed 6.
 			{ id: "discover", label: "可加入", icon: "search" },
-			{ id: "cards", label: "同事名片", icon: "user" }
+			{ id: "cards", label: "同事名片", icon: "user" },
+			// The wiring tab: a colleague who has the plugin but not the connection reads the config section here
+			// instead of hunting for a file on disk. No gear glyph exists in the fallback set (list/plus/users/search/
+			// user), so `list` stands in — a settings page is a list of fields.
+			{ id: "settings", label: "设置", icon: "list" }
 		];
 
 		//#endregion
@@ -563,6 +567,11 @@ window.__ModuleLoader__.load({
 					selfVersion: raw !== null && typeof raw === "object" && !Array.isArray(raw) ? pickString(raw.selfVersion) : "",
 					updatedAt: updatedAt,
 					unreadTotal: unreadTotal,
+					// The paste-ready config section, rendered by the Host. Passed through as an opaque object — the
+					// page shows its text and masked fields, it never parses or re-renders them.
+					settings: raw !== null && typeof raw === "object" && !Array.isArray(raw) && raw.settings !== undefined
+						? raw.settings
+						: undefined,
 					ok: true
 				};
 			} catch (error) {
@@ -4277,10 +4286,48 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 								)
 					);
 
+			// The wiring tab: show the exact config section this instance is running with, so a colleague can copy it
+			// without finding a file. The YAML carries a MASKED key; the fields below show the masked key too, so no
+			// path here can leak the secret into a screenshot or a pasted copy.
+			const settingsData = snapshot.settings !== null && snapshot.settings !== undefined && typeof snapshot.settings === "object"
+				? snapshot.settings
+				: { yaml: "", fields: {} };
+			const settingsFields = settingsData.fields !== null && settingsData.fields !== undefined && typeof settingsData.fields === "object"
+				? settingsData.fields
+				: {};
+			const settingsBody = h(
+				"div",
+				{ style: { display: "flex", flexDirection: "column", gap: "10px" } },
+				h("p", { style: S.emptyBody }, "这里是你这台机器接入协作群的配置。复制下面这段，贴到 profile 的 cordis.patch.yml 里（或让助手帮你改）。"),
+				h(
+					"div",
+					{ style: { display: "flex", flexDirection: "column", gap: "6px" } },
+					h("span", { style: { fontSize: "11px", opacity: 0.7 } }, "网关：" + (settingsFields.gatewayBase || "（未配置）")),
+					h("span", { style: { fontSize: "11px", opacity: 0.7 } }, "你在网关里的名字：" + (settingsFields.agentName || "（未配置）")),
+					h("span", { style: { fontSize: "11px", opacity: 0.7 } }, "插件版本：" + (settingsFields.version || "未知"))
+				),
+				h("pre", { style: { ...S.emptyBody, textAlign: "left", overflowX: "auto", padding: "8px", border: "1px solid rgba(128,128,128,0.3)", borderRadius: "6px" } }, settingsData.yaml || "（配置节尚未生成）"),
+				h(
+					"button",
+					{
+						type: "button",
+						style: { ...S.emptyBody, cursor: "pointer", padding: "4px 8px", border: "1px solid currentColor", borderRadius: "4px" },
+						title: "把配置节复制到剪贴板（密钥已脱敏）",
+						onClick: function () {
+							if (typeof navigator !== "undefined" && navigator !== null && typeof navigator.clipboard === "object"
+								&& typeof navigator.clipboard.writeText === "function") {
+								navigator.clipboard.writeText(settingsData.yaml || "").catch(function () {});
+							}
+						}
+					},
+					"复制配置"
+				),
+				h("p", { style: { fontSize: "10px", opacity: 0.55 } }, "密钥已脱敏，复制不会泄漏。要改配置，把这段贴给助手让它改 cordis.patch.yml。")
+			);
+
 			const tabs = PANEL_TABS.map(function (def) {
 				return { id: def.id, label: def.label, icon: def.icon, count: counts[def.id] };
 			});
-
 			return h(
 				"div",
 				{ style: S.root },
@@ -4300,7 +4347,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						local.set({ tab: id, tag: "" });
 					}
 				}),
-				tab === "cards" ? cardsBody : groupBody
+				tab === "cards" ? cardsBody : tab === "settings" ? settingsBody : groupBody
 			);
 		}
 
