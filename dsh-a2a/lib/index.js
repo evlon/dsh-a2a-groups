@@ -424,7 +424,88 @@ const PANEL_FEED_TAIL = 8;
    * @param {object} payload - `{ groupId, sessionId?, toPersonId }`.
    * @returns {Promise<object>} a Connection result with `{ dmId, online }`.
    */
-  const setPanelInvite = async (payload) => {
+        /**
+       * Change this group's standing rules, on behalf of the PANEL.
+       *
+       * The panel cannot call the tool: it renders before any Session exists and deliberately
+       * holds no credential. The credential lives here in the membership ledger, which is why this
+       * has to be an RPC the Host performs rather than something the page does itself.
+       *
+       * Two shapes, matching the tool:
+       *   { conventions: "<full text>" }  replaces the built-in rules for this group
+       *   { reset: true }                 goes back to the built-in rules
+       *
+       * An override is a real decision with a real cost, so the caller is told what it costs
+       * rather than discovering it when the defaults are improved and this group does not move.
+       */
+      const setPanelConventions = async (payload) => {
+        const body = payload !== null && typeof payload === 'object' ? payload : {};
+        const groupId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
+        const sessionId = typeof body.sessionId === 'string' ? body.sessionId.trim() : '';
+        if (groupId === '') {
+          return { ok: false, error: { code: 'bad_argument', message: 'groupId is required', details: {} } };
+        }
+        const candidates = identities.list({ groupId });
+        const record = candidates.find((entry) => entry.sessionId === sessionId) ?? candidates[0];
+        if (record === undefined) {
+          return {
+            ok: false,
+            error: { code: 'not_member', message: 'this instance holds no membership for that group', details: { groupId } },
+          };
+        }
+        const member = { personId: record.personId, personKey: record.personKey };
+        try {
+          let result;
+          if (record.local === true) {
+            result = groups.setConventions({
+              groupId,
+              member,
+              conventions: typeof body.conventions === 'string' ? body.conventions : undefined,
+              extra: typeof body.extra === 'string' ? body.extra : undefined,
+              reset: body.reset === true,
+            });
+          } else {
+            const answer = await bridge.send(
+              {
+                baseUrl: record.baseUrl,
+                apiKey: record.apiKey ?? settings.client.apiKey,
+                forwardProto: settings.client.forwardProto,
+                protocolVersion: settings.client.protocolVersion,
+              },
+              {
+                skill: 'group/conventions',
+                text: 'conventions',
+                data: {
+                  groupId,
+                  ...member,
+                  ...(typeof body.conventions === 'string' ? { conventions: body.conventions } : {}),
+                  ...(typeof body.extra === 'string' ? { extra: body.extra } : {}),
+                  ...(body.reset === true ? { reset: true } : {}),
+                },
+                timeoutMs: settings.client.timeoutMs,
+              },
+            );
+            result = answer?.data ?? undefined;
+          }
+          const conventions = typeof result?.conventions === 'string' ? result.conventions : '';
+          // Update the panel cache in the same breath: the page renders from the ledger, so a
+          // successful write that is not cached looks like a failed write until the next poll.
+          try {
+            identities.upsert({ sessionId: record.sessionId, groupId, conventions });
+            if (typeof identities.flush === 'function') await identities.flush();
+          } catch {
+            // A stale panel is better than a failed save.
+          }
+          return { ok: true, conventions, changed: result?.changed === true };
+        } catch (error) {
+          const code = typeof error?.code === 'string' ? error.code : 'panel_failed';
+          // A refusal from the host is a real answer (only the owner may edit), so it keeps its own
+          // code instead of being flattened into a generic failure.
+          return { ok: false, error: { code, message: describe(error), details: {} } };
+        }
+      };
+
+const setPanelInvite = async (payload) => {
     const body = payload !== null && typeof payload === 'object' ? payload : {};
     const groupId = typeof body.groupId === 'string' ? body.groupId.trim() : '';
     const toPersonId = typeof body.toPersonId === 'string' ? body.toPersonId.trim() : '';
@@ -1202,6 +1283,9 @@ const PANEL_FEED_TAIL = 8;
             }
             if (name === 'invite') {
               return await setPanelInvite(payload);
+            }
+            if (name === 'set-conventions') {
+              return await setPanelConventions(payload);
             }
             // `details` is mandatory in ConnectionRpcFailure; omitting it yields a malformed response
             // rather than a clean refusal.

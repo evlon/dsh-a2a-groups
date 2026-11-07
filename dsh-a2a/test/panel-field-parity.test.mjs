@@ -128,3 +128,18 @@ test('goal 被归一化成面板需要的形状（title / status / krs）', () =
     assert.ok(body.includes(`${field}:`), `normalizeGoal 必须产出 ${field}`);
   }
 });
+
+test('群约定可以在面板里编辑（RPC 与按钮都得在）', () => {
+  // Structural, because the failure mode here is silent: a control that renders but posts to an
+  // endpoint nobody registered looks exactly like a save that did nothing.
+  const HOST_CODE = readFileSync('lib/index.js', 'utf8');
+  assert.ok(HOST_CODE.includes("name === 'set-conventions'"), '面板 RPC 必须注册 set-conventions');
+  assert.ok(HOST_CODE.includes('const setPanelConventions = async (payload) => {'), '必须有 setPanelConventions 实现');
+  // The credential lives in the ledger, not in the page — that is the whole reason this is an RPC.
+  const rpcBody = HOST_CODE.slice(HOST_CODE.indexOf('const setPanelConventions'));
+  assert.ok(rpcBody.slice(0, 3000).includes('identities.list({ groupId })'), 'RPC 必须从台账取凭证');
+  for (const role of ['conventions-edit', 'conventions-save', 'conventions-reset']) {
+    assert.ok(CLIENT.includes(`"data-role": "${role}"`), `面板缺少 ${role} 控件`);
+  }
+  assert.ok(CLIENT.includes('"set-conventions"'), '客户端必须调用 set-conventions');
+});

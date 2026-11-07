@@ -1900,6 +1900,35 @@ window.__ModuleLoader__.load({
 		 * @param {object} input - flat fields: `gatewayBase`, `agentName`, `apiKey`, `publicUrl`, `token`.
 		 * @returns {Promise<{ok: boolean, message: string}>}
 		 */
+		/**
+		 * Change this group's standing rules.
+		 *
+		 * The page holds no credential on purpose, so this goes through the Host, which holds one in the
+		 * membership ledger. Resolves to `{ ok, message, conventions }` rather than throwing: the caller
+		 * is a button handler and a rejected promise would surface as silence.
+		 *
+		 * @param {object} input - `{ groupId, sessionId, conventions?, reset? }`.
+		 * @returns {Promise<{ok: boolean, message: string, conventions?: string}>}
+		 */
+		async function saveConventions(input) {
+			if (panelRpcCaller === undefined) {
+				return { ok: false, message: "面板写入通道不可用（" + (panelRpcError === "" ? "未安装" : panelRpcError) + "）" };
+			}
+			try {
+				const result = await panelRpcCaller("/a2a-panel", "set-conventions", input);
+				if (result !== null && result !== undefined && result.ok === true) {
+					return { ok: true, message: "已保存", conventions: typeof result.conventions === "string" ? result.conventions : undefined };
+				}
+				const code = result && result.error ? result.error.code : "unknown";
+				// 只有群主可以修改 is the most likely refusal, and a bare code reads as a broken panel
+				// rather than as a permission boundary.
+				const message = code === "not_owner" ? "保存失败：只有群主可以修改群约定" : "保存失败：" + code;
+				return { ok: false, message: message };
+			} catch (error) {
+				return { ok: false, message: "保存失败：" + String((error && error.message) || error) };
+			}
+		}
+
 		async function saveConfig(input) {
 			if (panelRpcCaller === undefined) {
 				return { ok: false, message: "面板写入通道不可用（" + (panelRpcError === "" ? "未安装" : panelRpcError) + "）" };
@@ -3471,9 +3500,47 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 		 */
 		function GoalSection(props) {
 			const group = props !== null && props !== undefined ? props.group : undefined;
+			const sessionId = props !== null && props !== undefined && typeof props.sessionId === "string" ? props.sessionId : "";
+			// Local copy of the last save. The panel snapshot refreshes on a poll whose signature does not
+			// include this text, so waiting for it would make a successful save look ignored.
+			const [savedText, setSavedText] = react.useState(null);
+			const [editing, setEditing] = react.useState(false);
+			const [draft, setDraft] = react.useState("");
+			const [saving, setSaving] = react.useState(false);
+			const [note, setNote] = react.useState("");
 			if (group === undefined || group === null) return null;
 			const goal = group.goal;
 			const conventions = typeof group.conventions === "string" ? group.conventions : "";
+			const conventionsText = savedText !== null ? savedText : conventions;
+			const actionStyle = {
+				padding: "3px 10px", border: "1px solid rgba(128,128,128,0.45)", borderRadius: "4px",
+				background: "transparent", color: "inherit", font: "inherit", fontSize: "11px", cursor: "pointer"
+			};
+			const onStartEdit = function () { setDraft(conventionsText); setEditing(true); setNote(""); };
+			const onSave = async function () {
+				setSaving(true); setNote("");
+				const result = await saveConventions({ groupId: group.id, sessionId: sessionId, conventions: draft });
+				setSaving(false);
+				if (result.ok === true) {
+					if (typeof result.conventions === "string") setSavedText(result.conventions);
+					setEditing(false);
+					setNote("已保存");
+				} else {
+					setNote(result.message);
+				}
+			};
+			const onReset = async function () {
+				setSaving(true); setNote("");
+				const result = await saveConventions({ groupId: group.id, sessionId: sessionId, reset: true });
+				setSaving(false);
+				if (result.ok === true) {
+					setSavedText(typeof result.conventions === "string" ? result.conventions : null);
+					setEditing(false);
+					setNote("已恢复内置规则");
+				} else {
+					setNote(result.message);
+				}
+			};
 			if ((goal === undefined || goal === null) && conventions === "") {
 				// No goal yet: say so plainly rather than rendering an empty box. A blank area reads as
 				// a loading failure; a sentence reads as a state.
@@ -3526,23 +3593,57 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 							})
 						)
 					),
-				conventions === ""
+				conventionsText === "" && savedText === null
 					? null
 					: h(
 						Collapsible,
-						{ title: "群约定", summary: conventions.split("\n").filter(function (line) { return line.trim() !== ""; }).length + " 行", role: "conventions" },
-						h(
-							"pre",
-							{
-								style: {
-									margin: 0, padding: "6px 8px", whiteSpace: "pre-wrap", wordBreak: "break-word",
-									fontSize: "11px", lineHeight: 1.5, fontFamily: "inherit",
-									background: "rgba(128,128,128,0.08)", borderRadius: "4px"
-								}
-							},
-							conventions
-						)
-					)
+						{
+							title: "群约定",
+							summary: conventionsText.split("\n").filter(function (line) { return line.trim() !== ""; }).length + " 行",
+							role: "conventions"
+						},
+						editing
+							? h(
+								"div",
+								{ "data-role": "conventions-editor" },
+								h("textarea", {
+									value: draft,
+									rows: 10,
+									"aria-label": "群约定正文",
+									onInput: function (event) { setDraft(event.target.value); },
+									style: {
+										width: "100%", boxSizing: "border-box", padding: "6px 8px",
+										font: "inherit", fontSize: "11px", lineHeight: 1.5,
+										border: "1px solid rgba(128,128,128,0.4)", borderRadius: "4px",
+										background: "transparent", color: "inherit", colorScheme: "light dark"
+									}
+								}),
+								h(
+									"div",
+									{ style: { display: "flex", gap: "6px", marginTop: "6px", flexWrap: "wrap" } },
+									h("button", { type: "button", "data-role": "conventions-save", disabled: saving, onClick: onSave, style: actionStyle }, saving ? "保存中…" : "保存"),
+									h("button", { type: "button", "data-role": "conventions-reset", disabled: saving, onClick: onReset, style: actionStyle }, "恢复默认"),
+									h("button", { type: "button", "data-role": "conventions-cancel", disabled: saving, onClick: function () { setEditing(false); setNote(""); }, style: actionStyle }, "取消")
+								),
+								h("p", { style: { margin: "6px 0 0", fontSize: "10px", opacity: 0.6 } }, "保存后成为本群自定义版本，不再跟随默认规则的后续更新。要回到内置规则点「恢复默认」。"),
+								note === "" ? null : h("p", { style: { margin: "4px 0 0", fontSize: "10px", opacity: 0.8 } }, note)
+								)
+							: h(
+								"div",
+								null,
+								h("pre", {
+									style: {
+										margin: 0, padding: "6px 8px", whiteSpace: "pre-wrap", wordBreak: "break-word",
+										fontSize: "11px", lineHeight: 1.5, fontFamily: "inherit",
+										background: "rgba(128,128,128,0.08)", borderRadius: "4px"
+									}
+								}, conventionsText),
+								h("div", { style: { display: "flex", gap: "6px", marginTop: "6px", alignItems: "center" } },
+									h("button", { type: "button", "data-role": "conventions-edit", onClick: onStartEdit, style: actionStyle }, "编辑"),
+									note === "" ? null : h("span", { style: { fontSize: "10px", opacity: 0.8 } }, note)
+								)
+								)
+							)
 			);
 		}
 
@@ -4183,7 +4284,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 				h("p", { style: membersLayout.groupName, title: group.topic === "" ? group.name : group.name + " · " + group.topic }, group.name),
 				// What this group is FOR, above WHO is in it: a reader who opens this pane is asking the
 				// first question far more often than the second.
-				h(GoalSection, { group: group }),
+				h(GoalSection, { group: group, sessionId: sessionId }),
 				// A roster can be cached and simply old. Different from unreachable: we have no evidence anything
 				// is wrong, we only know the list may have changed since it was fetched. Saying so is cheaper than
 				// being confidently out of date.
