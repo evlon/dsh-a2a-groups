@@ -3072,7 +3072,14 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 										onClick: function () {
 											// An instruction rather than a direct call: joining needs a credential lookup the page does
 											// not do, and the Session is where that lives.
-											replaceDraft(inputActions, "用 a2a_group_join 重新加入「" + row.name + "」（群 id " + row.id + "，我本机已经有身份，不需要邀请链接）");
+											//
+											// The instruction must NOT claim "no invite needed" unconditionally: rejoin works only when
+											// THIS instance already holds a credential for the group in another Session, and
+											// a2a_group_join reuses it by groupId. A fresh instance with no such credential still needs a
+											// link — saying otherwise sent the model down a path that ends in missing_endpoint.
+											replaceDraft(inputActions, "用 a2a_group_join 重新加入「" + row.name + "」：groupId 是 " + row.id
+												+ "。本机若已有这个群的身份（在别的会话里加过），它会复用同一个身份、不会多出一个人；"
+												+ "如果本机没有身份，请告诉我，我需要一个邀请链接。");
 										}
 									},
 									row.name + (row.knownAs === "" ? "" : "（本机身份：" + row.knownAs + "）"),
@@ -3119,6 +3126,26 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						"p",
 						{ style: membersLayout.unboundHint },
 						"点左侧栏的「协作群」，从列表里挑一个申请加入；群主同意后你就会收到通知。"
+					),
+					// ④ Create one yourself. The only way in with no link, no invite, and nothing to browse — and the
+					// entry point a new user needs to START a collaboration rather than only join somebody else's.
+					h("div", { style: membersLayout.unboundStep }, "④ 新建一个群"),
+					h(
+						"p",
+						{ style: membersLayout.unboundHint },
+						"想自己开一个群？点下面的按钮，把「新建群」的指令填进输入框，改一下群名再发送。"
+					),
+					h(
+						"button",
+						{
+							type: "button",
+							style: membersLayout.unboundButton,
+							title: "把新建群的指令填进输入框，改群名后按回车发送",
+							onClick: function () {
+								replaceDraft(inputActions, "用 a2a_group_create 新建一个群，群名叫「」，主题是「」。");
+							}
+						},
+						"新建一个群"
 					),
 					// A thread somebody may already belong to. Saying so prevents the confusing case of
 					// "I know I joined a group" while this pane insists otherwise.
