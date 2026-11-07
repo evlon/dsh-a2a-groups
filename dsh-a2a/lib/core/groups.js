@@ -3334,6 +3334,23 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Delivery reads priority from THIS view, so dropping it here would silently disable the
     // whole mechanism while every test of the store still passed.
     if (entry.priority === 'urgent' || entry.priority === 'control') view.priority = entry.priority;
+    /**
+     * The pause state, hoisted OUT of `payload` and into the entry itself.
+     *
+     * `payload` is deliberately not forwarded by `group/read` or `group/subscribe` — it can be
+     * arbitrarily large, and every reader would pay for it. Putting the pause there would have
+     * made it invisible over the wire: the host would flip `group.control`, the member would
+     * never learn, and the pause would apply only on the machine that set it. Found by running
+     * the three-instance check, not by reading the code.
+     *
+     * So the state a member must ACT on travels as a first-class field, the same way `mentions`
+     * does. Only `stopped` and `reason` escape; the author and timestamp come from `from`/`at`.
+     */
+    if (entry.priority === 'control' && entry.payload !== undefined && entry.payload !== null
+      && typeof entry.payload.control === 'object' && entry.payload.control !== null) {
+      view.control = { stopped: entry.payload.control.stopped === true };
+      if (typeof entry.payload.control.reason === 'string') view.control.reason = entry.payload.control.reason;
+    }
     return view;
   }
 

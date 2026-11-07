@@ -699,6 +699,10 @@ return {
                 // How urgently this was delivered. Absent on an ordinary post; a peer asking why a message
                 // interrupted its step needs to see the level, and a whitelist that drops it hides the reason.
                 priority: entry.priority,
+                // The pause state a member must act on. It cannot ride inside `payload` — that
+                // field is not forwarded here, so a pause stored only there would never reach
+                // the members it is supposed to silence.
+                control: entry.control,
                 kind: entry.kind,
                 text: entry.text,
               })),
@@ -1301,6 +1305,7 @@ return {
           replyTo: Number.isInteger(entry.replyTo) ? entry.replyTo : undefined,
           rootSeq: Number.isInteger(entry.rootSeq) ? entry.rootSeq : undefined,
           priority: entry.priority,
+          control: entry.control,
           kind: entry.kind,
           text: entry.text,
         });

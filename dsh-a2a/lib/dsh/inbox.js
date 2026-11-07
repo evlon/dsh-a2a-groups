@@ -512,7 +512,9 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
         && (!Array.isArray(post.mentions) || post.mentions.includes('@all') || post.mentions.includes(membership.personId));
       // A control post carries the pause state itself, so every member converges on the same
       // answer without a round trip to a host they may not be able to ask.
-      const control = post.payload?.control;
+      // First-class field, not `payload.control`: the wire format does not forward payload, so
+      // reading it from there would have applied a pause only on the host that set it.
+      const control = post.control;
       if (control !== undefined && control !== null && typeof control.stopped === 'boolean') {
         if (control.stopped) paused.add(groupId);
         else paused.delete(groupId);
