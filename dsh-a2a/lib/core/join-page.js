@@ -56,7 +56,16 @@ const INSTRUCTION_HEAD_CONFIG_ONLY = `帮我配置 DSH 以接入协作模式（�
 
 /** The YAML block, identical in both modes. */
 const INSTRUCTION_BODY = `
-1. 安装插件（如果还没装）。**公司内网请用内网源**，外网源在内网里慢且可能不通：
+1. 先确认你在用哪一个，装错了会「面板能打开但一刷新就报 HTTP 405」：
+
+   A) 终端里的 dsh（CLI）—— profile 是 web
+   B) DeepSeek Harness 桌面版   —— profile 是 desktop，而且是它自带的 dsh
+
+   两者是完全独立的 profile，装到一个另一个看不到。不确定就跑：
+   dsh web --help 能执行 → 你在 CLI；桌面版则没有「终端里的 dsh」这个概念。
+
+   --- A. 终端 CLI ---
+   **公司内网请用内网源**，外网源在内网里慢且可能不通：
 
    # 内网（公司网络内首选）
    dsh plugin --profile web add dsh-a2a-groups --registry=http://registry.ict.cmcc
@@ -64,13 +73,44 @@ const INSTRUCTION_BODY = `
    # 外网（出差 / 不在公司网络时）
    dsh plugin --profile web add dsh-a2a-groups --registry=https://registry.npmmirror.com
 
-   两个源发布的版本是一致的（同一个构建产物、同一个 shasum），装到哪个都一样。
-   如果装了却看不到「协作群」按钮，先确认版本：内网源与外网源的 latest 应当相同。
+   两个源发布的版本一致（同一个构建产物、同一个 shasum），装哪个都一样。
 
-2. 确认 <DSH_HOME>/profiles/web/package.json 的 dsh.profile.bundles 里有 dsh-a2a-groups。
+   --- B. 桌面版 ---
+   桌面版自带一个 dsh 运行时，必须用它装，npm 全局那个 dsh 会装错地方
+   （对 desktop profile 会直接报 managed exclusively by the Electron application）。
+
+   找出桌面版的 dsh（每台机器安装路径不同，最后一步「校验存在」是必要的，
+   因为机器上可能同时装有同名产品）：
+
+     $cands = @()
+     foreach ($p in (Get-Process 'DeepSeek Harness' -ErrorAction SilentlyContinue)) {
+       if ($p.Path) { $cands += (Split-Path $p.Path) } }
+     foreach ($k in @('HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+                      'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',
+                      'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*')) {
+       foreach ($e in (Get-ItemProperty $k -ErrorAction SilentlyContinue)) {
+         if ($e.DisplayName -match 'DeepSeek|Harness' -and $e.InstallLocation) { $cands += $e.InstallLocation.Trim('"') } } }
+     $deskDsh = $null
+     foreach ($c in $cands) { $d = Join-Path $c 'resources\\runtime\\cli\\bin\\dsh.cmd'; if (Test-Path $d) { $deskDsh = $d; break } }
+     $deskDsh
+
+   然后（内网优先，外网兜底）。PowerShell 里可以直接 & 调用 .cmd，不要再套一层 cmd.exe：
+   嵌套引号在 PowerShell 里的转义规则和 bash 不同，抄错一次就会得到看不懂的报错。
+
+     & \$deskDsh plugin --profile desktop add dsh-a2a-groups --registry=http://registry.ict.cmcc
+
+   它会自动写好依赖并加进 bundles。**装完必须完全退出桌面版再打开**——只关窗口不行。
+
+   --- 验收 ---
+   桌面版：重启后 /a2a-panel/ping 应当从 405 变成 401（通道已注册）。
+   CLI：重启后界面里出现「协作群」按钮。
+
+2. 确认 profile 的 package.json 里 dsh.profile.bundles 含 dsh-a2a-groups：
+   CLI 是 <DSH_HOME>/profiles/web/package.json，桌面版是 <DSH_HOME>/profiles/desktop/package.json。
    没有就加在数组最后。装了包但没挂载，UI 里什么都不会出现，也不报错。
+   （用上面的 dsh plugin add 装的话会自动加好。）
 
-3. 在 profile 的 cordis.patch.yml 里，把 a2a 段替换成：
+3. 在同一个 profile 的 cordis.patch.yml 里，把 a2a 段替换成：
    - id: a2a
      name: dsh-a2a-groups
      config:
@@ -86,7 +126,7 @@ const INSTRUCTION_BODY = `
        tools: true
        promptSection: true
 
-改完重启 DSH，然后告诉我「协作群」按钮有没有出现。`;
+改完重启 DSH（桌面版要完全退出再打开），然后告诉我「协作群」按钮有没有出现。`;
 
 const INSTRUCTION_TAIL_WITH_GROUP = `
 如果出现空白面板，让我调 a2a_inbox_check 看有没有待处理的邀请。

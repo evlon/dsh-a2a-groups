@@ -1840,6 +1840,35 @@ window.__ModuleLoader__.load({
 		let panelRpcError = "";
 
 		/**
+		 * Turn a transport failure into something the reader can act on.
+		 *
+		 * What reached users was 「transport failure for /a2a-panel/confirm-settings: HTTP 405」 — an
+		 * internal route name and a status code, which tells nobody what to do. 405 on this channel
+		 * has exactly one common cause and it IS actionable: the plugin is mounted in a DIFFERENT
+		 * profile than the one this app runs. Measured on a real desktop install: npm's global `dsh`
+		 * writes `profiles/web`, while the desktop app runs `profiles/desktop` with its own bundled
+		 * `dsh`, so `dsh plugin --profile web add` leaves the panel channel unregistered.
+		 *
+		 * Everything unrecognised is passed through unchanged — inventing a friendly sentence for an
+		 * unknown failure would bury the one detail that makes it diagnosable.
+		 *
+		 * @param {unknown} error - whatever the transport threw.
+		 * @returns {string} one sentence, safe to show in the pane.
+		 */
+		function describePanelFailure(error) {
+			const text = String((error && error.message) || error || "").trim();
+			if (/HTTP\s*405|\b405\b/u.test(text)) {
+				return "面板通道没接上（HTTP 405）：插件装进了另一个 profile。"
+					+ "终端 CLI 用 profiles/web，桌面版用 profiles/desktop，两者互不相通；"
+					+ "用对应版本的 dsh 重装后完全退出应用再打开。";
+			}
+			if (/HTTP\s*401|\b401\b/u.test(text)) {
+				return "面板通道在，但这次请求没通过鉴权（HTTP 401）。若反复出现，重启应用。";
+			}
+			return text;
+		}
+
+		/**
 		 * Install the Connection caller from the plugin's context.
 		 *
 		 * Called from apply(), where the service exists. Records the reason when it does not, because a panel
@@ -1887,7 +1916,7 @@ window.__ModuleLoader__.load({
 				const code = result && result.error ? result.error.code : "unknown";
 				return { ok: false, message: "保存失败：" + code };
 			} catch (error) {
-				return { ok: false, message: "保存失败：" + String((error && error.message) || error) };
+				return { ok: false, message: "保存失败：" + describePanelFailure(error) };
 			}
 		}
 
@@ -1925,7 +1954,7 @@ window.__ModuleLoader__.load({
 				const message = code === "not_owner" ? "保存失败：只有群主可以修改群约定" : "保存失败：" + code;
 				return { ok: false, message: message };
 			} catch (error) {
-				return { ok: false, message: "保存失败：" + String((error && error.message) || error) };
+				return { ok: false, message: "保存失败：" + describePanelFailure(error) };
 			}
 		}
 
@@ -1941,7 +1970,7 @@ window.__ModuleLoader__.load({
 				const message = result && result.error ? result.error.message : (result && result.error ? result.error.code : "unknown");
 				return { ok: false, message: "保存失败：" + String(message) };
 			} catch (error) {
-				return { ok: false, message: "保存失败：" + String((error && error.message) || error) };
+				return { ok: false, message: "保存失败：" + describePanelFailure(error) };
 			}
 		}
 
@@ -1965,7 +1994,7 @@ window.__ModuleLoader__.load({
 				}
 				return "面板通道返回失败：" + String(result && result.error ? result.error.code : "?");
 			} catch (error) {
-				return "面板通道异常：" + String((error && error.message) || error);
+				return "面板通道异常：" + describePanelFailure(error);
 			}
 		}
 
@@ -3784,7 +3813,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						}
 					})
 					.catch(function (error) {
-						setNote("读取设置失败：" + String(error && error.message ? error.message : error).slice(0, 80));
+						setNote("读取设置失败：" + describePanelFailure(error).slice(0, 200));
 					});
 			};
 
@@ -3817,7 +3846,7 @@ const buttonDashed = { border: "1px dashed rgba(128, 128, 128, 0.5)" };
 						}
 					})
 					.catch(function (error) {
-						setNote("保存失败：" + String(error && error.message ? error.message : error).slice(0, 80));
+						setNote("保存失败：" + describePanelFailure(error).slice(0, 200));
 					})
 					.then(function () { setBusy(false); });
 			};

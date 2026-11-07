@@ -54,6 +54,17 @@ curl http://127.0.0.1:3095/a2a/.well-known/agent-card.json
 
 ### 3.1 装插件
 
+**先确认你在用哪一个 —— 装错 profile 的表现是「面板能打开，但一刷新就报 HTTP 405」。**
+
+```
+终端 CLI        →  profile web，用 PATH 里的 dsh
+桌面版（GUI）   →  profile desktop，用桌面版自带的 dsh
+```
+
+两者是**完全独立的 profile**，装到一个另一个看不见。
+
+#### 3.1A 终端 CLI
+
 ```bash
 # 公司内网（首选）：两个源是同一个构建产物，shasum 相同
 dsh plugin --profile web add dsh-a2a-groups --registry=http://registry.ict.cmcc
@@ -62,10 +73,54 @@ dsh plugin --profile web add dsh-a2a-groups --registry=http://registry.ict.cmcc
 dsh plugin --profile web add dsh-a2a-groups --registry=https://registry.npmmirror.com
 ```
 
-> **为什么现在要显式写 `--registry`**：内网 Verdaccio **不自动同步上游 npm**，只有被手动推过的包才在。
-> 这台机器的默认 registry 是外网镜像，所以「装得上」不代表「同事装得上」。发版时两边都推（见 §六）。
+#### 3.1B 桌面版
 
-**然后必须做第二步**：编辑 `<$DSH_HOME>/profiles/web/package.json`，把包名加进 `dsh.profile.bundles`：
+桌面版自带一个 dsh 运行时（`<安装目录>/resources/runtime/cli/bin/dsh.cmd`）。
+**不能用 PATH 里那个 npm 装的 `dsh`**——它对 desktop profile 会直接拒绝：
+
+```
+error: profile "desktop" is managed exclusively by the Electron application
+```
+
+安装路径每台机器不同，用这段定位（进程路径 → 注册表卸载项 → **校验文件存在**；
+最后一步必要，因为机器上可能同时装有同名产品）：
+
+```powershell
+$cands = @()
+foreach ($p in (Get-Process 'DeepSeek Harness' -ErrorAction SilentlyContinue)) {
+  if ($p.Path) { $cands += (Split-Path $p.Path) }
+}
+foreach ($k in @('HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+                 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+  foreach ($e in (Get-ItemProperty $k -ErrorAction SilentlyContinue)) {
+    if ($e.DisplayName -match 'DeepSeek|Harness' -and $e.InstallLocation) { $cands += $e.InstallLocation.Trim('"') }
+  }
+}
+$deskDsh = $null
+foreach ($c in $cands) {
+  $d = Join-Path $c 'resources\runtime\cli\bin\dsh.cmd'
+  if (Test-Path $d) { $deskDsh = $d; break }
+}
+$deskDsh
+```
+
+然后（PowerShell 可以直接 `&` 调用 `.cmd`，**不要**再套一层 `cmd.exe`）：
+
+```powershell
+& $deskDsh plugin --profile desktop add dsh-a2a-groups --registry=http://registry.ict.cmcc
+```
+
+它会自动写好依赖并加进 `dsh.profile.bundles`。**装完必须完全退出桌面版再打开**——只关窗口不行。
+
+**验收判据（桌面版）**：重启后 `POST /a2a-panel/ping` 应从 **405** 变成 **401**。
+
+#### 3.1C 两个源
+
+> **为什么现在要显式写 `--registry`**：内网 Verdaccio **不自动同步上游 npm**，只有被手动推过的包才在。
+> 这台机器的默认 registry 是外网镜像，所以「装得上」不代表「同事装得上」。发版时两边都推（见 §七）。
+
+**然后必须做第二步**：编辑 `<$DSH_HOME>/profiles/web/package.json`（桌面版是 `profiles/desktop/`），把包名加进 `dsh.profile.bundles`：
 
 ```json
 {

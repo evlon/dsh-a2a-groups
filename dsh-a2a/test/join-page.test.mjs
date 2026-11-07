@@ -160,3 +160,15 @@ test('the instruction never contains a raw placeholder when a value is empty', (
   const text = buildJoinInstruction({ ...VALUES, apiKey: '' });
   assert.ok(!text.includes('{apiKey}'), 'an empty value must not leave the placeholder behind');
 });
+
+test('the install instruction covers the desktop app, not only the CLI', () => {
+  // Measured failure: colleagues installed with the CLI and the desktop app never saw the plugin,
+  // because the two use different profiles (web vs desktop) and different dsh binaries. The panel
+  // then answered HTTP 405 to every `/a2a-panel` call while the setup page kept telling them the
+  // one command that could not possibly work for them.
+  const text = buildJoinInstruction(VALUES);
+  assert.ok(text.includes('桌面版'), '安装指引必须区分桌面版');
+  assert.ok(text.includes('profiles/desktop') || text.includes('--profile desktop'), '必须给出 desktop profile');
+  assert.ok(text.includes('resources'), '必须说明桌面版自带的 dsh 在安装目录的 resources 下');
+  assert.ok(text.includes('完全退出'), '必须说明装完要完全退出应用');
+});

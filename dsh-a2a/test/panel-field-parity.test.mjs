@@ -171,3 +171,13 @@ test('状态目录跟随宿主 home，而不是启动目录', () => {
   assert.ok(CONFIG.includes('migrateLegacyHome'), '旧位置的状态必须被接收，不能让升级看起来像群消失了');
   assert.ok(HOST_CODE.includes('ctx.dshHomePath'), '应优先使用宿主自己的 home 解析器');
 });
+
+test('面板传输失败必须译成人能看懂的话，不得直出 405', () => {
+  // The acceptance criterion recorded in BACKLOG §6.1 all along: a person must not be shown
+  // 「transport failure for /a2a-panel/confirm-settings: HTTP 405」. That names an internal route,
+  // and 405 here has one actionable cause — the plugin is mounted in a different profile.
+  assert.ok(CLIENT.includes('function describePanelFailure('), '必须有面板错误翻译函数');
+  assert.ok(CLIENT.includes('插件装进了另一个 profile'), '405 必须指向 profile 装错');
+  // Every panel failure path that reaches a human must go through it.
+  assert.ok(!/保存失败：" \+ String\(\(error/u.test(CLIENT), '不允许绕过翻译直接拼接原始错误');
+});
