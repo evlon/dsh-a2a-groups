@@ -75,6 +75,13 @@ hooks.register('receive', async (ctx) => verdict);
 - **不能**复用 `proceed:true + forward`（会变成「一值两义」，和 `streaming` 的 `!== false` 同源），也不能用 `proceed:false + reason:'forwarded'`（拒绝和转发是相反意图）。
 - **MVP 行为：handler 返回 `forward` 时抛错「该 verdict 类型尚未实现」**，不是静默降级成放行。理由：「留了接口但静默降级」比「没留接口」危险——将来注册 handler 的人会以为转发生效，实际消息还是给了本人（和 `loaded:0` 混淆、`inviteId` 恒空同一族：看起来支持，实际没生效）。
 
+**`forward` 的投递语义（苏虎虎 #214，定死）**：
+
+- **`forward` = 替换投递目标，不是二次投递**。`receive` 的 hook 点是「即将唤醒 Session」，消息还没投递给任何 session，所以 forward 语义是「不唤醒当前 session，改唤醒 `toSessionId`」。
+- **hook 必须在「解析目标 session」之前执行**（`deliverPost`/`deliver` 找目标之前）。若在找目标之后执行，消息会投两次（原 session + 转发目标）。
+- **验证**：断言 forward 后，原 session **收不到**该消息（消息恰好投一次）。
+- **`toSessionId` 不可达 → 抛错**，不静默回退给本人。理由与「未实现时抛错」同源：静默回退比失败更危险。
+
 ### 3.3 「拒绝带理由」的实现
 
 这是「自由文字理由」的透传链（调研确认，用户文本其实**已经在** `decideFromAnswer` 的 `custom` 字段里，只是没透传）：
