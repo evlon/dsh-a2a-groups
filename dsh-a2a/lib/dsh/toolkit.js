@@ -27,6 +27,8 @@
  * @param {object} [options.parameters] - raw JSON Schema for the arguments.
  * @param {{schema: object, render: (args: object, value: object) => Array<object>}} options.output - result schema and renderer.
  * @param {(args: object, exec: object) => Promise<object>} options.execute - tool body.
+ * @param {(args: object) => object|undefined} [options.presentCall] - how the PENDING call renders.
+ * @param {(args: object, result: object) => object|undefined} [options.presentResult] - how the COMPLETED call renders.
  * @returns {object} the registry-ready definition.
  */
 export function defineTool(options) {
@@ -39,6 +41,12 @@ export function defineTool(options) {
     name: options.name,
     description: options.description,
     parameters,
+    // The registry's own presentation hooks. Without them the UI titles a call from the tool name
+    // plus its first argument — which is why a group post appeared as 「a2a_group_post · g-1fad9113」:
+    // an internal id and no indication of which group or who it woke. These are pure functions of
+    // (args) and (args, result), so they are safe to replay.
+    ...(typeof options.presentCall === 'function' ? { presentCall: options.presentCall } : {}),
+    ...(typeof options.presentResult === 'function' ? { presentResult: options.presentResult } : {}),
     output: {
       schema: options.output.schema,
       render: (args, value) => options.output.render(args, value),

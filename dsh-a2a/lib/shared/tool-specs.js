@@ -570,6 +570,45 @@ export const TOOL_SPECS = Object.freeze([
           ];
       },
     },
+    /**
+     * The PENDING state, while the post is in flight.
+     *
+     * The UI titles a call from the tool name plus its first argument unless the tool says
+     * otherwise — which produced 「a2a_group_post · g-1fad9113」. That line is what a person skims
+     * past, and it answers neither question they have: which group, and who is being told. So the
+     * pending title is written here in words, and the completed one (below) replaces it with the
+     * full receipt once the group name and wake list are known.
+     */
+    presentCall: (args) => {
+      const mentioned = Array.isArray(args?.mentions) ? args.mentions.length : 0;
+      return {
+        card: 'generic',
+        title: mentioned === 0 ? '发群消息' : `发群消息（点名 ${mentioned} 人）`,
+        kind: 'other',
+        rawInput: typeof args?.message === 'string' ? args.message : undefined,
+      };
+    },
+    /**
+     * The COMPLETED state: the receipt sentence becomes the card's title.
+     *
+     * This is the line the human actually reads later, so it carries the group's NAME, how many
+     * people can see the post, and who was woken — see `describePostReceipt`. The body goes in the
+     * card content, so the message that went out is visible without opening the raw arguments.
+     */
+    presentResult: (args, result) => {
+      const meta = result?.meta ?? {};
+      const title = typeof meta.receipt === 'string' && meta.receipt !== ''
+        ? meta.receipt
+        : (typeof meta.groupName === 'string' && meta.groupName !== ''
+          ? `已发到「${meta.groupName}」· #${meta.seq ?? 0}`
+          : undefined);
+      const sent = typeof args?.message === 'string' ? args.message.trim() : '';
+      return {
+        card: 'generic',
+        ...(title === undefined ? {} : { title }),
+        ...(sent === '' ? {} : { content: [{ type: 'text', text: `正文：${sent}` }] }),
+      };
+    },
   runtime: 'a2a_group_post',
   },
   {

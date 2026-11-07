@@ -164,3 +164,26 @@ test('urgent 且未点名时，收据写「插队到全群」而不是「未唤�
   assert.ok(!value.receipt.includes('未唤醒任何人'), `不能把插队说成没唤醒，实际：${value.receipt}`);
   assert.ok(value.receipt.includes('插队到全群'), `实际：${value.receipt}`);
 });
+
+test('工具卡片的标题是人话：待发时说「发群消息」，发完说群名和唤醒名单', async () => {
+  // The complaint that produced this: the card read 「a2a_group_post · g-1fad9113」 — the tool name
+  // and an internal id. DSH titles a call from the tool name plus its first argument unless the tool
+  // declares `presentCall`/`presentResult`, so both states are written here in words.
+  const { runtime, groupId, ownerId } = harness();
+  const spec = specOf('a2a_group_post');
+  assert.equal(typeof spec.presentCall, 'function', '必须有 pending 态的标题');
+  assert.equal(typeof spec.presentResult, 'function', '必须有完成态的标题');
+
+  const pending = spec.presentCall({ groupId, message: '正文', mentions: [ownerId] });
+  assert.ok(pending.title.includes('发群消息'), `pending 标题要人话，实际：${pending.title}`);
+  assert.ok(!pending.title.includes(groupId), 'pending 标题不能出现内部 id');
+  assert.ok(pending.title.includes('点名 1 人'), `要点名人数，实际：${pending.title}`);
+
+  const args = { groupId, message: '正文', mentions: [ownerId] };
+  const value = await runtime.call('a2a_group_post', args, { sessionId: 's-owner' });
+  const done = spec.presentResult(args, { meta: value, content: [], isError: false });
+  assert.equal(done.title, value.receipt, '完成态标题就是那句收据');
+  assert.ok(done.title.includes('a2a-group研发测试群'), `标题必须写群名，实际：${done.title}`);
+  assert.ok(done.title.includes('牛昆亮'), '标题必须写唤醒的人');
+  assert.ok((done.content ?? []).some((part) => part.text.includes('正文')), '正文要在卡片内容里');
+});

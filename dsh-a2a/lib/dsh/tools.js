@@ -281,6 +281,11 @@ export function registerTools(ctx, deps) {
       description: spec.description,
       parameters: spec.parameters,
       output: spec.output,
+      // Presentation hooks. A tool call is rendered by the UI from these or, without them, from the
+      // tool name plus its first argument — which is why posting to a group showed up as
+      // 「a2a_group_post · g-1fad9113」: an internal id, no group name, no indication of who was woken.
+      presentCall: spec.presentCall,
+      presentResult: spec.presentResult,
       // The human gate runs BEFORE the tool body, so a refusal costs nothing and is reported as a tool error the model
       // can read. Reading tools are untouched: `gateOnHuman` decides from the tool name and the arguments.
       execute: async (args, exec) => {
