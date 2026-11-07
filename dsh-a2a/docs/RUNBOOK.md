@@ -55,8 +55,15 @@ curl http://127.0.0.1:3095/a2a/.well-known/agent-card.json
 ### 3.1 装插件
 
 ```bash
-dsh plugin --profile web add dsh-a2a-groups@latest
+# 公司内网（首选）：两个源是同一个构建产物，shasum 相同
+dsh plugin --profile web add dsh-a2a-groups --registry=http://registry.ict.cmcc
+
+# 外网 / 出差
+dsh plugin --profile web add dsh-a2a-groups --registry=https://registry.npmmirror.com
 ```
+
+> **为什么现在要显式写 `--registry`**：内网 Verdaccio **不自动同步上游 npm**，只有被手动推过的包才在。
+> 这台机器的默认 registry 是外网镜像，所以「装得上」不代表「同事装得上」。发版时两边都推（见 §六）。
 
 **然后必须做第二步**：编辑 `<$DSH_HOME>/profiles/web/package.json`，把包名加进 `dsh.profile.bundles`：
 
@@ -321,7 +328,73 @@ Get-Content "$env:DSH_HOME\err.log" -Tail 20
 
 ---
 
-## 七、安全边界
+## 七、发版
+
+一个版本发布要动**两个 npm 源**，而且必须在同一次动作里做完。
+
+### 7.1 为什么是两个
+
+```
+官方  registry.npmjs.org      外网、CI 在 tag 上自动发布
+内网  registry.ict.cmcc       公司内网 Verdaccio，不自动同步上游
+```
+
+内网源**只有被手动推过的包才在**。实测 `is-odd`/`left-pad`/`lodash` 全部 404 而 `dsh-himarket` 在，
+就是这个原因。
+
+**「官方发布成功 = 同事能装到」不成立。** 中间这一步静默失效：你那边一切正常，同事那边装的是旧版，
+没有人会报错。
+
+### 7.2 三步
+
+```bash
+# ① 推 tag，CI 会跑测试并发布官方 npm
+git tag -a v0.1.30 -m "..." <commit>
+git push origin v0.1.30 && git push corp v0.1.30
+
+# ② 官方成功后，推内网（必须显式 --registry，本机默认是外网镜像）
+cd /tmp && npm pack dsh-a2a-groups@0.1.30 --registry https://registry.npmjs.org
+npm publish dsh-a2a-groups-0.1.30.tgz --registry http://registry.ict.cmcc --access public
+
+# ③ 验证——直接打 registry，不要用 npm view（有缓存）
+curl -s http://registry.ict.cmcc/-/package/dsh-a2a-groups/dist-tags
+curl -s https://registry.npmjs.org/-/package/dsh-a2a-groups/dist-tags
+```
+
+推之前先比 shasum，一致才推——推错版本到内网是**不可撤销**的（同一版本号不能覆盖，只能递增重发）：
+
+```bash
+sha1sum dsh-a2a-groups-0.1.30.tgz                       # 本地
+curl -s https://registry.npmjs.org/dsh-a2a-groups/0.1.30 | jq -r .dist.shasum
+```
+
+> 也可以直接用现成脚本（PKGS 清单已包含本包，含幂等跳过）：
+> ```bash
+> bash /e/ai-works/k8s/scripts/publish-internal.sh --check
+> bash /e/ai-works/k8s/scripts/publish-internal.sh dsh-a2a-groups 0.1.30
+> ```
+
+### 7.3 发版完成的判据（可机器化）
+
+```
+完成 = 官方 latest == 内网 latest  且 两边的 tarball shasum 相同
+```
+
+**任一项不相等，这次发版就还没完成。** 这条比「记得推一下」可靠——它不依赖任何人记性。
+
+### 7.4 五个坑（都踩过）
+
+| 坑 | 后果 | 对策 |
+|---|---|---|
+| 内网同版本不可覆盖 | 发错了无法重推 | 推前比 shasum；发错只能递增版本号 |
+| 本机默认 registry 是外网镜像 | `npm publish` 不带 `--registry` 会发错地方 | 永远显式写 |
+| `npm view` 有缓存 | 误判「已发布」 | 验证一律 `curl` 直打 registry |
+| 内网版本可能**超前**于官方 | 「内网落后」的判断不一定成立 | 比版本别只看方向，脚本已按比较区分 |
+| `workspace:*` 不能直接 publish | 同事装时报 ERR_PNPM_WORKSPACE_PKG_NOT_FOUND | 用 `pnpm publish` 或先改真实版本号 |
+
+---
+
+## 八、安全边界
 
 给同事讲清楚，避免误用：
 
@@ -334,7 +407,7 @@ Get-Content "$env:DSH_HOME\err.log" -Tail 20
 
 ---
 
-## 八、当前能力边界
+## 九、当前能力边界
 
 **已知不做**（不需要再提需求）：
 

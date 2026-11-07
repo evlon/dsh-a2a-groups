@@ -56,8 +56,16 @@ const INSTRUCTION_HEAD_CONFIG_ONLY = `帮我配置 DSH 以接入协作模式（�
 
 /** The YAML block, identical in both modes. */
 const INSTRUCTION_BODY = `
-1. 安装插件（如果还没装）：
-   dsh plugin --profile web add dsh-a2a-groups@latest
+1. 安装插件（如果还没装）。**公司内网请用内网源**，外网源在内网里慢且可能不通：
+
+   # 内网（公司网络内首选）
+   dsh plugin --profile web add dsh-a2a-groups --registry=http://registry.ict.cmcc
+
+   # 外网（出差 / 不在公司网络时）
+   dsh plugin --profile web add dsh-a2a-groups --registry=https://registry.npmmirror.com
+
+   两个源发布的版本是一致的（同一个构建产物、同一个 shasum），装到哪个都一样。
+   如果装了却看不到「协作群」按钮，先确认版本：内网源与外网源的 latest 应当相同。
 
 2. 确认 <DSH_HOME>/profiles/web/package.json 的 dsh.profile.bundles 里有 dsh-a2a-groups。
    没有就加在数组最后。装了包但没挂载，UI 里什么都不会出现，也不报错。

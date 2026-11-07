@@ -108,7 +108,16 @@ test('the instruction starts with installing the plugin, before any config', () 
   const text = buildJoinInstruction(VALUES);
   // Configuring cordis.patch.yml for a package that is not installed resolves to nothing — the "cannot resolve
   // profile bundle" failure measured on a fresh profile. The install step must come FIRST.
-  assert.ok(text.includes('dsh plugin --profile web add dsh-a2a-groups@latest'), 'the install command must be present');
+  // Two registries on purpose: the internal Verdaccio does NOT mirror npm, so a colleague on the
+  // company network cannot install from the public one, and someone travelling cannot reach the
+  // internal one. Both commands must be present, each naming its registry explicitly — a bare
+  // `add` resolves against whatever the machine happens to default to.
+  for (const registry of ['http://registry.ict.cmcc', 'https://registry.npmmirror.com']) {
+    assert.ok(
+      text.includes(`dsh plugin --profile web add dsh-a2a-groups --registry=${registry}`),
+      `the install command for ${registry} must be present`,
+    );
+  }
   assert.ok(
     text.indexOf('plugin --profile web add') < text.indexOf('cordis.patch.yml'),
     'install must precede the config step',
