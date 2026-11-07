@@ -1647,6 +1647,10 @@ topic: ${value.topic}`),
         type: 'text',
         text: `Sent «${value.name}» (${Math.max(1, Math.round((value.size ?? 0) / 1024))} KiB) to the group in ${value.chunks ?? 1} chunk(s).\n`
           + `posted as seq ${value.seq}; fileId ${value.fileId}\n`
+          // The digest is the one verifiable fact about what was sent. Omitting it from the visible
+          // text made a tester compute it themselves and note that the tool "did not report" it —
+          // the value was in the result, but a model reads the rendered text, not the schema.
+          + `sha256 ${value.sha256 ?? '(unknown)'}\n`
           + 'This means the file is stored and the message is in the feed — NOT that anyone has opened it yet.',
       }],
     },
