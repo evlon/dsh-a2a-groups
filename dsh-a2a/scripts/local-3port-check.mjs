@@ -37,7 +37,10 @@ const HERE = fileURLToPath(new URL('..', import.meta.url));
 // line. A fixed port made this check fail on any machine that already had a dev instance bound
 // to it — which is most developer machines, including the one this was written on.
 const portFlag = process.argv.indexOf('--port');
-const REQUESTED_PORT = portFlag > -1 ? Number(process.argv[portFlag + 1]) : 0;
+// Defaults to the documented 3091. This is a test environment: the instance bound there is ours
+// to stop, so the fixed port is the contract rather than a convenience. `--port` exists for the
+// case where two check runs must not share a machine.
+const REQUESTED_PORT = portFlag > -1 ? Number(process.argv[portFlag + 1]) : 3091;
 if (!Number.isInteger(REQUESTED_PORT) || REQUESTED_PORT < 0 || REQUESTED_PORT > 65535) {
   console.error('invalid --port');
   process.exit(2);
