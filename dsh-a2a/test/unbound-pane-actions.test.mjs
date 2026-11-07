@@ -59,18 +59,23 @@ test('the rejoin instruction no longer over-claims "no invite needed"', () => {
   );
 });
 
-test('the panel has a 设置 tab and renders the config section', () => {
-  // A colleague with the plugin but no wiring cannot find cordis.patch.yml. The 设置 tab must exist and show the
-  // paste-ready config section, with a MASKED key (never the plaintext).
+test('the panel has a 设置 tab that opens a form, not a YAML wall', () => {
+  // A colleague who has never seen cordis.patch.yml must not have to learn YAML indentation. The 设置 tab is a form
+  // with three labelled inputs (gateway, agent name, key) and a save button.
   assert.match(CLIENT, /\{ id: "settings", label: "设置"/u, 'the 设置 tab must be defined');
   assert.match(CLIENT, /tab === "settings" \? settingsBody/u, 'selecting 设置 must render its body');
-  assert.match(CLIENT, /settingsData\.yaml/u, 'the body must show the config YAML');
-  assert.match(CLIENT, /复制配置/u, 'a copy button must exist');
+  assert.match(CLIENT, /function SettingsForm/u, 'the settings body must be a form component');
+  assert.match(CLIENT, /网关地址 gatewayBase/u, 'the form must label the gateway field');
+  assert.match(CLIENT, /你在网关里的名字 agentName/u, 'and the agent name');
+  assert.match(CLIENT, /网关密钥 apiKey/u, 'and the api key');
 });
 
-test('the Host renders the config section with a masked key', () => {
-  // The section travels into the snapshot as text, with the apiKey masked at the source — so even a stray
-  // screenshot of the panel cannot leak the secret.
-  assert.match(HOST, /maskSecret\(client\.apiKey/u, 'the Host must mask the key before publishing it');
-  assert.match(HOST, /settings: renderConfigSection\(\)/u, 'the section must be published with the snapshot');
+test('the settings form saves through the Host configEditor', () => {
+  // The save must go over the panel RPC to the Host's configEditor — the page holds no filesystem, and a direct
+  // browser write would be both impossible and unsafe.
+  assert.match(CLIENT, /saveConfig\(/u, 'the form must call saveConfig');
+  assert.match(CLIENT, /"\/a2a-panel", "set-config"/u, 'saveConfig must target the set-config endpoint');
+  assert.match(HOST, /setPanelConfig/u, 'the Host must implement setPanelConfig');
+  assert.match(HOST, /configEditor/u, 'the Host must use the configEditor service');
+  assert.match(HOST, /editor\.edit\(entry/u, 'and call its edit() for atomic, validated write + hot reload');
 });
