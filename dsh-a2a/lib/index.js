@@ -493,6 +493,85 @@ const PANEL_FEED_TAIL = 8;
   };
 
   /**
+   * Save the a2a config from the panel's 「设置」 tab.
+   *
+   * The form is the point: a colleague who has never seen cordis.patch.yml must not have to learn YAML indentation to
+   * wire up their instance. Each field is a flat, labelled input; this endpoint turns them into the plugin's config
+   * object and hands it to the Host's own `configEditor` service, which owns validation, atomic writes, failure
+   * rollback and the hot reload that makes the change live.
+   *
+   * @param {object} payload - flat fields: `gatewayBase`, `agentName`, `apiKey`, `publicUrl`, `token`.
+   * @returns {Promise<object>} a Connection result.
+   */
+  const setPanelConfig = async (payload) => {
+    const body = payload !== null && typeof payload === 'object' ? payload : {};
+
+    // The editor is an OPTIONAL host service. Without it the page can still SHOW the config; it just cannot save.
+    const editor = typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined;
+    if (editor === undefined || typeof editor.edit !== 'function') {
+      return {
+        ok: false,
+        error: {
+          code: 'config_editor_unavailable',
+          message: '当前 profile 未启用配置编辑服务（dsh-config-editor），无法从面板保存。请直接编辑 cordis.patch.yml。',
+          details: {},
+        },
+      };
+    }
+    const entry = ctx.fiber !== undefined && ctx.fiber !== null ? ctx.fiber.entry : undefined;
+    if (entry === undefined) {
+      return { ok: false, error: { code: 'no_entry', message: '找不到这个插件的配置入口', details: {} } };
+    }
+
+    // Validate before touching anything: a wrong URL or empty name is a form error, not a file write.
+    const gatewayBase = typeof body.gatewayBase === 'string' ? body.gatewayBase.trim() : '';
+    const agentName = typeof body.agentName === 'string' ? body.agentName.trim() : '';
+    const apiKey = typeof body.apiKey === 'string' ? body.apiKey.trim() : '';
+    const publicUrl = typeof body.publicUrl === 'string' ? body.publicUrl.trim() : '';
+    const token = typeof body.token === 'string' ? body.token : '';
+
+    if (gatewayBase !== '' && !/^https?:\/\//i.test(gatewayBase)) {
+      return { ok: false, error: { code: 'bad_argument', message: '网关地址必须以 http:// 或 https:// 开头', details: {} } };
+    }
+    if (agentName === '') {
+      return { ok: false, error: { code: 'bad_argument', message: '「你在网关里的名字」不能为空', details: {} } };
+    }
+    if (publicUrl !== '' && !/^https?:\/\//i.test(publicUrl)) {
+      return { ok: false, error: { code: 'bad_argument', message: '对外地址必须以 http:// 或 https:// 开头', details: {} } };
+    }
+
+    try {
+      await editor.edit(entry, (current) => ({
+        ...(current ?? {}),
+        groups: {
+          ...((current ?? {}).groups ?? {}),
+          enabled: true,
+          gatewayBase: gatewayBase === '' ? undefined : gatewayBase,
+          agentName: agentName === '' ? undefined : agentName,
+        },
+        client: {
+          ...((current ?? {}).client ?? {}),
+          enabled: true,
+          apiKey: apiKey === '' ? undefined : apiKey,
+          gatewayBase: gatewayBase === '' ? undefined : gatewayBase,
+          forwardProto: 'http',
+        },
+        server: {
+          ...((current ?? {}).server ?? {}),
+          enabled: true,
+          publicUrl: publicUrl === '' ? undefined : publicUrl,
+          token: token === '' ? undefined : token,
+        },
+        tools: true,
+        promptSection: true,
+      }));
+      return { ok: true, value: { saved: true, at: clock() } };
+    } catch (error) {
+      return { ok: false, error: { code: 'config_save_failed', message: describe(error), details: {} } };
+    }
+  };
+
+  /**
    * The host's public group directory, as last fetched.
    *
    * WHY A CACHE AND NOT A DIRECT CALL
@@ -602,6 +681,7 @@ const PANEL_FEED_TAIL = 8;
         home: groups.home ?? '',
         serverEnabled: server.enabled !== false,
         publicUrl: server.publicUrl ?? '',
+        token: typeof server.token === 'string' ? server.token : '',
         version: pluginVersion(),
       },
     };
@@ -1101,6 +1181,9 @@ const PANEL_FEED_TAIL = 8;
             }
             if (name === 'profile') {
               return await setPanelProfile(payload);
+            }
+            if (name === 'set-config') {
+              return await setPanelConfig(payload);
             }
             if (name === 'refresh') {
               return await refreshGroupRoster(payload);
