@@ -241,20 +241,51 @@ AISIX 的 admin API **是只读的**：
 | `/a2a-panel` 不是宿主 HTTP 路由 | `lib/core/server.js` 0 命中；`lib/index.js` 6 命中；宿主启动 routes 无此路径。它是 DSH 的 RPC 通道 |
 | 不是「客户端走了 HTTP fallback」 | `client.js:1816` 的 `panelRpcCaller` 只有 `connection.rpc.call` 一条路径，无 fetch、无降级 |
 
-**结论收窄到一种**：宿主侧 `ctx.webserver.rpc('/a2a-panel', handler)` 没注册上，传送层把
-`/a2a-panel/confirm-settings` 当未知路径回 405。
+**结论收窄**：`/a2a-panel` 通道没接上，请求被当未知路径回 405。注册走的是
+`connection.rpc.handle(channel, handler)`（DSH 的 connection 服务），**不是 `ctx.webserver.rpc`**
+（早先误记，已纠正）。
 
-#### 下一步：一行日志定性
+#### 下一步：日志四选一
 
-`lib/index.js:1209` 成功与失败各打一行：
+`console.error` 共 **3 行**，加上「三行都没有」构成 **4 种状态**——四种对应四条不同修法：
+
+| 日志 | 结论 | 修法 |
+|---|---|---|
+| `[a2a-panel] registered /a2a-panel` | 注册成功 | 问题在 rpc 传输层，轮到 DSH 侧 |
+| `[a2a-panel] register failed: <reason>` | 注册抛异常 | reason 即根因，照改 |
+| `[a2a-panel] no connection.rpc available` | `ctx.get("connection")` 拿不到 | 查 DSH 的 connection 注入契约 |
+| 三行都没有 | 插件未 mount | profile / 加载问题，另一条线 |
+
+**关于第三种**：`lib/index.js:986-990` 有一段上游 bug 记录（#8414）——
+
+```js
+// The upstream bug (#8414): registration from a plugin fiber throws
+// "cannot get property webServer without inject" because the registration
+// effect runs on a fiber that lacks the declaration.
+// The discussion notes the ROOT context registers fine, so try the
+// plugin's root before giving up.
+const rootCtx = ctx.root ?? (typeof ctx.get === "function" ? ctx.get("root") : undefined) ?? ctx;
+```
+
+插件作者早已踩过并加了 `ctx.root` 兜底。若新版 DSH 改了 `ctx.root` / `ctx.get("connection")`
+的语义，兜底会失效并落到这一行——**这是「代码零改动却升级后坏」的一种机制解释**。
+
+#### 但前提尚未确认（2026-11-07，关键待办）
 
 ```
-[a2a-panel] registered /a2a-panel        注册成功 → 才轮到查 DSH 的 rpc 层
-[a2a-panel] register failed: <reason>    注册失败 → 原因即根因
-（两行都没有）                            插件未 mount → 走 profile/加载那条线
+本次升级的是插件（0.1.24→0.1.25），client.js 与 lib/index.js 字节相同。
+若 DSH 版本未变，则「运行时契约变了」不成立，
+更可能是这个面板一直坏，只是此前没人点过「刷新成员」。
 ```
 
-三种结果对应三条不同修法。**拿到这行之前不动代码。**
+**先答两个问题，比查日志更快：**
+1. 报告者（赵雷）的 DSH 版本是多少？0.1.24 时点过刷新成员吗？正常过吗？
+2. 同一插件同 profile 的另一台机器（苏虎虎）重启后，面板能刷新成员吗？
+
+若答案为「0.1.24 时没点过」，则 §6.1 的前提应改为「一直坏，0.1.25 才被发现」——
+两个结论的修法完全不同。
+
+**在这个对照结果出来之前不动代码。**
 
 #### 验收标准
 
