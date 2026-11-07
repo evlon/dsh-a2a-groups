@@ -208,6 +208,41 @@ export const MAX_TAGS = 5;
 /** Longest conventions text (the "how we work here" notice every joiner is shown). */
 export const MAX_CONVENTIONS_CHARS = 4000;
 
+/**
+ * The rules a group starts with, before anybody writes anything.
+ *
+ * Why a built-in default rather than "write your own": a blank conventions field means the
+ * group with no stated rules is the DEFAULT state, and in practice that state is the one that
+ * produced the failures these rules exist for — four people each doing their own thing, then
+ * a burst of messages nobody could act on. An empty field is not neutral; it is a decision.
+ *
+ * A group may add clauses on top of this (`conventionsExtra`) or replace it wholesale
+ * (`conventions`). The default itself is NOT stored per group: it lives here, so improving
+ * the wording reaches every group instead of only the ones created afterwards.
+ */
+export const DEFAULT_CONVENTIONS = [
+  '【本群默认约定】',
+  '',
+  '一、聚焦本职工作。先把自己负责的那份做扎实，再去谈别的。',
+  '',
+  '二、别人的工作，除非对方明确征求你的意见，否则不主动指导、不主动挑问题。发现问题先记录，由责任人自己处理；责任人来问时再给判断。主动找别人的问题不是负责，是越界。',
+  '',
+  '三、只讨论能推进当前目标的事。不能推进的话题不回复、不展开——沉默是合规的，不是失职。',
+  '',
+  '四、先做完自己那份再发消息。每条消息都消耗全员一个 turn，沟通成本高于通常的估计。',
+  '',
+  '五、发现目标本身错了，用 a2a_goal_challenge 并带替代方案，不要用沉默或闲聊表达。沉默不会被读成反对，只会被读成同意。',
+  '',
+  '六、交付给可核实的判据（命令、输出、行号、数据），不写「我验证过」。转述别人的验证结果时直接贴原文，不凭记忆重写。',
+  '',
+  '七、已收口的结论不重开。要重开必须引用是哪条结论、为什么失效。',
+  '',
+  '八、生产事故任何人可立即 a2a_goal_emergency，不需要等审批；24 小时后自动失效，忘了撤销也不会出事。',
+].join('\n');
+
+/** Longest per-group ADDITION to the default rules. */
+export const MAX_CONVENTIONS_EXTRA_CHARS = 4000;
+
 /** Longest goal title. */
 export const MAX_GOAL_TITLE_CHARS = 200;
 
@@ -2512,7 +2547,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     return {
       groupId: group.groupId,
       enabled: goalAvailable(group),
-      ...(group.settings.conventions === undefined ? {} : { conventions: group.settings.conventions }),
+      // The text to read, not the raw storage: built-in rules plus this group's additions.
+      ...(organizationInUse(group) ? { conventions: effectiveConventions(group) } : {}),
       ...(goal === undefined ? {} : { goal: publicGoal(goal, at) }),
       ...((group.goalHistory ?? []).length === 0
         ? {}
@@ -2531,29 +2567,97 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
    */
   function setConventions(input = {}) {
     const group = requireGroup(input.groupId);
-    requireGoalAvailable(group);
+    /**
+     * Deliberately NOT gated by `requireGoalAvailable`.
+     *
+     * It was, and that was wrong: `A2A_GOAL_ENABLED=false` exists to stop a misbehaving
+     * GOAL, and it must stop the smallest thing that fixes the problem. Sharing the guard
+     * meant a stop order also froze the conventions — so the group went silent AND stopped
+     * telling newcomers how it works, which is a second, unrequested outage caused by the
+     * fix for the first one.
+     *
+     * Conventions carry no automatic behaviour: they are text that a joiner is shown. An
+     * emergency stop that disables inert text is over-broad by the same logic that would let
+     * it disable `group/read`. The class KDoc says goal and conventions are kept apart; this
+     * guard was the one place the implementation disagreed with its own documentation.
+     */
     const owner = resolveMember(group, input.member);
     if (owner.personId !== group.ownerPersonId) {
       throw new GroupError('not_owner', '只有群主可以修改群约定。');
     }
-    // An explicit empty string clears it; absent leaves it untouched. Collapsing the two would
-    // make "remove the notice" impossible without a second tool.
-    const conventions = input.conventions === undefined
-      ? group.settings.conventions
-      : optionalText(input.conventions, MAX_CONVENTIONS_CHARS, '群约定');
-    const changed = conventions !== group.settings.conventions;
-    if (conventions === undefined) delete group.settings.conventions;
-    else group.settings.conventions = conventions;
+    const before = { conventions: group.settings.conventions, extra: group.settings.conventionsExtra };
+    // `reset` puts the group back on the built-in rules: no override, no additions. That is
+    // the way to ENABLE the organisation layer on a fresh group without writing anything —
+    // "just use the defaults" should not require typing them out.
+    if (input.reset === true) {
+      delete group.settings.conventions;
+      delete group.settings.conventionsExtra;
+    }
+    // An explicit empty string clears; absent leaves untouched. Collapsing the two would make
+    // "go back to the defaults" impossible without a second tool.
+    if (input.conventions !== undefined) {
+      const override = optionalText(input.conventions, MAX_CONVENTIONS_CHARS, '群约定');
+      if (override === undefined) delete group.settings.conventions;
+      else group.settings.conventions = override;
+    }
+    if (input.extra !== undefined) {
+      const extra = optionalText(input.extra, MAX_CONVENTIONS_EXTRA_CHARS, '群约定增补');
+      if (extra === undefined) delete group.settings.conventionsExtra;
+      else group.settings.conventionsExtra = extra;
+    }
+    const changed = group.settings.conventions !== before.conventions
+      || group.settings.conventionsExtra !== before.extra;
+    // Calling this tool at all is the opt-in, even when it changes no text (`reset` on a fresh
+    // group adopts the built-in rules without storing any). Without the marker that call would
+    // be invisible and the group would keep answering as if it had no conventions.
+    if (group.settings.organization !== true) group.settings.organization = true;
     if (changed) {
-      appendSystem(group, conventions === undefined ? `${owner.displayName} 清除了群约定` : `${owner.displayName} 更新了群约定`);
+      appendSystem(group, `${owner.displayName} 更新了群约定`);
       persist();
-      log.info('conventions updated', { groupId: group.groupId, cleared: conventions === undefined });
+      log.info('conventions updated', {
+        groupId: group.groupId,
+        hasOverride: group.settings.conventions !== undefined,
+        hasExtra: group.settings.conventionsExtra !== undefined,
+      });
     }
     return {
       groupId: group.groupId,
-      ...(conventions === undefined ? {} : { conventions }),
+      conventions: effectiveConventions(group),
+      ...(group.settings.conventionsExtra === undefined ? {} : { extra: group.settings.conventionsExtra }),
+      ...(group.settings.conventions === undefined ? {} : { override: group.settings.conventions }),
       changed,
     };
+  }
+
+  /**
+   * The conventions text a member actually reads.
+   *
+   * Order: a group's own full override wins; otherwise the BUILT-IN rules plus whatever this
+   * group added. The default lives in code rather than in each group's record on purpose — a
+   * copy made at creation time would freeze the wording forever, and every group created
+   * before a fix would keep the old rules.
+   */
+  /**
+   * Whether this group has opted into the organisation layer at all.
+   *
+   * The single predicate behind every "does this group have the feature" question, so a
+   * snapshot, a goal status and a join reply cannot disagree about whether a group is
+   * organised. A group with none of these three is byte-for-byte what it was before the layer
+   * existed.
+   */
+  function organizationInUse(group) {
+    return group.goal !== undefined
+      || group.settings.organization === true
+      || group.settings.conventions !== undefined
+      || group.settings.conventionsExtra !== undefined;
+  }
+
+  function effectiveConventions(group) {
+    const override = group.settings.conventions;
+    if (override !== undefined) return override;
+    const extra = group.settings.conventionsExtra;
+    if (extra === undefined || extra === '') return DEFAULT_CONVENTIONS;
+    return `${DEFAULT_CONVENTIONS}\n\n【本群增补】\n${extra}`;
   }
   return {
     create,
@@ -3160,6 +3264,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // Absent unless the group actually has one: the snapshot of a group that never used the
       // organisation layer must stay byte-identical to what this version's predecessor returned.
       ...(group.goal === undefined ? {} : { goal: publicGoal(group.goal, now()) }),
+      // The text a joiner actually reads: built-in rules, plus whatever this group added. Absent
+      // unless the group has opted into the organisation layer at all, so a group that never
+      // used it keeps its exact former shape.
+      ...(organizationInUse(group) ? { conventions: effectiveConventions(group) } : {}),
       // Same rule: a group whose delivery was never paused must not grow a `control` key.
       ...(publicControl(group) === undefined ? {} : { control: publicControl(group) }),
     };
@@ -3283,6 +3391,7 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // Length-capped at load time as well as at write time: a hand-edited groups.json must not
     // be able to put an unbounded block into every prompt that reads this group.
     const conventionsText = optionalText(source.conventions, MAX_CONVENTIONS_CHARS, '群约定');
+    const conventionsExtraText = optionalText(source.conventionsExtra, MAX_CONVENTIONS_EXTRA_CHARS, '群约定增补');
     return {
       maxPostChars: clampInteger(source.maxPostChars, settings.maxPostChars, 1, 1_048_576),
       maxPostsPerMinute: clampInteger(source.maxPostsPerMinute, settings.maxPostsPerMinute, 1, 10_000),
@@ -3315,6 +3424,14 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // the "unused groups are unaffected" red line becomes false the moment we ship.
       ...(source.goalEnabled === false ? { goalEnabled: false } : {}),
       ...(conventionsText === undefined ? {} : { conventions: conventionsText }),
+      // Clauses ADDED to the built-in default. Kept separate from `conventions` so a group can
+      // add one rule without having to restate the eight it agrees with — and so improving the
+      // default reaches this group too, which a copied-then-edited full text never would.
+      ...(conventionsExtraText === undefined ? {} : { conventionsExtra: conventionsExtraText }),
+      // Explicit opt-in marker. Needed because "reset to the built-in rules" stores no
+      // conventions text at all — without this flag the group would look untouched and its
+      // snapshot would omit the very rules it had just adopted.
+      ...(source.organization === true ? { organization: true } : {}),
     };
   }
 

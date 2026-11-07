@@ -324,27 +324,34 @@ test('任何成员都能触发紧急例外，24 小时后自动失效', () => {
 // Conventions
 // ---------------------------------------------------------------------------
 
-test('群约定：群主可设置、加入返回携带、可显式清空', () => {
+test('群约定：内置默认规则开箱可用，群可在其上增补，入群即见', () => {
   const env = harness();
   const { groupId, owner } = seed(env);
 
-  const set = env.store.setConventions({
-    groupId,
-    member: owner,
-    conventions: '一、只讨论当前主目标。\n二、先做完自己的部分再发消息。',
-  });
-  assert.equal(set.changed, true);
+  // A fresh group adopts the built-in rules by resetting — no text to type.
+  const adopted = env.store.setConventions({ groupId, member: owner, reset: true });
+  assert.ok(adopted.conventions.includes('【本群默认约定】'), '新群应当开箱带上默认规则');
+
+  // Adding a clause must not require restating the eight defaults.
+  const added = env.store.setConventions({ groupId, member: owner, extra: '九、本群周报周五交。' });
+  assert.ok(added.conventions.includes('【本群默认约定】'), '增补时默认规则必须仍在');
+  assert.ok(added.conventions.includes('周报周五交'), '增补条款必须出现');
 
   const invite = env.store.invite({ groupId, ownerKey: owner.personKey });
   const joined = env.store.join({ groupId, token: invite.token, displayName: '张工' });
   assert.ok(
-    joined.group.settings.conventions?.includes('先做完自己的部分'),
-    '入群返回必须携带群约定，否则新成员无从知悉',
+    joined.group.conventions?.includes('周报周五交'),
+    '入群返回必须携带完整约定（默认 + 增补），否则新成员无从知悉',
   );
 
-  const cleared = env.store.setConventions({ groupId, member: owner, conventions: '' });
-  assert.equal(cleared.changed, true);
-  assert.equal(cleared.conventions, undefined);
+  // An override replaces the defaults entirely; clearing it falls back to the defaults rather
+  // than to nothing — "no rules" is not the neutral state, it is the state these rules exist to fix.
+  const overridden = env.store.setConventions({ groupId, member: owner, conventions: '只有这一条' });
+  assert.equal(overridden.conventions, '只有这一条');
+  const reverted = env.store.setConventions({ groupId, member: owner, conventions: '' });
+  assert.ok(reverted.conventions.includes('【本群默认约定】'), '清除覆盖应回到默认规则，而不是变成空');
+
+  // Raw storage stays clean: the default text is code, never copied into the record.
   assert.equal(env.store.snapshot({ groupId }).settings.conventions, undefined);
 });
 
@@ -377,6 +384,34 @@ test('运维级急停：A2A_GOAL_ENABLED=false 时整个特性不可用，且群
   delete process.env.A2A_GOAL_ENABLED;
   const back = reopen(env.home);
   assert.equal(publish(back, groupId, owner).goal.status, 'active');
+});
+
+test('运维级急停只关 goal：约定、状态读取、发消息都不受影响', () => {
+  // The bug this pins: `setConventions` used to share `requireGoalAvailable`, so an
+  // emergency stop also froze the group's conventions — meaning the group went quiet AND
+  // stopped telling newcomers how it works. Reported from a staging run, not by reading code.
+  const env = harness();
+  const { groupId, owner } = seed(env);
+  env.store.setConventions({ groupId, member: owner, conventions: '先做完自己那份' });
+
+  process.env.A2A_GOAL_ENABLED = 'false';
+  const stopped = reopen(env.home);
+
+  // Still refused: the thing the switch exists to stop.
+  assert.throws(
+    () => publish(stopped, groupId, owner),
+    (error) => error instanceof GroupError && error.code === 'feature_disabled',
+  );
+  // Still allowed: inert text, a read, and ordinary conversation.
+  assert.equal(
+    stopped.store.setConventions({ groupId, member: owner, conventions: '急停期间仍可维护' }).changed,
+    true,
+    '急停不该连带冻结约定——那会让新人看不到协作规则，等于制造第二个故障',
+  );
+  assert.equal(stopped.store.goalStatus({ groupId, member: owner }).enabled, false, '状态读取应可用并报告已关闭');
+  assert.ok(stopped.store.post({ groupId, member: owner, text: '急停期间照常发言' }).seq > 0);
+
+  delete process.env.A2A_GOAL_ENABLED;
 });
 
 test('群级开关：单个群可以退出组织形态，不影响其他群', () => {

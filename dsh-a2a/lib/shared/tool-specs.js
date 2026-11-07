@@ -1357,15 +1357,28 @@ topic: ${value.topic}`),
   {
     name: 'a2a_group_conventions',
     description:
-      'Set, replace or clear this group\'s standing conventions — the "how we work here" notice every member receives when they join. Owner only. Kept apart from the goal on purpose: a goal is replaced every few weeks, the conventions are the part that should not change with it. Pass an empty string to clear. This is the last step of setting a group up: a group whose conventions are empty has nothing to tell a newcomer.',
+      'Set up or customise this group\'s standing rules — the "how we work here" notice every member receives when they join. Owner only. '
+      + 'THE GROUP STARTS WITH EIGHT BUILT-IN RULES: focus on your own work; do not police colleagues who did not ask; discuss only what advances the goal; '
+      + 'finish your part then speak; challenge the goal instead of staying silent; give verifiable evidence; do not reopen settled points; anyone may declare an emergency. '
+      + 'Most groups only need to ADD a clause or two with `extra` — the defaults already cover the common failures, and a group that copies-then-edits the whole text stops '
+      + 'receiving improvements to it. Use `conventions` only when the defaults are wrong for this group. `reset` goes back to the defaults, and on a NEW group it is how you '
+      + 'turn the organisation layer on without typing anything. Kept apart from the goal on purpose: a goal is replaced every few weeks, the rules are the part that should not change with it.',
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
         groupId: { type: 'string', description: 'Group id.' },
+        extra: {
+          type: 'string',
+          description: 'Clauses to ADD to the built-in rules. This is the normal way to customise a group: the eight default rules already cover focus, boundaries and evidence, so a group usually needs one or two more, not a rewrite. An empty string removes the additions. Omit to leave them unchanged.',
+        },
         conventions: {
           type: 'string',
-          description: 'The full text (plain, a few lines). An empty string clears it. Omit to leave it unchanged.',
+          description: 'Replace the built-in rules ENTIRELY with this text. Use it only when the defaults are wrong for this group — a group that replaces them stops receiving improvements to the defaults. An empty string clears the override (back to defaults). Omit to leave it unchanged.',
+        },
+        reset: {
+          type: 'boolean',
+          description: 'Discard both the override and the additions, going back to the built-in rules. This is also how a NEW group turns the organisation layer on without typing anything out: pass reset=true on an untouched group.',
         },
       },
       required: ['groupId'],

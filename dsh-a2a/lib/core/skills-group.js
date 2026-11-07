@@ -1495,7 +1495,13 @@ return {
         const data = payload(input);
         const { groupId, member } = requireMember(input);
         try {
-          const result = store.setConventions({ groupId, member, conventions: data.conventions });
+          const result = store.setConventions({
+            groupId,
+            member,
+            conventions: data.conventions,
+            extra: data.extra,
+            reset: data.reset,
+          });
           return { text: 'conventions updated', meta: result };
         } catch (error) {
           refuse(error);

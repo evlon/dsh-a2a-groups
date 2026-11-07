@@ -2058,14 +2058,22 @@ function requireSession(sessionId, tool) {
     const membership = requireMembership(store, identities, groupId, sessionId);
     const member = { personId: membership.personId, personKey: membership.personKey };
     if (membership.local === true) {
-      const result = store.setConventions({ groupId, member, conventions: args.conventions });
+      const result = store.setConventions({
+        groupId,
+        member,
+        conventions: args.conventions,
+        extra: args.extra,
+        reset: args.reset,
+      });
       await store.flush();
       return result;
     }
     const result = await bridge.send(targetOf(membership, config), {
       skill: 'group/conventions',
       text: 'conventions',
-      data: { groupId, ...member, conventions: args.conventions },
+      data: {
+        groupId, ...member, conventions: args.conventions, extra: args.extra, reset: args.reset,
+      },
       timeoutMs: config.client.timeoutMs,
     });
     return result.data ?? { groupId };
