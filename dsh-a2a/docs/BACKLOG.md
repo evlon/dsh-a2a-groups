@@ -327,7 +327,42 @@ DSH      已完整重启（GUI 端口 51446 → 53769）
 所以问题范围从「通道从来不注册」收窄为：**同一插件在不同机器上，注册行为不一致**。
 这不再是「一直坏 vs 升级后坏」的问题（两者都不是），而是**环境差异**。
 
-#### 因此下一步只剩一件事：拿到那 3 行日志
+#### 根因已确认：桌面版与 CLI 是两个 profile（2026-11-07，本机复现）
+
+**不需要日志了，用桌面版做对照实验直接定位。**
+
+```
+桌面版 → ~/.dsh/profiles/desktop   （由 Electron 应用独占管理）
+CLI    → ~/.dsh/profiles/web       （dsh plugin --profile web add 写这里）
+```
+
+桌面版自带一个 dsh 运行时（`<安装目录>/resources/runtime/cli/bin/dsh.cmd`），与 npm 全局 `dsh`
+是两个独立安装，且 npm 那个在 PATH 里优先级更高。因此：**用 `dsh plugin --profile web add`
+升级的桌面版用户，插件根本不在桌面版加载的那个 profile 里。**
+
+对照实验（同一台机器、同一个桌面版、同一份代码）：
+
+| 状态 | `POST /api/ping` | `POST /a2a-panel/ping` | 含义 |
+|---|---|---|---|
+| 插件不在 desktop profile | 401 | **405** | 通道未注册（复现赵雷现象）|
+| 装进 desktop profile 后 | 401 | **401** | 通道已注册，等鉴权 |
+
+再进一步：用桌面版自己的 token 调 `POST /a2a-panel/refresh`，返回的是业务错误（上游凭据被拒）
+而不是 405——说明通道、处理器、宿主调用整条链路都通，只是 desktop profile 还没配 a2a 段。
+
+**结论：不是插件缺陷，是安装位置错了。** 修法：用桌面版自带的 dsh 装到 desktop profile，
+它位于 `<安装目录>/resources/runtime/cli/bin/dsh.cmd`。每台机器安装路径不同，
+自动定位方法（进程路径 + 注册表卸载项 + 校验文件存在）见群消息 #711。
+
+```powershell
+& cmd.exe /c "`"$deskDsh`" plugin --profile desktop add dsh-a2a-groups@0.1.36"
+```
+
+这条命令会自动写好依赖并加进 `dsh.profile.bundles`，不需要手工改 package.json。
+装完必须完全退出并重启桌面版。**验收判据：`/a2a-panel/ping` 从 405 变成 401。**
+
+#### 原计划的日志四选一（已被上面的复现取代，保留作背景）
+
 
 前文「日志四选一」仍然有效，且现在是唯一的阻塞项。需要赵雷那台机器启动时的：
 
