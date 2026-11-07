@@ -506,6 +506,15 @@ export const TOOL_SPECS = Object.freeze([
           description: 'Who should ACT on this: member ids, display names that resolve to exactly one member, or ["@all"] for everyone. Those members are woken; everyone else only sees an unread count. Omit it for ordinary progress.',
         },
         message: { type: 'string', description: 'The text to post.' },
+        priority: {
+          type: 'string',
+          enum: ['urgent'],
+          description:
+            'Omit for an ordinary post: it waits for the reader\'s next turn. `urgent` inserts into a turn that is '
+            + 'already running, so use it only when waiting for that turn to finish would defeat the message — a '
+            + 'correction the reader is about to act on wrongly, a stop order, a changed constraint. It costs the '
+            + 'reader an interrupted step, so an `urgent` that could have waited teaches the group to ignore the level.',
+        },
         replyTo: {
           type: 'integer',
           description:
@@ -1583,6 +1592,49 @@ topic: ${value.topic}`),
       }],
     },
     runtime: 'a2a_goal_emergency',
+  },
+  {
+    name: 'a2a_group_control',
+    description:
+      'Pause or resume THIS GROUP\'s delivery. Owner only. While paused, ordinary posts still go into the feed for anyone who looks, but they wake nobody — so the group goes quiet without anything being lost. This is a state, not a message, and that is the point: the failure it fixes is a "stop talking" post that everybody honoured, after which four later requests for input were silently swallowed because nobody remembered to lift it — including whoever set it. There is deliberately no auto-expiry: a group that believes it is paused while it is not is worse than one paused too long. Always read the returned state back; do not assume your call landed.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        action: {
+          type: 'string',
+          enum: ['stop', 'resume'],
+          description: 'stop pauses delivery for the whole group; resume lifts the pause. Both are recorded in the feed with who did it and why.',
+        },
+        reason: {
+          type: 'string',
+          description: 'Why. REQUIRED for stop — the group reads it later to understand the silence. Optional for resume.',
+        },
+      },
+      required: ['groupId', 'action'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          control: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (args, value) => {
+        const control = value.control ?? {};
+        const when = typeof control.atIso === 'string' ? control.atIso : '';
+        return [{
+          type: 'text',
+          text: control.stopped === true
+            ? `Group delivery PAUSED by ${control.byPersonId ?? 'owner'} at ${when}: ${control.reason ?? ''}\nOrdinary posts are still recorded but wake nobody. Call this tool again with action=resume to lift it — nothing lifts it automatically.`
+            : `Group delivery RESUMED at ${when}.${control.reason === undefined || control.reason === '' ? '' : `\n${control.reason}`}`,
+        }];
+      },
+    },
+    runtime: 'a2a_group_control',
   },
 ]);
 

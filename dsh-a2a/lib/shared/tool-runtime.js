@@ -2070,6 +2070,25 @@ function requireSession(sessionId, tool) {
     });
     return result.data ?? { groupId };
   },
+
+  'a2a_group_control': async function a2a_group_control(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_control');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      const result = store.setControl({ groupId, member, action: args.action, reason: args.reason });
+      await store.flush();
+      return result;
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/control',
+      text: 'control',
+      data: { groupId, ...member, action: args.action, reason: args.reason },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return result.data ?? { groupId };
+  },
   };
 
   /**

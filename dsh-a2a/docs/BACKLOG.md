@@ -338,3 +338,61 @@ B. client.js 渲染：群详情里显示「当前目标 + 关键路径 + 约定�
 □ 没有目标的群不显示空区块（与「未启用的群零影响」同一原则）
 □ 与 6.1 分开验收：修好 6.1 不会让这个自动出现
 ```
+
+---
+
+### 6.3 目标机制的四个已知风险（0.1.25 实测核对，刘立业报）
+
+**状态**：已登记，本轮不处理
+**登记时间**：2026-11-07
+**来源**：刘立业以行号级证据核对 0.1.25 实现与方案的差距
+
+#### R1｜「对齐」依赖成员自觉查状态
+
+```
+已有  工具描述里的理念 + a2a_goal_status 可查
+没有  promptSection 注入、post/read 返回注入、strictness=block
+```
+
+`strictness` 只有 `off` / `hint`（`groups.js:2271`、`groups.js:3389` 反序列化），全库无 `block`；
+`index.js` 里 `goal` 字样 0 处；`publicGroup()` 的 5 个调用点（create / snapshot / list / claimJoin /
+withFeedTail）都不覆盖 `post` 与 `read`。
+
+**结论**：这不是实现遗漏，是 #640 写下的取舍（均为兼容红线所致）。
+**kr3 的达成方式明确为**：约定写明「回复前先查 `a2a_goal_status`」，KRs 靠人工抽样核验。
+
+**可选优化（本版不做）**：`a2a_group_post` / `a2a_group_read` 返回带一行 goal 摘要。
+不做理由：需发版 + 重新部署，换来的只是「少查一次」，性价比不足。
+
+#### R2｜secondary 列表根本未实现
+
+方案 §六 F4 的对策写着「给维护线一个显式的 secondary 列表」，**0.1.x 没有实现它**。
+`goalStatus` 只返回 `goal` / `conventions` / `history`，没有 secondary。
+
+**当前唯一手段**：靠群约定要求「维护线的事必须显式在群里说」，不能指望列表兜住。
+
+#### R3｜emergency 24h 自动失效的语义
+
+```js
+GOAL_EMERGENCY_MS = 24 * 60 * 60 * 1000
+```
+
+24h 后目标**自动恢复**。若事故持续超过 24 小时，目标会中途自己「复活」而无人再发 emergency。
+
+**当前操作答案**：事故超过 24 小时就**再发一次** `a2a_goal_emergency`，机制允许重复触发并各自续 24h。
+**待评估**：是否要支持「续期」而不是反复重发。
+
+#### R4｜kill switch 需要重启才生效
+
+```js
+// groups.js:3308
+function goalKilledByEnvironment() {
+  return String(process.env.A2A_GOAL_ENABLED).toLowerCase() === 'false';
+}
+```
+
+环境变量在进程启动时读入，改 `A2A_GOAL_ENABLED` 需重启 Pod，**期间群服务不可用**。
+这是设计如此（唯一「不重发镜像」的止血手段），但它**不是「立刻」止血**。
+
+**当前操作顺序**：先 `a2a_group_control stop`（§MESSAGE-PRIORITY，下一版即可用，无需重启），
+再考虑重启 Pod。`stop` 是立刻生效的那一半，`A2A_GOAL_ENABLED` 是兜底的另一半。

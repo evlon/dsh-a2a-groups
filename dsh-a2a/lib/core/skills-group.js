@@ -615,6 +615,9 @@ return {
             text,
             payload: data.payload,
             mentions: data.mentions,
+            // `urgent` is delivered into a running turn rather than queued behind it; `control`
+            // is owner-only and pauses delivery. See MESSAGE-PRIORITY.md.
+            priority: data.priority,
             // The recipient of a reply is derived from the message being answered, never reconstructed by the
             // replier. See `post` in groups.js.
             replyTo: data.replyTo,
@@ -693,6 +696,9 @@ return {
                 // which is what a late reader needs to see that several replies are one exchange. The parity test caught
                 // this omission on the first run — the sixth repetition of exactly this bug.
                 rootSeq: Number.isInteger(entry.rootSeq) ? entry.rootSeq : undefined,
+                // How urgently this was delivered. Absent on an ordinary post; a peer asking why a message
+                // interrupted its step needs to see the level, and a whitelist that drops it hides the reason.
+                priority: entry.priority,
                 kind: entry.kind,
                 text: entry.text,
               })),
@@ -1294,6 +1300,7 @@ return {
           mentions: Array.isArray(entry.mentions) ? [...entry.mentions] : undefined,
           replyTo: Number.isInteger(entry.replyTo) ? entry.replyTo : undefined,
           rootSeq: Number.isInteger(entry.rootSeq) ? entry.rootSeq : undefined,
+          priority: entry.priority,
           kind: entry.kind,
           text: entry.text,
         });
@@ -1490,6 +1497,31 @@ return {
         try {
           const result = store.setConventions({ groupId, member, conventions: data.conventions });
           return { text: 'conventions updated', meta: result };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/control',
+      name: 'Pause or resume this group\'s delivery',
+      description:
+        'OWNER ONLY. Set a group-wide pause so ordinary messages stop waking anybody, or lift it. This is a state, '
+        + 'not a message: the failure it fixes is a "stop talking" post that everybody honoured and then four later '
+        + 'requests were silently swallowed because nobody remembered to lift it — including whoever set it. There is '
+        + 'no automatic expiry on purpose.',
+      examples: ['Stop the group, we need to decide something first'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.setControl({ groupId, member, action: data.action, reason: data.reason });
+          return {
+            text: result.control.stopped
+              ? 'group delivery paused'
+              : 'group delivery resumed',
+            meta: result,
+          };
         } catch (error) {
           refuse(error);
         }

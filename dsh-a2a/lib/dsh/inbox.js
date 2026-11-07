@@ -85,6 +85,18 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
   const subscriptions = new Map();
   /** groupIds the operator turned off explicitly, so resume() does not fight them. */
   const disabled = new Set();
+  /**
+   * groupIds whose OWNER paused delivery, mirrored from the stream.
+   *
+   * Mirrored rather than fetched because a remote member cannot read the host's control
+   * state — it only ever sees the feed. The state therefore travels as a `control` post whose
+   * payload says `{ control: { stopped } }`, and this set is updated as those posts stream in.
+   *
+   * Separate from `disabled` on purpose: `disabled` is this operator's local choice (a toggle),
+   * `paused` is the group owner's decision (a fact about the group). They must not be able to
+   * lift each other — a local resume must not override an owner's stop.
+   */
+  const paused = new Set();
   /** messageIds already delivered, so a replay is not a second wake. */
   const delivered = new Map();
   /** Timer for the direct-message poll, or undefined when not running. */
@@ -498,20 +510,38 @@ export function createInbox({ ctx, logger, config, clock = () => Date.now(), gro
       // them, not merely in a group they belong to.
       const addressedMe = grade === 'mention'
         && (!Array.isArray(post.mentions) || post.mentions.includes('@all') || post.mentions.includes(membership.personId));
+      // A control post carries the pause state itself, so every member converges on the same
+      // answer without a round trip to a host they may not be able to ask.
+      const control = post.payload?.control;
+      if (control !== undefined && control !== null && typeof control.stopped === 'boolean') {
+        if (control.stopped) paused.add(groupId);
+        else paused.delete(groupId);
+      }
+      const isControl = post.priority === 'control';
+      const isPaused = paused.has(groupId);
+      /**
+       * The delivery level, in priority order.
+       *
+       * 1. A control post ALWAYS cuts through. Without this the resume instruction would be
+       *    swallowed by the pause it exists to end — which is exactly what happened when a
+       *    "stop talking" post was honoured and four later requests went unanswered.
+       * 2. While paused, nothing else wakes anybody: posts still land in the feed, so the
+       *    group goes quiet without anything being lost.
+       * 3. `urgent` inserts into a running turn instead of queuing behind it.
+       * 4. Otherwise the existing rule, unchanged.
+       */
+      let mode;
+      if (isControl) mode = 'steer';
+      else if (isPaused) mode = 'inbox';
+      else if (post.priority === 'urgent') mode = 'steer';
+      else mode = grade === 'mention' || (grade === 'notice' && wakeMembers !== false) ? 'queue' : 'inbox';
       try {
         await deliverer.deliver({
           sessionId,
           text: renderPost(membership.groupName ?? groupId, post, addressedMe),
           messageId: post.msgId,
-          // A mention always starts a turn; anything else depends on `wakeMembers`.
-          //
-          // The old rule woke on `notice` too, and a "notice" is every post that mentions nobody — which is most of
-          // them. That made an ordinary conversation wake everybody on every line, and each wake can produce another
-          // message: three people talking produced six wakes per round. Off by default now, so an unaddressed post is
-          // seated without waking anyone and read at the next natural moment.
-          //
-          // This is the whole difference between a chat room and a task channel, and it is one condition.
-          mode: grade === 'mention' || (grade === 'notice' && wakeMembers !== false) ? 'queue' : 'inbox',
+          // See `mode` above for the full precedence; this used to be a single ternary.
+          mode,
           source: {
             kind: 'a2a',
             skill: 'group/subscribe',

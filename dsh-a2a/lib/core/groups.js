@@ -886,6 +886,20 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const member = resolveMember(group, input.member);
     const text = typeof input.text === 'string' ? input.text : '';
     const payload = input.payload === undefined ? undefined : input.payload;
+    /**
+     * How urgently this message needs to reach the others.
+     *
+     * `urgent` is delivered into a running turn instead of waiting for the next one. `control`
+     * is reserved for the owner because it is not a message — it changes whether the group
+     * accepts messages at all. Unset is the ordinary case and writes NO field, so a message
+     * that does not use priority serializes exactly as it did before priority existed.
+     */
+    const priority = input.priority === 'urgent' || input.priority === 'control'
+      ? input.priority
+      : undefined;
+    if (priority === 'control' && member.personId !== group.ownerPersonId) {
+      throw new GroupError('not_owner', '只有群主可以发控制指令。');
+    }
     // Validate the payload on the way in, before anything mutates: a cyclic or
     // BigInt payload would otherwise throw from JSON.stringify inside persist()
     // and leave the feed grown in memory but the file unwritten.
@@ -956,6 +970,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // between "addressed nobody" and "addressed everyone" must survive the file, and
       // an empty array would read as the former for both.
       ...(mentions.length === 0 ? {} : { mentions }),
+      // Absent unless the sender chose a level: an ordinary post must keep the exact record
+      // shape it had before priority existed, and the delivery side treats absent as `normal`.
+      ...(priority === undefined ? {} : { priority }),
       // Kept so a reader can see the thread without scanning for adjacency, and so a later "is this closed?"
       // check has something to join on.
       ...(replyToEntry === undefined ? {} : { replyTo: replyToEntry.seq }),
@@ -2251,6 +2268,72 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   }
 
   /**
+   * Stop or resume delivery in this group. Owner only.
+   *
+   * This is a STATE, not a message, and that is the entire point. The failure it fixes is on
+   * record: a "stop talking" instruction was sent as an ordinary post, everybody honoured it,
+   * and then four later requests for input were silently swallowed because nobody remembered
+   * to lift it — including the person who set it. A flag that must be asked about is the only
+   * form that survives being forgotten.
+   *
+   * There is no TTL on purpose. Automatic expiry would make "stopped" mean "stopped for a
+   * while", and a group that believes it is paused while it is not is worse than one that is
+   * paused too long.
+   */
+  function setControl(input = {}) {
+    const group = requireGroup(input.groupId);
+    const owner = resolveMember(group, input.member);
+    if (owner.personId !== group.ownerPersonId) {
+      throw new GroupError('not_owner', '只有群主可以暂停或恢复本群投递。');
+    }
+    const action = input.action === 'resume' ? 'resume' : 'stop';
+    const reason = action === 'stop'
+      ? requireText(input.reason, 'reason', MAX_GOAL_REASON_CHARS, '暂停原因')
+      : (optionalText(input.reason, MAX_GOAL_REASON_CHARS, '恢复说明') ?? '');
+    const at = now();
+    const stopped = action === 'stop';
+    group.control = { stopped, reason, byPersonId: owner.personId, at };
+    /**
+     * The state change travels as a CONTROL POST, not as a private field plus a system line.
+     *
+     * A remote member cannot read this host's `group.control` — it only ever sees the feed. So
+     * the pause has to be carried in the feed itself, with a machine-readable payload members
+     * apply as they stream it. A plain system line would be prose: readable, not actionable,
+     * and every member would have to guess the same sentence means "stop waking me".
+     *
+     * `priority: 'control'` is what makes the lift reachable at all: ordinary posts are
+     * dropped to inbox-only while paused, and without this the resume instruction would be
+     * swallowed by the very pause it exists to end — the exact failure this feature fixes.
+     */
+    post({
+      groupId: group.groupId,
+      // The ORIGINAL credential, not the resolved record: `post` re-resolves the member, and a
+      // resolved record carries `keyHash` instead of `personKey`.
+      member: { personId: owner.personId, personKey: input.member?.personKey },
+      text: stopped
+        ? `本群投递已暂停：${reason}`
+        : `本群投递已恢复${reason === '' ? '' : `：${reason}`}`,
+      priority: 'control',
+      payload: { control: { stopped, reason, byPersonId: owner.personId, at } },
+    });
+    log.info('group control', { groupId: group.groupId, stopped, by: owner.personId });
+    return { groupId: group.groupId, control: publicControl(group) };
+  }
+
+  /** Public view of the control state, or `undefined` when it was never used. */
+  function publicControl(group) {
+    const control = group.control;
+    if (control === undefined) return undefined;
+    return {
+      stopped: control.stopped === true,
+      reason: control.reason,
+      byPersonId: control.byPersonId,
+      at: control.at,
+      atIso: new Date(control.at).toISOString(),
+    };
+  }
+
+  /**
    * Publish the group's single main goal. Owner only.
    *
    * One goal, not a list, and publishing while one is active FAILS rather than replacing it.
@@ -2511,6 +2594,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     emergencyGoal,
     goalStatus,
     setConventions,
+    // Delivery control: a pause that is a STATE, not a message. See `setControl` for why the
+    // failure it fixes could not be fixed by sending a better worded post.
+    setControl,
     leave,
     revokeInvite,
     subscribe,
@@ -3074,6 +3160,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // Absent unless the group actually has one: the snapshot of a group that never used the
       // organisation layer must stay byte-identical to what this version's predecessor returned.
       ...(group.goal === undefined ? {} : { goal: publicGoal(group.goal, now()) }),
+      // Same rule: a group whose delivery was never paused must not grow a `control` key.
+      ...(publicControl(group) === undefined ? {} : { control: publicControl(group) }),
     };
   }
 
@@ -3133,6 +3221,11 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     // that one names the message answered, this one names the conversation. Dropping it here would leave the field in
     // the file and invisible to every reader — which is the exact failure the comment above keeps recording.
     if (Number.isInteger(entry.rootSeq)) view.rootSeq = entry.rootSeq;
+    // FOURTH time this class of bug would have applied: the field is written to the record and
+    // then dropped by this whitelist, leaving it in the file and invisible to every reader.
+    // Delivery reads priority from THIS view, so dropping it here would silently disable the
+    // whole mechanism while every test of the store still passed.
+    if (entry.priority === 'urgent' || entry.priority === 'control') view.priority = entry.priority;
     return view;
   }
 
@@ -3244,6 +3337,19 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     const goalHistoryRecords = Array.isArray(raw.goalHistory)
       ? raw.goalHistory.map((entry) => sanitizeGoal(entry)).filter((entry) => entry !== undefined).slice(0, MAX_GOAL_HISTORY)
       : [];
+    // Dropped rather than repaired, same rule as a goal: a control record whose fields cannot
+    // be trusted must not become "this group is stopped" (that would silence a group nobody
+    // stopped) or "this group is fine" (that would un-mute one somebody did).
+    const controlRecord = isPlainObject(raw.control)
+      && typeof raw.control.stopped === 'boolean'
+      && Number.isFinite(raw.control.at)
+      ? {
+        stopped: raw.control.stopped,
+        reason: typeof raw.control.reason === 'string' ? raw.control.reason : '',
+        byPersonId: typeof raw.control.byPersonId === 'string' ? raw.control.byPersonId : '',
+        at: raw.control.at,
+      }
+      : undefined;
     return {
       groupId,
       name: typeof raw.name === 'string' ? raw.name : groupId,
@@ -3286,6 +3392,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       nextSeq: Math.max(nextSeqCandidate, highestSeq + 1),
       ...(goalRecord === undefined ? {} : { goal: goalRecord }),
       ...(goalHistoryRecords.length === 0 ? {} : { goalHistory: goalHistoryRecords }),
+      // The delivery pause survives a restart. It is NOT in settings because settings hold
+      // configuration a member chose once; this is a live operational state with a reason and
+      // an author, and losing it on restart would silently un-mute a group someone stopped.
+      ...(controlRecord === undefined ? {} : { control: controlRecord }),
     };
   }
 }
