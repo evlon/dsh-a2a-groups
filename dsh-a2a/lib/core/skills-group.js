@@ -1365,6 +1365,136 @@ return {
         }
       },
     },
+    // --- The organisation layer -------------------------------------------------
+    //
+    // These exist as skills as well as store methods because a group is usually hosted on
+    // somebody else's machine: the member's plugin reaches them over the bridge, exactly like
+    // rename/archive. A feature that only worked for a locally hosted group would be a feature
+    // that works for nobody.
+    {
+      id: 'group/goal-publish',
+      name: 'Publish the group\'s one main goal',
+      description:
+        'Set the single goal every discussion in this group is meant to advance, with 1-6 key results. OWNER ONLY. '
+        + 'Publishing while another goal is active FAILS rather than replacing it — close the current one first, because '
+        + 'a goal that can be silently swapped is a label, not a commitment.',
+      examples: ['Set this sprint\'s goal: split the billing service so it can ship on its own'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.publishGoal({
+            groupId,
+            member,
+            title: data.title,
+            description: data.description,
+            krs: data.krs,
+            strictness: data.strictness,
+          });
+          return { text: 'goal published', meta: { groupId, goal: result.goal } };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/goal-close',
+      name: 'End the group\'s current goal',
+      description:
+        'Close the active goal with a required reason. Owner, or whoever published it. Afterwards a new goal may be '
+        + 'published. Do not use this to set a goal aside temporarily — that is group/goal-emergency, which lapses by '
+        + 'itself and keeps the goal\'s continuity.',
+      examples: ['Close the goal, we shipped it'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.closeGoal({ groupId, member, reason: data.reason });
+          return { text: 'goal closed', meta: { groupId, goal: result.goal } };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/goal-status',
+      name: 'Read the goal and the conventions',
+      description:
+        'The goal, its key results, the group\'s standing conventions and recent closed goals. Any member. This is the '
+        + 'call that tells a newcomer what the group is for and how it works, and the only place an unanswered '
+        + 'challenge deadline shows up.',
+      examples: ['What is this group working on?'],
+      async run(input) {
+        const { groupId, member } = requireMember(input);
+        try {
+          const status = store.goalStatus({ groupId, member });
+          return { text: 'goal status', meta: status };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/goal-challenge',
+      name: 'Challenge the goal itself',
+      description:
+        'Record an objection to the goal — not to a message. Any member. Every "stay on topic" rule risks silencing the '
+        + 'person who noticed the topic is wrong; this is the sanctioned way out. The goal is not suspended at once '
+        + '(one line must not stall the group) but suspends automatically if nobody answers within the deadline.',
+      examples: ['This goal is wrong, billing should not be split'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.challengeGoal({
+            groupId,
+            member,
+            reason: data.reason,
+            alternative: data.alternative,
+          });
+          return { text: 'challenge recorded', meta: result };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/goal-emergency',
+      name: 'Set the goal aside for 24 hours',
+      description:
+        'Declare an emergency. ANY member, effective immediately — during an incident nobody waits for the owner. Not a '
+        + 'close: closing and reopening is the change people forget to undo, so this exception expires on its own.',
+      examples: ['Billing is down in production, pause the plan'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.emergencyGoal({ groupId, member, reason: data.reason });
+          return { text: 'emergency declared', meta: { groupId, goal: result.goal } };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
+    {
+      id: 'group/conventions',
+      name: 'Set or clear the group conventions',
+      description:
+        'Set, replace or clear the standing "how we work here" notice every joiner is shown. OWNER ONLY. Kept apart '
+        + 'from the goal because a goal is replaced every few weeks and this is the part that should not change with it. '
+        + 'An empty string clears it.',
+      examples: ['Tell newcomers the rules of this group'],
+      async run(input) {
+        const data = payload(input);
+        const { groupId, member } = requireMember(input);
+        try {
+          const result = store.setConventions({ groupId, member, conventions: data.conventions });
+          return { text: 'conventions updated', meta: result };
+        } catch (error) {
+          refuse(error);
+        }
+      },
+    },
   ];
 
   /** A caller-named field the skill cannot proceed without. */

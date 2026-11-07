@@ -1938,6 +1938,138 @@ function requireSession(sessionId, tool) {
       gatewayEntry: missingRegistration ? gatewayEntryFor(info, config) : '',
     };
   },
+
+  // --- The organisation layer -------------------------------------------------
+  //
+  // One goal per group. There is no `update` tool on purpose: a goal that can be edited in
+  // place is a label, not a commitment. Ending it and publishing the next one is one extra
+  // call, and it is the call that forces the group to notice a change of direction.
+
+  'a2a_goal_publish': async function a2a_goal_publish(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_goal_publish');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      const result = store.publishGoal({
+        groupId,
+        member,
+        title: args.title,
+        description: args.description,
+        krs: args.krs,
+        strictness: args.strictness,
+      });
+      await store.flush();
+      return { groupId, goal: result.goal };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/goal-publish',
+      text: 'publish goal',
+      data: {
+        groupId, ...member, title: args.title, description: args.description, krs: args.krs, strictness: args.strictness,
+      },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return { groupId, goal: (result.data ?? {}).goal };
+  },
+
+  'a2a_goal_close': async function a2a_goal_close(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_goal_close');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      const result = store.closeGoal({ groupId, member, reason: args.reason });
+      await store.flush();
+      return { groupId, goal: result.goal };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/goal-close',
+      text: 'close goal',
+      data: { groupId, ...member, reason: args.reason },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return { groupId, goal: (result.data ?? {}).goal };
+  },
+
+  'a2a_goal_status': async function a2a_goal_status(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_goal_status');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      return store.goalStatus({ groupId, member });
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/goal-status',
+      text: 'goal status',
+      data: { groupId, ...member },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return result.data ?? { groupId };
+  },
+
+  'a2a_goal_challenge': async function a2a_goal_challenge(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_goal_challenge');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      const result = store.challengeGoal({
+        groupId,
+        member,
+        reason: args.reason,
+        alternative: args.alternative,
+      });
+      await store.flush();
+      return result;
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/goal-challenge',
+      text: 'challenge goal',
+      data: { groupId, ...member, reason: args.reason, alternative: args.alternative },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return result.data ?? { groupId };
+  },
+
+  'a2a_goal_emergency': async function a2a_goal_emergency(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_goal_emergency');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      const result = store.emergencyGoal({ groupId, member, reason: args.reason });
+      await store.flush();
+      return { groupId, goal: result.goal };
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/goal-emergency',
+      text: 'emergency',
+      data: { groupId, ...member, reason: args.reason },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return { groupId, goal: (result.data ?? {}).goal };
+  },
+
+  'a2a_group_conventions': async function a2a_group_conventions(args, exec) {
+    const groupId = requireText(args.groupId, 'groupId');
+    const sessionId = requireSession(senderOf(exec).id, 'a2a_group_conventions');
+    const membership = requireMembership(store, identities, groupId, sessionId);
+    const member = { personId: membership.personId, personKey: membership.personKey };
+    if (membership.local === true) {
+      const result = store.setConventions({ groupId, member, conventions: args.conventions });
+      await store.flush();
+      return result;
+    }
+    const result = await bridge.send(targetOf(membership, config), {
+      skill: 'group/conventions',
+      text: 'conventions',
+      data: { groupId, ...member, conventions: args.conventions },
+      timeoutMs: config.client.timeoutMs,
+    });
+    return result.data ?? { groupId };
+  },
   };
 
   /**

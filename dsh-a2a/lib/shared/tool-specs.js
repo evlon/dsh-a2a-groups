@@ -1345,6 +1345,245 @@ topic: ${value.topic}`),
     },
   runtime: 'a2a_serve',
   },
+  {
+    name: 'a2a_group_conventions',
+    description:
+      'Set, replace or clear this group\'s standing conventions — the "how we work here" notice every member receives when they join. Owner only. Kept apart from the goal on purpose: a goal is replaced every few weeks, the conventions are the part that should not change with it. Pass an empty string to clear. This is the last step of setting a group up: a group whose conventions are empty has nothing to tell a newcomer.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        conventions: {
+          type: 'string',
+          description: 'The full text (plain, a few lines). An empty string clears it. Omit to leave it unchanged.',
+        },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          conventions: { type: 'string' },
+          changed: { type: 'boolean' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: value.changed !== true
+          ? 'Conventions unchanged.'
+          : (value.conventions === undefined || value.conventions === ''
+            ? 'Conventions cleared: new members will be told nothing.'
+            : `Conventions set (${String(value.conventions).length} chars). Every member who joins from now on receives them, and any member can read them with a2a_goal_status.`),
+      }],
+    },
+    runtime: 'a2a_group_conventions',
+  },
+  {
+    name: 'a2a_goal_publish',
+    description:
+      'Publish the group\'s ONE main goal — the thing every discussion in this group is supposed to advance. Owner only. One goal at a time, and publishing while one is active FAILS instead of replacing it: ending the current goal first is the call that forces the group to notice a change of direction. Give 1-6 key results (krs); without at least one, "is this on topic" would be a judgement about a sentence rather than about the plan. This is the tool that turns a chat room into a team.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        title: { type: 'string', description: 'One sentence: what the group is trying to achieve.' },
+        description: { type: 'string', description: 'Optional context: why this, why now, what is out of scope.' },
+        krs: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Key results: 1-6 concrete checkpoints. Backticks-free plain text; the tool result numbers them kr1..krN.',
+        },
+        strictness: {
+          type: 'string',
+          enum: ['off', 'hint'],
+          description: 'off = only display the goal; hint = every reply should remind the reader which key result it serves. Defaults to hint.',
+        },
+      },
+      required: ['groupId', 'title', 'krs'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          goal: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (args, value) => {
+        const goal = value.goal ?? {};
+        const krs = Array.isArray(goal.krs) ? goal.krs : [];
+        return [{
+          type: 'text',
+          text: `Goal published: ${goal.title ?? ''}\n\nKey results (the anchors every reply should name):\n`
+            + krs.map((kr) => `  ${kr.id}: ${kr.text}`).join('\n')
+            + `\n\nStrictness: ${goal.strictness ?? 'hint'}. It stays the group's only goal until someone closes it — a second publish will be refused, not merged.`,
+        }];
+      },
+    },
+    runtime: 'a2a_goal_publish',
+  },
+  {
+    name: 'a2a_goal_close',
+    description:
+      'End the group\'s current goal. Owner, or whoever published it. A reason is required — it is what the group reads afterwards instead of wondering why the target changed. After closing, a new goal can be published. Do not use this to "temporarily set the goal aside": that is a2a_goal_emergency, which lapses on its own and does not interrupt the goal\'s continuity.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        reason: { type: 'string', description: 'Why it is over: achieved, abandoned, superseded. Shown in the feed.' },
+      },
+      required: ['groupId', 'reason'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          goal: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `Goal closed: ${value.goal?.title ?? ''}\nReason: ${value.goal?.closeReason ?? ''}\nThe group has no goal now; the owner can publish the next one.`,
+      }],
+    },
+    runtime: 'a2a_goal_close',
+  },
+  {
+    name: 'a2a_goal_status',
+    description:
+      'Read the group\'s current goal, its key results, its standing conventions, and recent closed goals. Any member can call it. This is the first call a newcomer should make: it is the only place that says what this group is for and how it works. When a goal has an unanswered challenge, this is also where the deadline shows up.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+      },
+      required: ['groupId'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          enabled: { type: 'boolean' },
+          conventions: { type: 'string' },
+          goal: { type: 'object', additionalProperties: true },
+          history: { type: 'array', items: { type: 'object', additionalProperties: true } },
+          answerByIso: { type: 'string' },
+        },
+      },
+      render: (args, value) => {
+        if (value.enabled === false) {
+          return [{ type: 'text', text: 'This group has the organisation layer switched off (goal/conventions are not in use here).' }];
+        }
+        const lines = [];
+        if (value.conventions !== undefined && value.conventions !== '') {
+          lines.push('Conventions (how this group works):', value.conventions, '');
+        }
+        const goal = value.goal;
+        if (goal === undefined) {
+          lines.push('No goal right now. The owner can publish one with a2a_goal_publish.');
+        } else {
+          lines.push(`Goal (${goal.status}): ${goal.title}`);
+          if (goal.description !== undefined && goal.description !== '') lines.push(`  why: ${goal.description}`);
+          for (const kr of goal.krs ?? []) lines.push(`  ${kr.id}: ${kr.text}`);
+          lines.push(`  strictness: ${goal.strictness}`);
+          if (goal.emergency !== undefined) {
+            lines.push(`  EMERGENCY in force until ${goal.emergency.untilIso}: ${goal.emergency.reason}`);
+          }
+          if (goal.status === 'suspended') {
+            lines.push(`  SUSPENDED since ${goal.suspendedSinceIso ?? ''} — the challenge was not answered, so this goal no longer aligns anything until the owner answers it.`);
+          }
+          if (Array.isArray(goal.challenges) && goal.challenges.length > 0) {
+            lines.push('  challenges:');
+            for (const challenge of goal.challenges) {
+              lines.push(`    - ${challenge.displayName}: ${challenge.reason}${challenge.alternative === undefined ? '' : ` (建议: ${challenge.alternative})`}`);
+            }
+          }
+          if (goal.closeReason !== undefined) lines.push(`  closed: ${goal.closeReason}`);
+        }
+        if (Array.isArray(value.history) && value.history.length > 0) {
+          lines.push('', 'Earlier goals:');
+          for (const entry of value.history) lines.push(`  - ${entry.title} (${entry.closeReason ?? 'closed'})`);
+        }
+        if (value.answerByIso !== undefined) {
+          lines.push('', `A challenge needs an answer by ${value.answerByIso}, or the goal suspends on its own.`);
+        }
+        return [{ type: 'text', text: lines.join('\n') }];
+      },
+    },
+    runtime: 'a2a_goal_status',
+  },
+  {
+    name: 'a2a_goal_challenge',
+    description:
+      'Disagree with the goal itself. Any member. This exists because every "stay on topic" rule creates the same hazard: it also silences the one person who noticed the topic is wrong. A challenge is the sanctioned way out, and it is NOT a reply — it is a recorded objection with a deadline. The goal is not suspended immediately (one line must not stall the group); it suspends automatically if the challenge goes unanswered for 24h, so the cost of ignoring it lands on the owner.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        reason: { type: 'string', description: 'What is wrong with the goal: the premise, the scope, the priority.' },
+        alternative: { type: 'string', description: 'Optional: what to do instead. A challenge without one asks the group to stop without saying where to.' },
+      },
+      required: ['groupId', 'reason'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          goal: { type: 'object', additionalProperties: true },
+          answerByIso: { type: 'string' },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `Challenge recorded against "${value.goal?.title ?? ''}".\nThe owner has until ${value.answerByIso ?? '(unknown)'} to respond; after that the goal suspends on its own and stops being used to align discussion.`,
+      }],
+    },
+    runtime: 'a2a_goal_challenge',
+  },
+  {
+    name: 'a2a_goal_emergency',
+    description:
+      'Declare an emergency that sets the goal aside for 24 hours. ANY member, effective immediately — during an incident nobody waits for the owner. Deliberately not a close: closing and reopening is the state change people forget to undo, so this exception lapses by itself and the goal keeps its continuity. Use it when real work cannot wait for the plan to be revised.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        groupId: { type: 'string', description: 'Group id.' },
+        reason: { type: 'string', description: 'What is burning. Shown in the feed so the exception is auditable.' },
+      },
+      required: ['groupId', 'reason'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          groupId: { type: 'string' },
+          goal: { type: 'object', additionalProperties: true },
+        },
+      },
+      render: (args, value) => [{
+        type: 'text',
+        text: `Emergency declared: ${value.goal?.emergency?.reason ?? ''}\nThe goal "${value.goal?.title ?? ''}" is set aside until ${value.goal?.emergency?.untilIso ?? ''}. It expires on its own — nothing to undo.`,
+      }],
+    },
+    runtime: 'a2a_goal_emergency',
+  },
 ]);
 
 /** Specs by name, built once. */

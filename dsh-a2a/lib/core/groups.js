@@ -198,6 +198,46 @@ export const MAX_ROLE_ABOUT_CHARS = 120;
 /** Most tags one member may carry in one group. */
 export const MAX_TAGS = 5;
 
+// --- The organisation layer: one goal per group, plus the group's conventions ---------------
+//
+// A group with no goal and no conventions must serialize and answer EXACTLY as it did before
+// this layer existed. That is why every optional field below is written with a conditional
+// spread and never defaulted: a default would add a key to every stored group and to every
+// tool reply, which would make the "unused groups are unaffected" promise untestable.
+
+/** Longest conventions text (the "how we work here" notice every joiner is shown). */
+export const MAX_CONVENTIONS_CHARS = 4000;
+
+/** Longest goal title. */
+export const MAX_GOAL_TITLE_CHARS = 200;
+
+/** Longest goal description. */
+export const MAX_GOAL_DESC_CHARS = 2000;
+
+/** Longest single key-result line. */
+export const MAX_KR_TEXT_CHARS = 300;
+
+/** Most key results one goal may declare. Below this the goal is too vague to align anything. */
+export const MAX_KRS = 6;
+
+/** Longest close / challenge / emergency reason. */
+export const MAX_GOAL_REASON_CHARS = 500;
+
+/** How many closed goals are kept for reference. */
+export const MAX_GOAL_HISTORY = 10;
+
+/** How long an emergency exception lasts before it lapses on its own. */
+export const GOAL_EMERGENCY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * How long a challenge may go unanswered before the goal counts as suspended.
+ *
+ * The failure this prevents is a challenge used as a block: raising one would stall the
+ * group forever with nobody obliged to answer. Suspension is the fail-safe direction —
+ * an unanswered challenge stops the goal instead of stopping the conversation.
+ */
+export const GOAL_CHALLENGE_MS = 24 * 60 * 60 * 1000;
+
 /** Longest single tag. */
 export const MAX_TAG_CHARS = 16;
 
@@ -2129,6 +2169,309 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     }
   }
 
+  // -------------------------------------------------------------------------
+  // The organisation layer: one goal per group, plus the group's conventions
+  // -------------------------------------------------------------------------
+
+  /**
+   * Whether the organisation layer is switched on for this group.
+   *
+   * Both switches must allow it: the host-wide one exists so an operator can stop a broken
+   * feature without a redeploy, and the per-group one so a single group can opt out.
+   */
+  function goalAvailable(group) {
+    return settings.goalEnabled !== false && group.settings.goalEnabled !== false;
+  }
+
+  /** Refuse the call when the group has the organisation layer switched off. */
+  function requireGoalAvailable(group) {
+    if (!goalAvailable(group)) {
+      throw new GroupError(
+        'feature_disabled',
+        '本群未启用组织形态（主目标 / 群约定）。',
+        { groupId: group.groupId },
+      );
+    }
+  }
+
+  /**
+   * One goal's externally visible state.
+   *
+   * `suspended` is derived, never stored: an unanswered challenge stops the goal from
+   * aligning anything, and deriving it at read time is what makes the timeout real — a
+   * stored flag would need somebody to flip it, which is exactly what a neglected
+   * challenge does not get.
+   */
+  function goalState(goal, at) {
+    if (goal.status !== 'active') return 'closed';
+    if (goal.challengedAt !== undefined && at - goal.challengedAt >= GOAL_CHALLENGE_MS) return 'suspended';
+    return 'active';
+  }
+
+  /** The goal that is still in force, if any. */
+  function activeGoal(group) {
+    const goal = group.goal;
+    if (goal === undefined) return undefined;
+    return goal.status === 'active' ? goal : undefined;
+  }
+
+  /** Public view of one goal. Every optional key is conditional so an absent feature has no shape. */
+  function publicGoal(goal, at) {
+    const state = goalState(goal, at);
+    const emergency = goal.emergency !== undefined && goal.emergency.until > at ? goal.emergency : undefined;
+    return {
+      goalId: goal.goalId,
+      title: goal.title,
+      description: goal.description,
+      krs: goal.krs,
+      ownerPersonId: goal.ownerPersonId,
+      status: state,
+      strictness: goal.strictness,
+      createdAt: goal.createdAt,
+      createdAtIso: new Date(goal.createdAt).toISOString(),
+      ...(goal.closedAt === undefined ? {} : {
+        closedAt: goal.closedAt,
+        closedAtIso: new Date(goal.closedAt).toISOString(),
+      }),
+      ...(goal.closedByPersonId === undefined ? {} : { closedByPersonId: goal.closedByPersonId }),
+      ...(goal.closeReason === undefined ? {} : { closeReason: goal.closeReason }),
+      ...(emergency === undefined ? {} : {
+        emergency: {
+          reason: emergency.reason,
+          byPersonId: emergency.byPersonId,
+          until: emergency.until,
+          untilIso: new Date(emergency.until).toISOString(),
+        },
+      }),
+      ...(state === 'suspended' ? {
+        suspendedSinceIso: new Date(goal.challengedAt).toISOString(),
+      } : {}),
+      ...((goal.challenges ?? []).length === 0 ? {} : { challenges: goal.challenges }),
+    };
+  }
+
+  /**
+   * Publish the group's single main goal. Owner only.
+   *
+   * One goal, not a list, and publishing while one is active FAILS rather than replacing it.
+   * The reason is the whole point of the feature: a goal that can be silently replaced is a
+   * label, not a commitment. Ending the current goal first is one extra call that forces the
+   * group to notice a change of direction instead of waking up one morning to a different one.
+   */
+  function publishGoal(input = {}) {
+    const group = requireGroup(input.groupId);
+    requireGoalAvailable(group);
+    const publisher = resolveMember(group, input.member);
+    if (publisher.personId !== group.ownerPersonId) {
+      throw new GroupError('not_owner', '只有群主可以发布主目标。');
+    }
+    const title = requireText(input.title, 'title', MAX_GOAL_TITLE_CHARS, '目标标题');
+    const description = optionalText(input.description, MAX_GOAL_DESC_CHARS, '目标说明') ?? '';
+    const krs = normalizeKrs(input.krs);
+    const strictness = input.strictness === 'off' ? 'off' : 'hint';
+    const at = now();
+
+    const previous = group.goal;
+    if (previous !== undefined && previous.status === 'active') {
+      throw new GroupError(
+        'goal_exists',
+        '本群已有一个进行中的主目标，必须先结束它才能发布新目标。',
+        { goalId: previous.goalId, title: previous.title },
+      );
+    }
+    if (previous !== undefined) {
+      group.goalHistory = [previous, ...(group.goalHistory ?? [])].slice(0, MAX_GOAL_HISTORY);
+    }
+
+    const goal = {
+      goalId: `gl-${randomToken(8)}`,
+      title,
+      description,
+      krs,
+      ownerPersonId: publisher.personId,
+      status: 'active',
+      strictness,
+      createdAt: at,
+    };
+    group.goal = goal;
+    appendSystem(group, `${publisher.displayName} 发布了主目标「${title}」（${krs.length} 条关键路径）`);
+    persist();
+    log.info('goal published', { groupId: group.groupId, goalId: goal.goalId, krs: krs.length });
+    return { groupId: group.groupId, goal: publicGoal(goal, at) };
+  }
+
+  /**
+   * End the group's current goal. Owner, or whoever published it.
+   *
+   * The publisher is allowed because they are the one who knows the goal is done; requiring
+   * the owner to relay that would make the owner a bottleneck for their own team.
+   */
+  function closeGoal(input = {}) {
+    const group = requireGroup(input.groupId);
+    requireGoalAvailable(group);
+    const closer = resolveMember(group, input.member);
+    const goal = activeGoal(group);
+    if (goal === undefined) {
+      throw new GroupError('goal_not_found', '本群没有进行中的主目标。');
+    }
+    const isOwner = closer.personId === group.ownerPersonId;
+    const isPublisher = closer.personId === goal.ownerPersonId;
+    if (!isOwner && !isPublisher) {
+      throw new GroupError('not_owner', '只有群主或目标发布者可以结束目标。');
+    }
+    const reason = requireText(input.reason, 'reason', MAX_GOAL_REASON_CHARS, '结束原因');
+    const at = now();
+    goal.status = 'closed';
+    goal.closedAt = at;
+    goal.closedByPersonId = closer.personId;
+    goal.closeReason = reason;
+    appendSystem(group, `${closer.displayName} 结束了主目标「${goal.title}」：${reason}`);
+    persist();
+    log.info('goal closed', { groupId: group.groupId, goalId: goal.goalId });
+    return { groupId: group.groupId, goal: publicGoal(goal, at) };
+  }
+
+  /**
+   * Question the goal itself. Any member.
+   *
+   * This exists because every alignment rule creates the same hazard: "do not reply when you
+   * are off-topic" also silences the one person who noticed the topic is wrong. A challenge is
+   * the sanctioned way out, and it is deliberately not a reply — it is a recorded objection
+   * with a deadline.
+   *
+   * The goal is not suspended immediately (that would let any member stall the group with one
+   * line). It is suspended automatically when the challenge goes unanswered for
+   * `GOAL_CHALLENGE_MS`, which puts the cost of ignoring it on the owner, not on the challenger.
+   */
+  function challengeGoal(input = {}) {
+    const group = requireGroup(input.groupId);
+    requireGoalAvailable(group);
+    const challenger = resolveMember(group, input.member);
+    const goal = activeGoal(group);
+    if (goal === undefined) {
+      throw new GroupError('goal_not_found', '本群没有进行中的主目标。');
+    }
+    const reason = requireText(input.reason, 'reason', MAX_GOAL_REASON_CHARS, '质疑理由');
+    const at = now();
+    // A challenger who proposes nothing is asking the group to stop without saying where to.
+    // The alternative is accepted explicitly rather than inferred, so the record says so.
+    const alternative = optionalText(input.alternative, MAX_GOAL_DESC_CHARS, '替代方案');
+    goal.challenges = [
+      ...(goal.challenges ?? []),
+      {
+        personId: challenger.personId,
+        displayName: challenger.displayName,
+        reason,
+        ...(alternative === undefined ? {} : { alternative }),
+        at,
+      },
+    ].slice(-MAX_GOAL_HISTORY);
+    if (goal.challengedAt === undefined) goal.challengedAt = at;
+    appendSystem(
+      group,
+      `${challenger.displayName} 质疑了主目标「${goal.title}」：${reason}`,
+    );
+    persist();
+    log.info('goal challenged', { groupId: group.groupId, goalId: goal.goalId });
+    return {
+      groupId: group.groupId,
+      goal: publicGoal(goal, at),
+      answerByIso: new Date(goal.challengedAt + GOAL_CHALLENGE_MS).toISOString(),
+    };
+  }
+
+  /**
+   * Declare an emergency that puts the goal aside for a while. Any member, effective at once.
+   *
+   * Deliberately not tied to the owner and not a "close": during an incident nobody waits for
+   * approval, and a close/reopen pair is the state change people forget to undo. The exception
+   * lapses on its own after `GOAL_EMERGENCY_MS`, so forgetting it is safe by construction.
+   */
+  function emergencyGoal(input = {}) {
+    const group = requireGroup(input.groupId);
+    requireGoalAvailable(group);
+    const member = resolveMember(group, input.member);
+    const goal = activeGoal(group);
+    if (goal === undefined) {
+      throw new GroupError('goal_not_found', '本群没有进行中的主目标。');
+    }
+    const reason = requireText(input.reason, 'reason', MAX_GOAL_REASON_CHARS, '紧急原因');
+    const at = now();
+    goal.emergency = {
+      reason,
+      byPersonId: member.personId,
+      byDisplayName: member.displayName,
+      at,
+      until: at + GOAL_EMERGENCY_MS,
+    };
+    appendSystem(
+      group,
+      `${member.displayName} 触发紧急例外，主目标暂停对齐 ${Math.round(GOAL_EMERGENCY_MS / 3_600_000)} 小时：${reason}`,
+    );
+    persist();
+    log.info('goal emergency', { groupId: group.groupId, goalId: goal.goalId });
+    return { groupId: group.groupId, goal: publicGoal(goal, at) };
+  }
+
+  /**
+   * Read the goal and the conventions. Any member.
+   *
+   * This is the one call that teaches a newcomer how the group works: it returns the goal, its
+   * key results, and the conventions text in the same shape every time. It is a member call
+   * (not a public one) because a goal names a direction and an unfinished direction is not a
+   * thing to hand to anyone who guesses a group id.
+   */
+  function goalStatus(input = {}) {
+    const group = requireGroup(input.groupId);
+    const viewer = resolveMember(group, input.member);
+    const at = now();
+    const goal = group.goal;
+    return {
+      groupId: group.groupId,
+      enabled: goalAvailable(group),
+      ...(group.settings.conventions === undefined ? {} : { conventions: group.settings.conventions }),
+      ...(goal === undefined ? {} : { goal: publicGoal(goal, at) }),
+      ...((group.goalHistory ?? []).length === 0
+        ? {}
+        : { history: group.goalHistory.map((entry) => publicGoal(entry, at)) }),
+      ...(goal === undefined || goal.status !== 'active' || goal.challengedAt === undefined
+        ? {}
+        : { answerByIso: new Date(goal.challengedAt + GOAL_CHALLENGE_MS).toISOString() }),
+    };
+  }
+
+  /**
+   * Set or clear the group's conventions. Owner only.
+   *
+   * Kept apart from the goal on purpose: conventions outlive goals. A group replaces its goal
+   * every few weeks; "how we work here" is the thing that should not change every time.
+   */
+  function setConventions(input = {}) {
+    const group = requireGroup(input.groupId);
+    requireGoalAvailable(group);
+    const owner = resolveMember(group, input.member);
+    if (owner.personId !== group.ownerPersonId) {
+      throw new GroupError('not_owner', '只有群主可以修改群约定。');
+    }
+    // An explicit empty string clears it; absent leaves it untouched. Collapsing the two would
+    // make "remove the notice" impossible without a second tool.
+    const conventions = input.conventions === undefined
+      ? group.settings.conventions
+      : optionalText(input.conventions, MAX_CONVENTIONS_CHARS, '群约定');
+    const changed = conventions !== group.settings.conventions;
+    if (conventions === undefined) delete group.settings.conventions;
+    else group.settings.conventions = conventions;
+    if (changed) {
+      appendSystem(group, conventions === undefined ? `${owner.displayName} 清除了群约定` : `${owner.displayName} 更新了群约定`);
+      persist();
+      log.info('conventions updated', { groupId: group.groupId, cleared: conventions === undefined });
+    }
+    return {
+      groupId: group.groupId,
+      ...(conventions === undefined ? {} : { conventions }),
+      changed,
+    };
+  }
   return {
     create,
     invite,
@@ -2159,6 +2502,15 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     removeMember,
     renameGroup,
     archiveGroup,
+    // The organisation layer: one goal per group, plus the group's standing conventions. See
+    // the section above for why publishing a second goal fails instead of replacing the first,
+    // and why an unanswered challenge suspends rather than blocks.
+    publishGoal,
+    closeGoal,
+    challengeGoal,
+    emergencyGoal,
+    goalStatus,
+    setConventions,
     leave,
     revokeInvite,
     subscribe,
@@ -2719,6 +3071,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       // A permanent invite (xpiresAt === null) counts as long as it is not revoked.
       inviteCount: group.invites.filter((invite) => invite.revoked !== true && (invite.expiresAt === null || invite.expiresAt > now())).length,
       lastSeq: group.nextSeq - 1,
+      // Absent unless the group actually has one: the snapshot of a group that never used the
+      // organisation layer must stay byte-identical to what this version's predecessor returned.
+      ...(group.goal === undefined ? {} : { goal: publicGoal(group.goal, now()) }),
     };
   }
 
@@ -2814,6 +3169,16 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
       maxPostsPerMinute: positiveInteger(source.maxPostsPerMinute, 20),
       retentionDays: positiveNumber(source.retentionDays, 30),
       wakeMembers: source.wakeMembers !== false,
+      /**
+       * Whether the organisation layer (goal + conventions) may be used on this host at all.
+       *
+       * Two switches on purpose. This is the deployment-wide emergency stop, and the
+       * environment variable wins because turning a misbehaving feature off must not require
+       * rebuilding and redeploying the image — that takes every group down, not just the one
+       * that is broken. `group.settings.goalEnabled` is the per-group switch, so one group can
+       * be opted out without touching the host.
+       */
+      goalEnabled: source.goalEnabled !== false && !goalKilledByEnvironment(),
       gatewayBase: typeof source.gatewayBase === 'string' && source.gatewayBase !== '' ? source.gatewayBase : undefined,
       agentName: typeof source.agentName === 'string' && source.agentName !== '' ? source.agentName : undefined,
     };
@@ -2822,6 +3187,9 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
   /** Per-group settings, defaulted from the store settings and capped. */
   function mergeSettings(raw) {
     const source = isPlainObject(raw) ? raw : {};
+    // Length-capped at load time as well as at write time: a hand-edited groups.json must not
+    // be able to put an unbounded block into every prompt that reads this group.
+    const conventionsText = optionalText(source.conventions, MAX_CONVENTIONS_CHARS, '群约定');
     return {
       maxPostChars: clampInteger(source.maxPostChars, settings.maxPostChars, 1, 1_048_576),
       maxPostsPerMinute: clampInteger(source.maxPostsPerMinute, settings.maxPostsPerMinute, 1, 10_000),
@@ -2848,6 +3216,12 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
        * an archive by mistake must be possible — a delete is not.
        */
       archived: source.archived === true,
+      // Both keys below are written ONLY when the group actually opted in. A group that never
+      // used the organisation layer must keep the exact settings shape it had before this
+      // feature existed — otherwise every stored group and every tool reply grows two keys, and
+      // the "unused groups are unaffected" red line becomes false the moment we ship.
+      ...(source.goalEnabled === false ? { goalEnabled: false } : {}),
+      ...(conventionsText === undefined ? {} : { conventions: conventionsText }),
     };
   }
 
@@ -2866,6 +3240,10 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
     if (members.length === 0) return undefined; // a group with no valid member cannot authenticate anyone
     const nextSeqCandidate = Number.isInteger(raw.nextSeq) ? raw.nextSeq : 1;
     const highestSeq = raw.feed.reduce((max, entry) => (Number.isInteger(entry?.seq) && entry.seq > max ? entry.seq : max), 0);
+    const goalRecord = sanitizeGoal(raw.goal);
+    const goalHistoryRecords = Array.isArray(raw.goalHistory)
+      ? raw.goalHistory.map((entry) => sanitizeGoal(entry)).filter((entry) => entry !== undefined).slice(0, MAX_GOAL_HISTORY)
+      : [];
     return {
       groupId,
       name: typeof raw.name === 'string' ? raw.name : groupId,
@@ -2906,6 +3284,8 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
           return mentions.length === 0 ? { ...entry, mentions: undefined } : { ...entry, mentions };
         }),
       nextSeq: Math.max(nextSeqCandidate, highestSeq + 1),
+      ...(goalRecord === undefined ? {} : { goal: goalRecord }),
+      ...(goalHistoryRecords.length === 0 ? {} : { goalHistory: goalHistoryRecords }),
     };
   }
 }
@@ -2913,6 +3293,109 @@ export function createGroupStore({ home, logger, clock, config, compare } = {}) 
 // ---------------------------------------------------------------------------
 // Module-level helpers (no store state)
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether the operator turned the organisation layer off for this whole process.
+ *
+ * `A2A_GOAL_ENABLED=false` is the only switch that can be flipped without rebuilding the
+ * image: change the Deployment env, restart the pod, done. That is the point of it — a
+ * feature that needs a code deploy to disable is a feature you cannot safely ship on a
+ * maintenance line.
+ *
+ * Read on every config parse rather than cached at import time, so a test can set and unset
+ * it without reloading the module.
+ */
+function goalKilledByEnvironment() {
+  return typeof process !== 'undefined'
+    && process.env !== undefined
+    && String(process.env.A2A_GOAL_ENABLED).toLowerCase() === 'false';
+}
+
+/**
+ * Coerce the key-result list of a goal.
+ *
+ * At least one is required, and that is a design decision rather than validation pedantry: a
+ * goal with no key results cannot align anything, because "is this on topic" would degenerate
+ * into a judgement about a sentence. The key results are what a reply can point at.
+ *
+ * Accepts either plain strings or `{ id, text }` objects, and renumbers ids so a caller cannot
+ * create duplicates that make a tool result ambiguous.
+ */
+function normalizeKrs(raw) {
+  const items = Array.isArray(raw) ? raw : [];
+  const krs = [];
+  for (const item of items) {
+    if (krs.length >= MAX_KRS) break;
+    const text = typeof item === 'string'
+      ? optionalText(item, MAX_KR_TEXT_CHARS, '关键路径')
+      : isPlainObject(item)
+        ? optionalText(item.text, MAX_KR_TEXT_CHARS, '关键路径')
+        : undefined;
+    if (text === undefined) continue;
+    krs.push({ id: `kr${krs.length + 1}`, text });
+  }
+  if (krs.length === 0) {
+    throw new GroupError('bad_argument', '主目标至少要有一条关键路径（krs），否则无法据此对齐讨论。', { field: 'krs' });
+  }
+  return krs;
+}
+
+/**
+ * Normalize one stored goal, or drop it entirely.
+ *
+ * Dropping rather than repairing follows the rule the rest of this file already uses for
+ * members and invites: a record whose fields cannot be trusted must not become a record the
+ * group aligns to. "No goal" is a state every code path handles; a half-valid goal is not.
+ */
+function sanitizeGoal(raw) {
+  if (!isPlainObject(raw)) return undefined;
+  if (typeof raw.goalId !== 'string' || raw.goalId === '') return undefined;
+  if (typeof raw.title !== 'string' || raw.title === '') return undefined;
+  if (raw.status !== 'active' && raw.status !== 'closed') return undefined;
+  if (!Array.isArray(raw.krs)) return undefined;
+  const krs = raw.krs
+    .filter((kr) => isPlainObject(kr) && typeof kr.id === 'string' && kr.id !== '' && typeof kr.text === 'string')
+    .map((kr) => ({ id: kr.id, text: kr.text }))
+    .slice(0, MAX_KRS);
+  if (krs.length === 0) return undefined;
+  const challenges = Array.isArray(raw.challenges)
+    ? raw.challenges
+      .filter((entry) => isPlainObject(entry) && typeof entry.personId === 'string' && typeof entry.reason === 'string')
+      .map((entry) => ({
+        personId: entry.personId,
+        displayName: typeof entry.displayName === 'string' ? entry.displayName : entry.personId,
+        reason: entry.reason,
+        ...(typeof entry.alternative === 'string' && entry.alternative !== '' ? { alternative: entry.alternative } : {}),
+        at: Number.isFinite(entry.at) ? entry.at : 0,
+      }))
+      .slice(-MAX_GOAL_HISTORY)
+    : [];
+  const emergency = isPlainObject(raw.emergency) && Number.isFinite(raw.emergency.until)
+    ? {
+      reason: typeof raw.emergency.reason === 'string' ? raw.emergency.reason : '',
+      byPersonId: typeof raw.emergency.byPersonId === 'string' ? raw.emergency.byPersonId : '',
+      byDisplayName: typeof raw.emergency.byDisplayName === 'string' ? raw.emergency.byDisplayName : '',
+      at: Number.isFinite(raw.emergency.at) ? raw.emergency.at : 0,
+      until: raw.emergency.until,
+    }
+    : undefined;
+  return {
+    goalId: raw.goalId,
+    title: raw.title,
+    description: typeof raw.description === 'string' ? raw.description : '',
+    krs,
+    ownerPersonId: typeof raw.ownerPersonId === 'string' ? raw.ownerPersonId : '',
+    status: raw.status,
+    strictness: raw.strictness === 'off' ? 'off' : 'hint',
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : 0,
+    ...(Number.isFinite(raw.closedAt) ? { closedAt: raw.closedAt } : {}),
+    ...(typeof raw.closedByPersonId === 'string' ? { closedByPersonId: raw.closedByPersonId } : {}),
+    ...(typeof raw.closeReason === 'string' ? { closeReason: raw.closeReason } : {}),
+    ...(Number.isFinite(raw.challengedAt) ? { challengedAt: raw.challengedAt } : {}),
+    ...(challenges.length === 0 ? {} : { challenges }),
+    ...(emergency === undefined ? {} : { emergency }),
+  };
+}
 
 /**
  * Write a file atomically: temp file in the same directory, fsync, rename.
